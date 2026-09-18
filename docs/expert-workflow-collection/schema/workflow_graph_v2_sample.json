@@ -1,0 +1,235 @@
+{
+  "dataset_meta": {
+    "dataset_id": "ds_expert_graph_v2",
+    "name": "Expert Workflow Graph Dataset",
+    "source_type": "expert_collected",
+    "schema_version": "2.0",
+    "dataset_version": "1.0.0",
+    "created_at": "2026-09-18T11:43:00-07:00",
+    "language": "zh-CN",
+    "recommended_usage": "main_experiment"
+  },
+  "records": [
+    {
+      "record_id": "wf_graph_0001",
+      "record_version": "1.0",
+      "status": "expert_confirmed",
+      "manufacturing_context": {
+        "manufacturing_mode": "high_mix_low_volume",
+        "industry": "精密机加工",
+        "process_area": "CNC加工"
+      },
+      "scenario": {
+        "workflow_type": "exception_response",
+        "scenario_category": "quality_abnormality",
+        "scenario_name": "连续尺寸超差处理",
+        "trigger": "操作员连续发现尺寸超差"
+      },
+      "graph": {
+        "graph_type": "directed_graph",
+        "start_node_ids": [
+          "n1"
+        ],
+        "end_node_ids": [
+          "n10"
+        ],
+        "nodes": [
+          {
+            "node_id": "n1",
+            "node_type": "start",
+            "label": "发现尺寸超差",
+            "actor_roles": [
+              "操作员"
+            ]
+          },
+          {
+            "node_id": "n2",
+            "node_type": "activity",
+            "label": "暂停设备并隔离产品",
+            "actor_roles": [
+              "操作员"
+            ]
+          },
+          {
+            "node_id": "n3",
+            "node_type": "activity",
+            "label": "质量工程师复测",
+            "actor_roles": [
+              "质量工程师"
+            ]
+          },
+          {
+            "node_id": "n4",
+            "node_type": "decision",
+            "label": "是否确认超差",
+            "decision_question": "复测是否仍超差？"
+          },
+          {
+            "node_id": "n5",
+            "node_type": "parallel_split",
+            "label": "并行原因分析"
+          },
+          {
+            "node_id": "n6",
+            "node_type": "activity",
+            "label": "设备侧检查",
+            "actor_roles": [
+              "设备工程师"
+            ]
+          },
+          {
+            "node_id": "n7",
+            "node_type": "activity",
+            "label": "工艺/刀具侧检查",
+            "actor_roles": [
+              "工艺工程师"
+            ]
+          },
+          {
+            "node_id": "n8",
+            "node_type": "parallel_join",
+            "label": "汇总分析结果"
+          },
+          {
+            "node_id": "n9",
+            "node_type": "activity",
+            "label": "试产并首件检验"
+          },
+          {
+            "node_id": "n10",
+            "node_type": "end",
+            "label": "恢复生产"
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "e1",
+            "from": "n1",
+            "to": "n2",
+            "edge_type": "normal"
+          },
+          {
+            "edge_id": "e2",
+            "from": "n2",
+            "to": "n3",
+            "edge_type": "handoff"
+          },
+          {
+            "edge_id": "e3",
+            "from": "n3",
+            "to": "n4",
+            "edge_type": "normal"
+          },
+          {
+            "edge_id": "e4",
+            "from": "n4",
+            "to": "n10",
+            "edge_type": "conditional",
+            "condition": "复测正常"
+          },
+          {
+            "edge_id": "e5",
+            "from": "n4",
+            "to": "n5",
+            "edge_type": "conditional",
+            "condition": "确认超差"
+          },
+          {
+            "edge_id": "e6",
+            "from": "n5",
+            "to": "n6",
+            "edge_type": "parallel"
+          },
+          {
+            "edge_id": "e7",
+            "from": "n5",
+            "to": "n7",
+            "edge_type": "parallel"
+          },
+          {
+            "edge_id": "e8",
+            "from": "n6",
+            "to": "n8",
+            "edge_type": "merge"
+          },
+          {
+            "edge_id": "e9",
+            "from": "n7",
+            "to": "n8",
+            "edge_type": "merge"
+          },
+          {
+            "edge_id": "e10",
+            "from": "n8",
+            "to": "n9",
+            "edge_type": "normal"
+          },
+          {
+            "edge_id": "e11",
+            "from": "n9",
+            "to": "n10",
+            "edge_type": "conditional",
+            "condition": "首件合格"
+          },
+          {
+            "edge_id": "e12",
+            "from": "n9",
+            "to": "n5",
+            "edge_type": "loop_back",
+            "condition": "首件不合格"
+          }
+        ]
+      },
+      "rules": [
+        {
+          "rule_id": "r1",
+          "rule_text": "连续3件超差应通知质量工程师",
+          "rule_source": "sop",
+          "trigger_condition": "连续3件超差",
+          "applicable_node_ids": [
+            "n1",
+            "n2"
+          ],
+          "expert_confirmed": true
+        }
+      ],
+      "experience_judgements": [
+        {
+          "judgement_id": "j1",
+          "judgement_text": "异常持续扩大时，操作员可先停机再等待质量到场",
+          "evidence": "本次连续5件超差后现场直接停机",
+          "applicable_condition": "异常持续扩大",
+          "actor_roles": [
+            "操作员"
+          ],
+          "applicable_node_ids": [
+            "n2"
+          ],
+          "confidence": 0.9,
+          "expert_confirmed": true
+        }
+      ],
+      "provenance": {
+        "source_type": "expert_collected",
+        "conversation_id": "conv_0001",
+        "expert_role": "质量工程师",
+        "expert_years_experience": 12,
+        "consent_status": "consented",
+        "source_turn_ids": [
+          "t1",
+          "t2",
+          "t3",
+          "t4"
+        ]
+      },
+      "annotation": {
+        "has_gold_nodes": true,
+        "has_gold_edges": true,
+        "has_gold_roles": true,
+        "has_gold_boundaries": true,
+        "annotator_count": 1,
+        "adjudicated": false
+      }
+    }
+  ]
+}

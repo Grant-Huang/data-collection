@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>制造协作流程数据平台 v2</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--line:#e5e7eb;--txt:#1f2937;--mut:#667085;--brand:#2563eb;--soft:#eff6ff;--ok:#15803d;--warn:#b45309;--bad:#b42318}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+header{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:10}
+.brand{font-weight:800}.nav{display:flex;gap:8px}.btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 13px;cursor:pointer}.btn.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+main{max-width:1220px;margin:24px auto;padding:0 18px}.hidden{display:none!important}.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:0 0 8px}h3{font-size:16px;margin:0 0 6px}.muted{color:var(--mut)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}.metric b{font-size:27px;display:block;margin-top:4px}
+.tabs{display:flex;gap:8px;margin-bottom:14px}.tab{padding:8px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);cursor:pointer}.tab.active{background:var(--soft);color:var(--brand);border-color:#93c5fd}
+.badge{padding:4px 8px;border-radius:999px;font-size:12px}.pub{background:#f3f4f6;color:#374151}.exp{background:#ecfdf3;color:#166534}
+.scoregrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.score{border:1px solid var(--line);border-radius:11px;padding:12px}.score strong{font-size:22px}
+.bar{height:8px;background:#eef2f6;border-radius:999px;overflow:hidden;margin-top:7px}.bar span{display:block;height:100%;background:#60a5fa}
+table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{color:var(--mut);background:#fafafa}
+.upload{border:2px dashed #cbd5e1;border-radius:14px;padding:30px;text-align:center;background:#fafcff}
+.callout{border-left:4px solid #60a5fa;background:#eff6ff;padding:12px 14px;border-radius:8px;margin-top:12px}.warn{border-left-color:#f59e0b;background:#fffbeb}.bad{border-left-color:#ef4444;background:#fef2f2}
+input,select{width:100%;padding:9px 10px;border:1px solid #d0d5dd;border-radius:8px}.row{display:flex;gap:10px;align-items:center}.row>*{flex:1}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+@media(max-width:900px){.grid2,.grid4,.scoregrid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.grid2,.grid4,.scoregrid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">制造协作流程数据平台</div>
+  <div class="nav">
+    <button class="btn" onclick="show('collect')">专家采集</button>
+    <button class="btn" onclick="show('datasets')">数据集</button>
+    <button class="btn" onclick="show('dashboard')">Dashboard</button>
+    <button class="btn" onclick="show('experiment')">实验中心</button>
+  </div>
+</header>
+
+<main id="collect" class="page">
+  <div class="panel">
+    <h1>专家真实流程采集</h1>
+    <p class="muted">此入口仅采集真实专家数据，自动标记为 <span class="badge exp">expert_collected</span>。公共信息提取数据请从“数据集 → 导入”进入。</p>
+    <div class="callout">沿用上一版 6 步 Wizard：制造背景 → 场景 → 流程步骤 → 人/设备/系统 → 关键判断 → 检查提交。</div>
+  </div>
+</main>
+
+<main id="datasets" class="page hidden">
+  <h1>数据集管理</h1>
+  <p class="muted">公共信息提取类与真实专家采集类始终分开管理、分开评估、分开跑实验。</p>
+
+  <div class="tabs">
+    <div class="tab active" onclick="setDsTab(this,'list')">数据集列表</div>
+    <div class="tab" onclick="setDsTab(this,'import')">导入 JSON</div>
+    <div class="tab" onclick="setDsTab(this,'export')">导出</div>
+  </div>
+
+  <section id="ds-list" class="panel dssection">
+    <table>
+      <thead><tr><th>数据集</th><th>类型</th><th>样本数</th><th>Readiness</th><th>Gold Boundary</th><th>更新时间</th></tr></thead>
+      <tbody>
+        <tr><td>Public Manufacturing Cases v1</td><td><span class="badge pub">public_extracted</span></td><td>312</td><td>78</td><td>34%</td><td>2026-09-17</td></tr>
+        <tr><td>Expert Workflow Collection v1</td><td><span class="badge exp">expert_collected</span></td><td>128</td><td>86</td><td>71%</td><td>2026-09-18</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="ds-import" class="panel dssection hidden">
+    <h2>导入标准 JSON</h2>
+    <p class="muted">上传后先预检，不直接写入正式数据集。系统先做 Schema、来源、完整度、重复、标注和泄漏风险检查。</p>
+    <div class="upload">
+      <h3>拖入 .json 文件，或点击选择</h3>
+      <p class="muted">支持标准 Workflow Dataset JSON v1.0</p>
+      <input type="file" accept=".json" onchange="previewImport(this)" style="max-width:360px"/>
+    </div>
+    <div id="importReport" class="hidden">
+      <h3 style="margin-top:18px">导入预检报告</h3>
+      <div class="grid4">
+        <div class="metric">总记录<b>146</b><span class="muted">读取成功</span></div>
+        <div class="metric">可导入<b>138</b><span class="muted">94.5%</span></div>
+        <div class="metric">阻断错误<b style="color:var(--bad)">3</b><span class="muted">需修复</span></div>
+        <div class="metric">警告<b style="color:var(--warn)">5</b><span class="muted">可选择导入</span></div>
+      </div>
+      <div class="scoregrid" style="margin-top:12px">
+        <div class="score">Coverage<br><strong>82</strong><div class="bar"><span style="width:82%"></span></div></div>
+        <div class="score">Balance<br><strong>69</strong><div class="bar"><span style="width:69%"></span></div></div>
+        <div class="score">Completeness<br><strong>91</strong><div class="bar"><span style="width:91%"></span></div></div>
+        <div class="score">Extractability<br><strong>88</strong><div class="bar"><span style="width:88%"></span></div></div>
+        <div class="score">Authenticity<br><strong>84</strong><div class="bar"><span style="width:84%"></span></div></div>
+        <div class="score">Annotation<br><strong>73</strong><div class="bar"><span style="width:73%"></span></div></div>
+        <div class="score">Diversity<br><strong>76</strong><div class="bar"><span style="width:76%"></span></div></div>
+        <div class="score">Low Leakage Risk<br><strong>93</strong><div class="bar"><span style="width:93%"></span></div></div>
+      </div>
+      <div class="callout warn"><b>建议：</b>可用于辅助实验；若用于主实验，建议先补充“强监管/高追溯制造”样本，并修复 3 条缺失 source_type 的记录。</div>
+      <table style="margin-top:14px">
+        <thead><tr><th>问题</th><th>数量</th><th>级别</th></tr></thead>
+        <tbody>
+          <tr><td>缺少 provenance.source_type</td><td>3</td><td>阻断</td></tr>
+          <tr><td>无 end_condition</td><td>11</td><td>警告</td></tr>
+          <tr><td>角色信息缺失</td><td>7</td><td>警告</td></tr>
+          <tr><td>近重复流程</td><td>4</td><td>警告</td></tr>
+        </tbody>
+      </table>
+      <div class="actions"><button class="btn">下载预检报告</button><button class="btn primary">确认导入 138 条</button></div>
+    </div>
+  </section>
+
+  <section id="ds-export" class="panel dssection hidden">
+    <h2>导出数据集</h2>
+    <div class="grid2">
+      <div><label>数据源类型</label><select><option>公共信息提取类</option><option>真实专家采集类</option></select></div>
+      <div><label>数据集</label><select><option>Public Manufacturing Cases v1</option><option>Expert Workflow Collection v1</option></select></div>
+      <div><label>输出版本</label><select><option>raw 原始版</option><option>anonymized 匿名版</option><option>role_normalized 角色归一化版</option></select></div>
+      <div><label>Gold Annotation</label><select><option>包含</option><option>不包含</option></select></div>
+    </div>
+    <div class="callout">导出文件始终保留 dataset_meta.source_type 和每条记录的 provenance.source_type，避免外部系统回传后丢失来源属性。</div>
+    <div class="actions"><button class="btn primary">导出标准 JSON</button></div>
+  </section>
+</main>
+
+<main id="dashboard" class="page hidden">
+  <h1>Dataset Dashboard</h1>
+  <p class="muted">重点不是“有多少数据”，而是“这批数据是否足以支撑公平、可复现的实验”。</p>
+  <div class="tabs">
+    <div class="tab active">专家真实集</div><div class="tab">公共提取集</div>
+  </div>
+  <div class="grid4">
+    <div class="metric">样本数<b>128</b><span class="muted">24 位专家</span></div>
+    <div class="metric">Dataset Readiness<b>86</b><span class="muted">适合主实验</span></div>
+    <div class="metric">Gold Boundary<b>71%</b><span class="muted">91 条</span></div>
+    <div class="metric">近重复风险<b>4.2%</b><span class="muted">较低</span></div>
+  </div>
+
+  <section class="panel" style="margin-top:14px">
+    <h2>数据集八维评估</h2>
+    <div class="scoregrid">
+      <div class="score">覆盖度 Coverage<br><strong>88</strong><div class="bar"><span style="width:88%"></span></div></div>
+      <div class="score">平衡度 Balance<br><strong>74</strong><div class="bar"><span style="width:74%"></span></div></div>
+      <div class="score">完整度 Completeness<br><strong>92</strong><div class="bar"><span style="width:92%"></span></div></div>
+      <div class="score">可抽取性 Extractability<br><strong>90</strong><div class="bar"><span style="width:90%"></span></div></div>
+      <div class="score">真实性 Authenticity<br><strong>95</strong><div class="bar"><span style="width:95%"></span></div></div>
+      <div class="score">标注成熟度 Annotation<br><strong>78</strong><div class="bar"><span style="width:78%"></span></div></div>
+      <div class="score">多样性 Diversity<br><strong>83</strong><div class="bar"><span style="width:83%"></span></div></div>
+      <div class="score">低泄漏风险 Low Leakage<br><strong>91</strong><div class="bar"><span style="width:91%"></span></div></div>
+    </div>
+    <div class="callout warn"><b>当前短板：</b>强监管/高追溯制造样本较少；“变更导入型”流程只有 14%；双人标注比例仅 28%。</div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel"><h2>完整度明细</h2><table>
+      <tr><td>平均流程步数</td><td>8.6</td></tr><tr><td>≥5步样本</td><td>89%</td></tr>
+      <tr><td>有明确触发</td><td>96%</td></tr><tr><td>有明确结束条件</td><td>84%</td></tr>
+      <tr><td>含关键判断</td><td>71%</td></tr><tr><td>含角色信息</td><td>93%</td></tr>
+    </table></section>
+    <section class="panel"><h2>泄漏与重复检查</h2><table>
+      <tr><td>近重复流程</td><td>4.2%</td></tr><tr><td>同模板改写</td><td>2.1%</td></tr>
+      <tr><td>Train/Test 高相似样本</td><td>3</td></tr><tr><td>同一专家跨Train/Test</td><td>7</td></tr>
+    </table><div class="callout bad">正式实验前建议按“专家/来源分组切分”，避免同一专家表达风格泄漏到测试集。</div></section>
+  </div>
+</main>
+
+<main id="experiment" class="page hidden">
+  <h1>实验中心</h1>
+  <div class="panel">
+    <h2>创建实验</h2>
+    <div class="grid2">
+      <div><label>数据源</label><select><option>公共信息提取类 public_extracted</option><option>真实专家采集类 expert_collected</option></select></div>
+      <div><label>数据集</label><select><option>选择一个数据集</option></select></div>
+      <div><label>输入版本</label><select><option>Raw</option><option>Anonymized</option><option>Role-normalized</option></select></div>
+      <div><label>Gold Annotation</label><select><option>使用</option><option>不使用</option></select></div>
+    </div>
+    <div class="callout"><b>实验规则：</b>两类数据默认分开运行和报告。允许“联合训练 + 分开测试”，但不允许把两类测试集结果合成一个主指标。</div>
+  </div>
+</main>
+
+<script>
+function show(id){document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden')}
+function setDsTab(el,id){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');document.querySelectorAll('.dssection').forEach(x=>x.classList.add('hidden'));document.getElementById('ds-'+id).classList.remove('hidden')}
+function previewImport(input){if(input.files.length){document.getElementById('importReport').classList.remove('hidden')}}
+</script>
+</body>
+</html>
