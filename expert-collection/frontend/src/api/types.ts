@@ -107,3 +107,54 @@ export interface TurnResponse {
   validation: ValidationIssue[];
   next_question: NextQuestion | null;
 }
+
+// --- Dataset / Dashboard (PRD 12/13) ---
+
+export type SourceType = "expert_collected" | "public_extracted";
+export type ScoreBand = "good" | "warning" | "poor" | "insufficient_sample";
+
+export interface DimensionScore {
+  score: number | null;
+  band: ScoreBand;
+  sub_indicators: Record<string, unknown>;
+  scope_note: string;
+  explanation: string;
+}
+
+export const DIMENSION_ORDER = [
+  "coverage", "balance", "completeness", "graph_completeness", "extractability",
+  "authenticity", "annotation_readiness", "diversity", "structural_diversity", "low_leakage_risk",
+] as const;
+
+export const DIMENSION_LABELS: Record<string, string> = {
+  coverage: "覆盖度", balance: "平衡度", completeness: "流程完整度",
+  graph_completeness: "Graph 结构完整度", extractability: "可抽取性",
+  authenticity: "真实性与来源可信度", annotation_readiness: "标注成熟度",
+  diversity: "多样性", structural_diversity: "结构多样性", low_leakage_risk: "低泄漏风险",
+};
+
+// Mirrors app/quality.py DIMENSION_WEIGHTS -- display-only (the backend is the source of
+// truth for the actual weighted overall score).
+export const DIMENSION_WEIGHTS: Record<string, number> = {
+  coverage: 0.15, balance: 0.10, completeness: 0.15, graph_completeness: 0.15,
+  extractability: 0.10, authenticity: 0.10, annotation_readiness: 0.10,
+  diversity: 0.05, structural_diversity: 0.05, low_leakage_risk: 0.05,
+};
+
+export interface DatasetReadiness {
+  overall: number | null;
+  band: ScoreBand;
+  sample_size: number;
+  dimensions: Record<string, DimensionScore>;
+}
+
+export interface DatasetVersionSummary {
+  id: string;
+  source_type: SourceType;
+  version_number: number;
+  workflow_count: number;
+  total_steps: number;
+  microflow_count: number | null;
+  created_at: string;
+  readiness: DatasetReadiness;
+}

@@ -19,7 +19,7 @@ export function SessionPage() {
   const right = useResizablePanel("dag", Math.round(viewportWidth * 0.3), 220, 900);
 
   return (
-    <div style={{ display: "flex", height: "100vh", position: "relative", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
+    <div style={{ display: "flex", height: "100%", position: "relative", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
       <div style={{ width: left.collapsed ? 0 : left.width, overflow: "hidden", flexShrink: 0, transition: left.collapsed ? "width 0.15s ease-out" : undefined }}>
         <div style={{ width: left.width, height: "100%" }}>
           <HistoryDrawer

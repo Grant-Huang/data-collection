@@ -269,7 +269,10 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return reply, ops, nq, new_state
 
     if stage == "retry_check":
-        if _contains_any(text, ["会返工", "会"]):
+        # "会" alone used to be in this keyword list, which wrongly matched the negative
+        # chip "不会，流程到这里结束" (substring containment: "不会" contains "会"). Match
+        # only on the actual positive-answer text.
+        if _contains_any(text, ["会返工"]) or (text.startswith("会") and not text.startswith("不会")):
             reply = "具体是回到前面哪一步重新做？"
             nq = {"target": "rule_judgement_discovery", "priority": "P5", "question": reply, "chips": None}
             new_state = {"stage": "retry_target", "cursor": cursor, "pending": pending}
