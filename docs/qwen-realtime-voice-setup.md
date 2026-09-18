@@ -87,10 +87,8 @@ InternalError.Algo.InvalidParameter: Voice 'Chelsie' is not supported.
 |---|---|---|
 | 网页 demo | `web-demo/server.py` | `QWEN_WORKSPACE_ID`、`QWEN_MODEL`、`QWEN_VOICE`、`VOICE_OPTIONS`，从 `.env` 读取，未设置 `QWEN_WORKSPACE_ID` 时自动回退到共享域名 |
 | 网页 demo | `.env.example` | Workspace ID 配置说明和获取链接 |
-| iOS App | `VoiceChat/Settings/RealtimeConfigStore.swift` | `defaultModel`、`defaultVoice`、`voiceOptions`、`workspaceId`、`effectiveBaseURL`（有 Workspace ID 时自动派生专属域名，否则用手填的 `baseURL`） |
-| iOS App | `VoiceChat/Settings/SettingsView.swift` | 设置页的 Workspace ID 输入框、音色改成了 Picker（原来是自由文本框） |
 
-两边都保留了"没有 Workspace ID 时回退到共享域名"这条路径，不强制要求配置——但强烈建议配置，共享域名的稳定性问题是真实、可复现的，不是这个项目独有的偶发情况。
+保留了"没有 Workspace ID 时回退到共享域名"这条路径，不强制要求配置——但强烈建议配置，共享域名的稳定性问题是真实、可复现的，不是这个项目独有的偶发情况。
 
 ## 参考链接
 

@@ -454,6 +454,25 @@
           "items": {
             "type": "string"
           }
+        },
+        "retry_semantics": {
+          "type": "object",
+          "description": "返工/重试语义（PRD 7.1 节裁定）：不作为图上的 loop_back 边，作为触发返工的节点上的附加语义信息，保证主图始终是合法 DAG。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rework_reference_node_id": {
+              "type": "string",
+              "description": "重新执行时回到的节点 id，不构成 DAG 边。"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -477,15 +496,16 @@
         },
         "edge_type": {
           "type": "string",
+          "description": "PRD 3.3/7.1 节裁定的口径：不允许 loop_back，主图必须始终是合法 DAG。",
           "enum": [
             "normal",
             "conditional",
             "parallel",
             "merge",
-            "loop_back",
-            "exception",
+            "handoff",
+            "approval",
             "timeout",
-            "handoff"
+            "exception_forward"
           ]
         },
         "condition": {

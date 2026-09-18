@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashboard —— 参考原型</title>
+<style>
+  :root{
+    --bg:#f9f9f7;--surface:#fcfcfb;--line:#e1e0d9;--border-ring:rgba(11,11,11,.10);
+    --text:#0b0b0b;--text-2:#52514e;--muted:#898781;
+    --blue:#2a78d6;--blue-100:#cde2fb;--blue-450:#2a78d6;
+    --orange:#eb6834;
+    --good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+  header.topbar{background:var(--surface);border-bottom:1px solid var(--line);padding:14px 26px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+  .brand{font-weight:800;font-size:15px;display:flex;align-items:center;gap:10px}
+  .brand .tag{font-size:11px;font-weight:700;color:var(--blue);background:var(--blue-100);padding:3px 8px;border-radius:999px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--surface)}
+  .seg button{border:0;background:transparent;padding:7px 16px;font-size:12.5px;font-weight:600;color:var(--text-2);cursor:pointer}
+  .seg button.active{background:var(--blue);color:#fff}
+  .updated{font-size:11.5px;color:var(--muted)}
+  .topright{display:flex;align-items:center;gap:16px}
+
+  main{max-width:1180px;margin:0 auto;padding:22px 26px 60px}
+
+  .note{background:var(--blue-100);border:1px solid #bfdbfe;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#184f95;line-height:1.6;margin-bottom:18px}
+
+  .cards8{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+  .stat .label{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+  .stat .value{font-size:22px;font-weight:800;margin-top:4px;font-variant-numeric:tabular-nums}
+  .stat .sub{font-size:11px;color:var(--text-2);margin-top:2px}
+
+  /* tip icon: hover to see what this metric means (shared pattern with dag-view-redesign.html) */
+  .tip-icon{width:14px;height:14px;border-radius:50%;background:#eef1f4;color:var(--muted);display:inline-grid;place-items:center;font-size:9.5px;font-weight:700;cursor:help;position:relative;flex:0 0 auto}
+  .tip-icon:hover:after{content:attr(data-tip);position:absolute;left:0;top:20px;width:230px;background:#1f2430;color:#fff;padding:9px 10px;border-radius:8px;font-size:11px;font-weight:400;line-height:1.55;z-index:60;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+  .dim-name .tip-icon:hover:after{left:auto;right:0}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:20px}
+  .tab{padding:10px 16px;font-size:13px;font-weight:600;color:var(--text-2);cursor:pointer;border-bottom:2px solid transparent}
+  .tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+  .tabpanel{display:none}
+  .tabpanel.active{display:block}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+  .panel h2{font-size:14px;margin:0 0 4px;font-weight:800}
+  .panel .desc{font-size:12px;color:var(--muted);margin-bottom:16px}
+
+  .score-hero{display:flex;align-items:center;gap:20px;margin-bottom:22px}
+  .score-hero .num{font-size:44px;font-weight:800;font-variant-numeric:tabular-nums}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:5px 11px;border-radius:999px}
+  .badge.good{background:#e7f7e7;color:#0a6b0a}
+  .badge.warn{background:#fff3dc;color:#8a5a00}
+  .badge.bad{background:#fdeceb;color:#a52a2a}
+  .badge i{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .badge.good i{background:var(--good)}
+  .badge.warn i{background:var(--warning)}
+  .badge.bad i{background:var(--critical)}
+
+  .dim-row{display:grid;grid-template-columns:170px 1fr 46px 24px;align-items:center;gap:12px;padding:9px 6px;border-bottom:1px dashed var(--line);border-radius:8px;cursor:pointer}
+  .dim-row:hover{background:#f4f6f8}
+  .dim-row:last-child{border-bottom:0}
+  .dim-name{font-size:12.5px;font-weight:600}
+  .dim-weight{font-size:10.5px;color:var(--muted);font-weight:400}
+  .bar-track{height:9px;background:#eef1f5;border-radius:5px;overflow:hidden;position:relative}
+  .bar-fill{height:100%;background:linear-gradient(90deg,var(--blue-100),var(--blue-450));border-radius:5px}
+  .bar-fill.insufficient{background:repeating-linear-gradient(135deg,#e5e7eb,#e5e7eb 5px,#f3f4f6 5px,#f3f4f6 10px)}
+  .dim-score{font-size:12.5px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .dim-score.muted-text{color:var(--muted);font-weight:600;font-size:11px}
+  .dim-explain-btn{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--muted);font-size:11px;font-weight:700;display:grid;place-items:center}
+  .dim-row:hover .dim-explain-btn{color:var(--blue);border-color:var(--blue)}
+
+  /* ---- 评分解释弹窗 ---- */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(11,11,11,.42);z-index:100;align-items:flex-start;justify-content:center;padding:6vh 20px}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--surface);border-radius:14px;max-width:640px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 24px 60px rgba(0,0,0,.25)}
+  .modal-head{display:flex;justify-content:space-between;align-items:flex-start;padding:20px 22px 14px;border-bottom:1px solid var(--line)}
+  .modal-head h3{margin:0;font-size:15px}
+  .modal-head .score-line{font-size:12px;color:var(--muted);margin-top:4px}
+  .modal-close{border:0;background:#f2f2f0;width:26px;height:26px;border-radius:50%;cursor:pointer;color:var(--text-2);font-size:13px;flex:0 0 auto}
+  .modal-body{padding:18px 22px 22px}
+  .modal-section{margin-bottom:16px}
+  .modal-section:last-child{margin-bottom:0}
+  .modal-section h4{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 8px;font-weight:700}
+  .modal-body .rubric{font-size:13px;line-height:1.75;color:var(--text-2)}
+  .modal-body .rubric b{color:var(--text)}
+  .modal-rationale{font-size:13px;line-height:1.8;color:var(--text)}
+  .modal-rationale b{color:#184f95}
+  .modal-example{background:#f8f9fb;border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-top:10px;font-size:12px;color:var(--text-2);line-height:1.7}
+  .modal-example .ex-tag{display:inline-block;font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-100);padding:2px 7px;border-radius:999px;margin-bottom:6px}
+  .modal-gen-note{font-size:10.5px;color:var(--muted);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px}
+  td.num{font-variant-numeric:tabular-nums;text-align:right}
+
+  .callout{border-left:3px solid var(--critical);background:#fdeceb;border-radius:0 8px 8px 0;padding:10px 14px;font-size:12.5px;color:#7a2222;margin-top:14px}
+
+  .drill{font-size:11px;color:var(--blue);cursor:pointer;font-weight:600}
+
+  svg text{font-family:inherit}
+  .axis-label{font-size:10px;fill:var(--muted)}
+  .grid-line{stroke:var(--line);stroke-width:1}
+  .legend-row{display:flex;gap:16px;font-size:11.5px;color:var(--text-2);margin-top:10px}
+  .legend-row span{display:inline-flex;align-items:center;gap:6px}
+  .legend-row i{width:12px;height:3px;border-radius:2px;display:inline-block}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Dataset Dashboard <span class="tag">桌面专属 · 研究员/管理员可见</span></div>
+  <div class="topright">
+    <div class="seg">
+      <button class="active" data-scope="expert">专家集</button>
+      <button data-scope="public">公共集</button>
+    </div>
+    <span class="updated">最近更新：3 分钟前</span>
+  </div>
+</header>
+
+<main>
+  <div class="note">对应 PRD 第 13 节。数据均为示例，用于验证页面结构（13.1.1）与十维评分体系（13.3）的呈现方式，不代表真实数据。</div>
+
+  <div class="cards8">
+    <div class="stat"><div class="label">数据集数 <span class="tip-icon" data-tip="当前范围内（专家集/公共集切换）正式发布的数据集个数，不含草稿。">?</span></div><div class="value">7</div></div>
+    <div class="stat"><div class="label">Workflow 数 <span class="tip-icon" data-tip="已采集/导入的流程记录条数，一条 Workflow = 一次完整的专家采集或一条导入记录。">?</span></div><div class="value">128</div></div>
+    <div class="stat"><div class="label">步骤总数 <span class="tip-icon" data-tip="所有 Workflow 的节点数之和，衡量数据集的体量——两个 Workflow 数一样的数据集，步骤总数可能差好几倍。">?</span></div><div class="value">1,102</div></div>
+    <div class="stat"><div class="label">微工作流识别数 <span class="tip-icon" data-tip="跨 3 条及以上 Workflow 复用、结构相似度超过阈值的可复用子图数量（结构化子图挖掘算出，不用 LLM）。一次性出现的独特流程不计入。">?</span></div><div class="value">19</div></div>
+    <div class="stat"><div class="label">专家数 <span class="tip-icon" data-tip="贡献过至少一条已提交 Workflow 的不同专家人数。">?</span></div><div class="value">24</div></div>
+    <div class="stat"><div class="label">Gold 数量 <span class="tip-icon" data-tip="至少完成 Gold Node/Edge/Boundary/Role 其中一类标注的记录数。">?</span></div><div class="value">91</div><div class="sub">71% 覆盖</div></div>
+    <div class="stat"><div class="label">近重复风险 <span class="tip-icon" data-tip="文本相似度或结构相似度超过阈值、被判定为疑似近重复的流程占比，见 PRD 12.2.2 节。">?</span></div><div class="value">4.2%</div><div class="sub">较低</div></div>
+    <div class="stat"><div class="label">最近新增 <span class="tip-icon" data-tip="近 7 天内新提交/新导入的 Workflow 数量。">?</span></div><div class="value">+12</div><div class="sub">近 7 天</div></div>
+    <div class="stat"><div class="label">待复核 <span class="tip-icon" data-tip="已提交但标注一致性不足、需要第二位标注者仲裁的记录数。">?</span></div><div class="value">5</div><div class="sub">需要双人标注</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="score">质量评分</div>
+    <div class="tab" data-tab="detail">完整度明细</div>
+    <div class="tab" data-tab="leak">泄漏与重复</div>
+    <div class="tab" data-tab="trend">趋势</div>
+  </div>
+
+  <div class="tabpanel active" id="tab-score">
+    <div class="panel">
+      <h2>Dataset Readiness Score v2</h2>
+      <div class="desc">十维加权总分（13.3 节），总分只是概览，下方展示全部原始子指标（硬性要求，不能只看总分）</div>
+      <div class="score-hero">
+        <div class="num">86</div>
+        <span class="badge good"><i></i>良好 · 适合主实验</span>
+      </div>
+      <div class="dim-row" data-dim="coverage">
+        <div class="dim-name">覆盖度 Coverage<div class="dim-weight">权重 15%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:88%"></div></div>
+        <div class="dim-score">88</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="balance">
+        <div class="dim-name">平衡度 Balance<div class="dim-weight">权重 10%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:74%"></div></div>
+        <div class="dim-score">74</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="completeness">
+        <div class="dim-name">流程完整度 Completeness<div class="dim-weight">权重 15%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:92%"></div></div>
+        <div class="dim-score">92</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="graph">
+        <div class="dim-name">Graph 结构完整度<div class="dim-weight">权重 15%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:90%"></div></div>
+        <div class="dim-score">90</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="extractability">
+        <div class="dim-name">可抽取性 Extractability<div class="dim-weight">权重 10%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:85%"></div></div>
+        <div class="dim-score">85</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="authenticity">
+        <div class="dim-name">真实性 Authenticity<div class="dim-weight">权重 10%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:95%"></div></div>
+        <div class="dim-score">95</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="annotation">
+        <div class="dim-name">标注成熟度<div class="dim-weight">权重 10%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:78%"></div></div>
+        <div class="dim-score">78</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="diversity">
+        <div class="dim-name">多样性 Diversity<div class="dim-weight">权重 5%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:83%"></div></div>
+        <div class="dim-score">83</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="structural">
+        <div class="dim-name">结构多样性<div class="dim-weight">权重 5%</div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:61%"></div></div>
+        <div class="dim-score">61</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="dim-row" data-dim="leakage">
+        <div class="dim-name">低泄漏风险<div class="dim-weight">权重 5%</div></div>
+        <div class="bar-track"><div class="bar-fill insufficient" style="width:100%"></div></div>
+        <div class="dim-score muted-text">样本量不足</div>
+        <div class="dim-explain-btn">i</div>
+      </div>
+      <div class="callout"><strong>当前短板：</strong>结构多样性偏低（61分）——"变更导入型"流程只有 14%，数据集被采成"全是异常响应类"的风险较高。 <span class="drill">→ 定位问题样本</span></div>
+    </div>
+  </div>
+
+  <div class="tabpanel" id="tab-detail">
+    <div class="panel">
+      <h2>完整度明细</h2>
+      <table>
+        <tr><th>指标</th><th style="text-align:right">数值</th></tr>
+        <tr><td>平均流程步数</td><td class="num">8.6</td></tr>
+        <tr><td>≥5步样本比例</td><td class="num">89%</td></tr>
+        <tr><td>有明确触发条件</td><td class="num">96%</td></tr>
+        <tr><td>有明确结束条件</td><td class="num">84%</td></tr>
+        <tr><td>含关键判断节点</td><td class="num">71%</td></tr>
+        <tr><td>含角色信息</td><td class="num">93%</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="tabpanel" id="tab-leak">
+    <div class="panel">
+      <h2>泄漏与重复检查</h2>
+      <table>
+        <tr><th>指标</th><th style="text-align:right">数值</th></tr>
+        <tr><td>近重复流程</td><td class="num">4.2%</td></tr>
+        <tr><td>同模板改写</td><td class="num">2.1%</td></tr>
+        <tr><td>Train/Test 高相似样本</td><td class="num">3</td></tr>
+        <tr><td>同一专家跨 Train/Test</td><td class="num">7</td></tr>
+      </table>
+      <div class="callout">正式实验前建议按"专家/来源分组切分"，避免同一专家的表达风格泄漏到测试集。</div>
+    </div>
+  </div>
+
+  <div class="tabpanel" id="tab-trend">
+    <div class="panel">
+      <h2>Readiness Score 趋势（按周）</h2>
+      <div class="desc">专家集 vs 公共集对比 —— 多序列比较，固定用分类色区分身份，不代表数值大小</div>
+      <svg width="100%" height="220" viewBox="0 0 1080 220" preserveAspectRatio="xMinYMin meet">
+        <line class="grid-line" x1="40" y1="20" x2="40" y2="180"></line>
+        <line class="grid-line" x1="40" y1="180" x2="1060" y2="180"></line>
+        <text class="axis-label" x="10" y="24">100</text>
+        <text class="axis-label" x="10" y="102">50</text>
+        <text class="axis-label" x="18" y="184">0</text>
+        <line class="grid-line" x1="40" y1="100" x2="1060" y2="100" stroke-dasharray="3,3"></line>
+        <!-- expert (blue) -->
+        <polyline fill="none" stroke="#2a78d6" stroke-width="2.5" points="80,120 240,108 400,96 560,86 720,78 880,68 1020,60"></polyline>
+        <!-- public (orange) -->
+        <polyline fill="none" stroke="#eb6834" stroke-width="2.5" points="80,150 240,146 400,140 560,138 720,130 880,128 1020,122"></polyline>
+        <g fill="#2a78d6"><circle cx="1020" cy="60" r="4"></circle></g>
+        <g fill="#eb6834"><circle cx="1020" cy="122" r="4"></circle></g>
+        <text class="axis-label" x="80" y="200">W1</text>
+        <text class="axis-label" x="400" y="200">W4</text>
+        <text class="axis-label" x="720" y="200">W7</text>
+        <text class="axis-label" x="1000" y="200">W10</text>
+      </svg>
+      <div class="legend-row">
+        <span><i style="background:#2a78d6"></i>专家集（86）</span>
+        <span><i style="background:#eb6834"></i>公共集（58）</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="modal-overlay" id="dimModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h3 id="modalTitle">覆盖度 Coverage</h3>
+        <div class="score-line" id="modalScoreLine">当前分数：88 / 100 · 权重 15%</div>
+      </div>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-section">
+        <h4>评分标准</h4>
+        <div class="rubric" id="modalRubric"></div>
+      </div>
+      <div class="modal-section">
+        <h4>当前分数的依据</h4>
+        <div class="modal-rationale" id="modalRationale"></div>
+        <div class="modal-example" id="modalExample"></div>
+      </div>
+      <div class="modal-gen-note">这段解释与分数在同一次批量评分任务中一起生成并缓存，不是打开弹窗时临时调用模型生成的（见 PRD 13.3.1 节）。</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const DIM_EXPLAIN = {
+    coverage: {
+      title: '覆盖度 Coverage',
+      rubric: '衡量数据集是否覆盖了足够多样的<b>制造模式、行业、场景类型、流程类型、岗位、系统/设备</b>六个子维度。每个子维度按"已出现的类别数 / 目标类别总数"算覆盖率，六项取加权平均。90分以上要求六个子维度都不低于70%覆盖；某个子维度覆盖率为0会拖累总分明显下降，不会被其他子维度的高分抵消太多。',
+      rationale: '当前 <b>88 分</b>：六个子维度里五个覆盖率在 82%~100% 之间，其中"垂直行业"覆盖最好（12/13 个目标行业已出现）；拖分的是"岗位覆盖率"，目标的 18 个岗位类别里只出现了 13 个，缺"设备维修工""IE 工程师"等 5 个岗位视角的案例。',
+      example: '<span class="ex-tag">示例</span>当前数据集里"计划排产"类场景全部由"生产计划员"视角采集，缺少同一场景下"车间班组长"视角的对照案例，属于岗位覆盖的缺口。'
+    },
+    balance: {
+      title: '平衡度 Balance',
+      rubric: '衡量样本是否集中在少数制造模式/行业/流程类型/专家/来源上。用基尼系数类的偏斜度指标，越接近均匀分布分数越高。单一专家贡献占比超过 20%、或单一来源/企业占比超过 30% 会直接扣分，不管其他分布多均匀。',
+      rationale: '当前 <b>74 分</b>：制造模式和行业的分布相对均匀，主要扣分项是"单一专家贡献占比"——一位专家（12年经验的质量工程师）贡献了全部 128 条 Workflow 中的 21 条（16.4%），接近 20% 的警戒线。',
+      example: '<span class="ex-tag">示例</span>《CNC尺寸超差处理》《首件确认流程》等 21 条记录均来自同一位专家，建议后续采集优先邀请其他专家覆盖类似场景，避免单一表达风格主导数据集。'
+    },
+    completeness: {
+      title: '流程完整度 Completeness',
+      rubric: '衡量单条 Workflow 记录本身信息够不够完整：平均步骤数、是否达到≥5步的最低颗粒度要求、有没有明确的触发条件和结束条件、有没有角色/系统信息、有没有至少一个关键判断节点。',
+      rationale: '当前 <b>92 分</b>：平均步骤数 8.6（高于 5 步门槛），96% 的记录有明确触发条件，93% 有角色信息。唯一略低的子项是"含关键判断节点"比例（71%）——意味着接近三成的记录是纯线性流程，没有采集到任何分支判断。',
+      example: '<span class="ex-tag">示例</span>《换型首件确认》记录目前只有顺序步骤，追问阶段应确认"首件检验不合格时是否有不同处理路径"，补上判断节点。'
+    },
+    graph: {
+      title: 'Graph 结构完整度',
+      rubric: '衡量 DAG 结构本身合法、完整：是否有明确的 start/end 节点、decision 节点条件是否完整（不为空）、parallel_join 的入边是否≥2、retry_semantics 的触发条件是否完整、以及孤立节点比例（应恒为 0，这是 Graph Validator 强制校验的硬性要求，不是软性评分）。',
+      rationale: '当前 <b>90 分</b>：start/end、parallel_join 完整率均为 100%，孤立节点比例为 0（Validator 已阻断，不会有不合规记录入库）。扣分主要来自 decision 条件完整率（87%）——部分分支只写了"其他情况"这种模糊条件，没有具体判断依据。',
+      example: '<span class="ex-tag">示例</span>《ECN导入量产》里的"是否需要重新验证"判断节点，两条出边只有一条标注了具体条件，另一条写的是"否则"，属于条件不够具体的情况。'
+    },
+    extractability: {
+      title: '可抽取性 Extractability',
+      rubric: '衡量专家口述内容本身是否清晰、易于结构化抽取：步骤顺序是否明确、单步动作是否清晰（不是一句话里塞了好几件事）、角色和动作能不能对应上、判断条件能不能被解析、模糊词/省略词的比例、以及重复或空步骤的比例。',
+      rationale: '当前 <b>85 分</b>：角色-动作可对应率达到 94%，判断条件可解析率 88%。主要扣分来自"模糊词/省略词比例"（检测到 9.5% 的步骤描述里包含"可能""大概""待确认"一类的模糊表达，规则词典判定，不是 LLM 判断，见 PRD 13.6 节）。',
+      example: '<span class="ex-tag">示例</span>"设备工程师大概会在半小时内到场处理"——"大概"属于模糊词典命中项，建议追问阶段引导专家给出更具体的判断依据或时限。'
+    },
+    authenticity: {
+      title: '真实性 Authenticity',
+      rubric: '专家集看：岗位是否已知、经验年限是否已知、是否确认为真实案例、人工复核比例。公共集看：来源是否可追溯、是否为一手来源、原文引用是否完整。',
+      rationale: '当前 <b>95 分</b>（专家集口径）：岗位已知率 100%，经验年限已知率 96%，真实案例确认率 100%（采集流程强制要求专家在最终确认步骤明确"这是我亲身经历的真实工作"）。人工复核比例达 82%，是本维度里相对最高的子指标。',
+      example: '<span class="ex-tag">示例</span>仅有的经验年限缺失案例来自一位专家在设置页跳过了该字段，属于个例，不影响整体判断。'
+    },
+    annotation: {
+      title: '标注成熟度 Annotation Readiness',
+      rubric: '衡量 Gold 标注的覆盖率（Node/Edge/Boundary/Role 四类）、双人标注比例、已仲裁比例、以及标注一致性（Cohen\'s Kappa / Boundary F1 Agreement）。',
+      rationale: '当前 <b>78 分</b>：Gold Boundary 覆盖率 71%，但"双人标注比例"只有 28%，是四个原设计文档都点名的已知短板——大部分 Gold 标注目前只有一位标注者，缺少第二人复核，标注一致性这项因此暂时缺乏足够样本计算，按保守值计入。',
+      example: '<span class="ex-tag">示例</span>91 条 Gold 记录里只有 25 条完成了双人标注并仲裁，是当前提升这项分数最直接的抓手。'
+    },
+    diversity: {
+      title: '多样性 Diversity',
+      rubric: '衡量专家数量、岗位数量、流程长度分布的离散程度、协作人数分布、系统组合数量、以及决策分支复杂度的多样性，越丰富分数越高。',
+      rationale: '当前 <b>83 分</b>：24 位专家覆盖 13 个岗位，流程长度从 5 步到 22 步均有分布。系统组合数量（涉及的 MES/QMS/APS 等系统两两组合出现的种类）是相对较弱的子项，多数记录只涉及单一系统。',
+      example: '<span class="ex-tag">示例</span>目前只有 3 条记录同时涉及 MES 和 QMS 两个系统的协同处理，这类"跨系统协作"场景是多样性维度可以优先补充的方向。'
+    },
+    structural: {
+      title: '结构多样性 Structural Diversity',
+      rubric: '衡量 Linear/DAG/Directed Graph 三种图类型的比例，以及含分支/并行/回路（retry_semantics）/异常路径的记录占比——避免数据集被采成"全是简单线性流程"。80分以上要求至少三种结构特征（分支/并行/回路其中）均有覆盖且各自占比不低于15%。',
+      rationale: '当前 <b>61 分</b>：Linear 类型占比高达 61%，含并行结构的只有 18%，含 retry_semantics 返工语义的只有 9%。四类流程类型里"变更导入型"（工程变更/ECN类场景）只占 14%，这类场景天然更容易出现分支和并行，占比低直接拉低了本维度。',
+      example: '<span class="ex-tag">示例</span>《SMT首件确认》《标准巡检记录》等 20+ 条记录都是纯线性流程，建议下一轮采集有意识地邀请更多"异常处理""工程变更"类场景的专家，这类场景结构天然更丰富。'
+    },
+    leakage: {
+      title: '低泄漏风险 Low Leakage Risk',
+      rubric: '衡量近重复流程比例、同模板改写比例、Train/Test 高相似样本数量、以及同一专家跨 Train/Test 切分的泄漏风险。样本总量低于 20 条时不计算这一维度（见 13.5.1 节缺数据状态）。',
+      rationale: '当前显示"样本量不足，暂不评分"：专家集当前处于早期积累阶段，用于计算 Train/Test 高相似样本这类指标所需的正式切分尚未产生足够数据量，强行给出一个分数容易误导判断，因此本维度按规则暂不计分，等样本量过阈值后自动开始计算。',
+      example: '<span class="ex-tag">示例</span>该规则本身来自审查阶段发现的缺口（PRD 13.5.1 节）：新数据集早期直接算比例类指标容易剧烈波动，不代表真实质量。'
+    }
+  };
+
+  const modal = document.getElementById('dimModal');
+  document.querySelectorAll('.dim-row').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const d = DIM_EXPLAIN[row.dataset.dim];
+      if(!d) return;
+      const scoreEl = row.querySelector('.dim-score');
+      const weightEl = row.querySelector('.dim-weight');
+      document.getElementById('modalTitle').textContent = d.title;
+      document.getElementById('modalScoreLine').textContent =
+        '当前分数：' + scoreEl.textContent.trim() + (scoreEl.textContent.includes('样本') ? '' : ' / 100') + ' · ' + weightEl.textContent.trim();
+      document.getElementById('modalRubric').innerHTML = d.rubric;
+      document.getElementById('modalRationale').innerHTML = d.rationale;
+      document.getElementById('modalExample').innerHTML = d.example;
+      modal.classList.add('open');
+    });
+  });
+  document.getElementById('modalCloseBtn').addEventListener('click', ()=>modal.classList.remove('open'));
+  modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.classList.remove('open'); });
+
+  document.querySelectorAll('.tab').forEach(t=>{
+    t.addEventListener('click', ()=>{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.tabpanel').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById('tab-'+t.dataset.tab).classList.add('active');
+    });
+  });
+  document.querySelectorAll('.seg button').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('.seg button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

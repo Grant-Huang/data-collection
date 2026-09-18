@@ -9,7 +9,8 @@
 // The raw transcript itself isn't lost by switching to this -- that's what
 // ConversationHistory (history.js) already keeps a verbatim, unfiltered copy of;
 // extraction produces a *different*, distilled thing (searchable memory fragments),
-// it doesn't replace the traceable original.
+// it doesn't replace the traceable original. Everything extracted stays local-only
+// (LocalMemory, memory.js) -- there is no external memory service to sync to.
 const MemoryExtraction = (() => {
   /**
    * @param {string} userText
@@ -38,21 +39,7 @@ const MemoryExtraction = (() => {
 
     for (const fact of facts) {
       if (!fact || !fact.text) continue;
-      const entry = LocalMemory.add(fact.text, { isJargon: !!fact.isJargon });
-      if (!entry || !fact.isJargon) continue;
-
-      // Personal/team jargon syncs into AgentNexus's curated memory via the same
-      // "过户" mechanism as an explicit save-intent (docs/app-design.md 7.2) -- plain
-      // extracted facts stay local-only search fragments, same as before this feature.
-      // No retry on failure yet -- unlike ConversationHistory's message pushes, nothing
-      // currently re-attempts a failed createMemoryEntry call; the entry just stays
-      // source: "local" (honest, not silently lost -- just not auto-retried).
-      try {
-        const created = await AgentNexusBridge.createMemoryEntry("PROGRESS", fact.text);
-        LocalMemory.markSynced(entry.id, { source: "agentnexus", sourceId: created.entry_id });
-      } catch (e) {
-        console.warn("jargon entry sync to AgentNexus failed (stays local):", e);
-      }
+      LocalMemory.add(fact.text, { isJargon: !!fact.isJargon });
     }
   }
 

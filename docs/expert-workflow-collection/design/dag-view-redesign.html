@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DAG 可视化重新设计 —— 参考原型</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--panel:#fff;--line:#e5e7eb;--text:#1f2937;--muted:#667085;
+    --node-neutral-fill:#ffffff;--node-neutral-stroke:#cbd5e1;
+    --node-startend-fill:#f8fafc;--node-startend-stroke:#94a3b8;
+    --node-decision-fill:#fffbeb;--node-decision-stroke:#f59e0b;
+    --node-parallel-fill:#f5f3ff;--node-parallel-stroke:#8b5cf6;
+    --node-merge-fill:#eff6ff;--node-merge-stroke:#3b82f6;
+    --node-approval-fill:#ecfdf5;--node-approval-stroke:#10b981;
+    --node-handoff-stroke:#f97316;
+    --edge:#94a3b8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Inter,ui-sans-serif,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:20px 26px 6px}
+  header h1{font-size:19px;margin:0 0 4px}
+  header p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+  main{max-width:1200px;margin:0 auto;padding:18px 26px 60px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:18px}
+  .panel-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .panel-title h2{font-size:14px;margin:0;font-weight:700}
+  .caption{font-size:12px;color:var(--muted)}
+
+  .graph-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:
+    radial-gradient(circle, #e2e8f0 1px, transparent 1px) 0 0/20px 20px, #fbfdff;
+  }
+  svg{display:block}
+
+  .node-shape{fill:var(--node-neutral-fill);stroke:var(--node-neutral-stroke);stroke-width:1.6;filter:drop-shadow(0 1px 2px rgba(16,24,40,.06))}
+  .node-shape.startend{fill:var(--node-startend-fill);stroke:var(--node-startend-stroke)}
+  .node-shape.decision{fill:var(--node-decision-fill);stroke:var(--node-decision-stroke)}
+  .node-shape.parallel{fill:var(--node-parallel-fill);stroke:var(--node-parallel-stroke)}
+  .node-shape.merge{fill:var(--node-merge-fill);stroke:var(--node-merge-stroke)}
+  .node-shape.approval{fill:var(--node-approval-fill);stroke:var(--node-approval-stroke)}
+  .node-shape.handoff{stroke-dasharray:0;}
+
+  .node-group{cursor:pointer}
+  .node-group:hover .node-shape{stroke-width:2.4}
+  .node-group:hover .node-glow{opacity:1}
+  .node-glow{fill:none;stroke:#2563eb;stroke-width:3;opacity:0;transition:opacity .15s ease}
+
+  .node-label{font-size:12.5px;font-weight:700;fill:#1f2937;text-anchor:middle}
+  .node-sub{font-size:10.5px;fill:#667085;text-anchor:middle}
+
+  .edge-path{fill:none;stroke:var(--edge);stroke-width:1.6}
+  .edge-arrow{fill:var(--edge)}
+  .edge-label{font-size:10.5px;fill:#475467}
+  .edge-label-bg{fill:#fff;stroke:#e5e7eb;stroke-width:1}
+
+  .retry-badge circle{fill:#fff;stroke:#f59e0b;stroke-width:1.6}
+  .retry-badge text{font-size:11px;fill:#b45309;text-anchor:middle;dominant-baseline:central}
+
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:14px;height:14px;border-radius:4px;display:inline-block;border:1.6px solid}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kv{border:1px solid #eef2f6;border-radius:9px;padding:10px}
+  .kv span{display:block;color:var(--muted);font-size:11px}
+  .kv b{font-size:13px}
+
+  .rule{padding:9px 10px;border-radius:9px;background:#f8fafc;border:1px solid #eef2f6;font-size:12px;margin-top:8px}
+  .rule strong{font-size:12px}
+
+  .todo{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed #eef2f6;font-size:12.5px}
+  .todo:last-child{border-bottom:0}
+  .dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;margin-top:5px;flex:0 0 auto}
+
+  .note{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#1d4ed8;line-height:1.6;margin-bottom:18px}
+</style>
+</head>
+<body>
+<header>
+  <h1>DAG 可视化重新设计 —— 参考原型（对应 PRD 第 11 节）</h1>
+  <p>同一份「CNC尺寸超差处理」案例图，按第 11.2/11.3 节的视觉规范重画：分层自动布局思路、语义化颜色、克制阴影、渐进式标签密度。这是设计目标参考，不是最终前端实现（真实实现走 React Flow + ELK.js）。</p>
+</header>
+<main>
+  <div class="note">这份文件仅用于对照旧原型（<code>conversational_expert_collection.html</code> 里手写坐标+直线连线的版本）看视觉差异，不代表最终交互都已实现——真实的缩放/拖拽/点击详情等交互见 PRD 第 4.4、11.4 节的文字描述。</div>
+
+  <div class="panel">
+    <div class="panel-title">
+      <h2>实时 DAG 图</h2>
+      <span class="caption">拖动横向查看完整流程 · 10 节点 · 11 连线</span>
+    </div>
+    <div class="graph-scroll">
+      <svg width="1440" height="420" viewBox="0 0 1440 420">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="edge-arrow"></path>
+          </marker>
+        </defs>
+
+        <!-- edges (drawn first, under nodes) -->
+        <!-- e1 n1->n2 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M120,210 L200,210"></path>
+        <!-- e2 n2->n3 (handoff) -->
+        <path class="edge-path" marker-end="url(#arrow)" stroke-dasharray="5,4" stroke="#f97316" d="M280,210 L360,210"></path>
+        <!-- e3 n3->n4 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M440,210 L520,210"></path>
+        <!-- e4 n4->n10 (conditional, bypass arc above) -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M580,180 C 700,40 1140,40 1300,180"></path>
+        <rect class="edge-label-bg" x="895" y="30" width="90" height="22" rx="6"></rect>
+        <text class="edge-label" x="940" y="45" text-anchor="middle">复测正常</text>
+        <!-- e5 n4->n5 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M590,222 C 630,235 650,240 680,240"></path>
+        <rect class="edge-label-bg" x="600" y="248" width="72" height="20" rx="6"></rect>
+        <text class="edge-label" x="636" y="262" text-anchor="middle">确认超差</text>
+        <!-- e6 n5->n6 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M760,225 C 800,180 820,160 860,150"></path>
+        <!-- e7 n5->n7 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M760,255 C 800,300 820,320 860,330"></path>
+        <!-- e8 n6->n8 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M1000,150 C 1040,180 1040,220 1000,235"></path>
+        <!-- e9 n7->n8 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M1000,330 C 1040,300 1040,265 1000,245"></path>
+        <!-- e10 n8->n9 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M1080,240 L1160,215"></path>
+        <!-- e11 n9->n10 -->
+        <path class="edge-path" marker-end="url(#arrow)" d="M1240,200 L1300,195"></path>
+        <rect class="edge-label-bg" x="1232" y="165" width="66" height="20" rx="6"></rect>
+        <text class="edge-label" x="1265" y="179" text-anchor="middle">首件合格</text>
+
+        <!-- n1 start -->
+        <g class="node-group">
+          <rect class="node-glow" x="18" y="188" width="100" height="44" rx="22"></rect>
+          <rect class="node-shape startend" x="20" y="190" width="100" height="40" rx="20"></rect>
+          <text class="node-label" x="70" y="208">开始</text>
+          <text class="node-sub" x="70" y="222">发现尺寸超差</text>
+        </g>
+
+        <!-- n2 activity -->
+        <g class="node-group">
+          <rect class="node-glow" x="198" y="186" width="84" height="48" rx="12"></rect>
+          <rect class="node-shape" x="200" y="188" width="84" height="44" rx="10"></rect>
+          <text class="node-label" x="242" y="206">暂停设备</text>
+          <text class="node-sub" x="242" y="221">操作员</text>
+        </g>
+
+        <!-- n3 activity -->
+        <g class="node-group">
+          <rect class="node-glow" x="358" y="186" width="84" height="48" rx="12"></rect>
+          <rect class="node-shape" x="360" y="188" width="84" height="44" rx="10"></rect>
+          <text class="node-label" x="402" y="206">质量复测</text>
+          <text class="node-sub" x="402" y="221">质量工程师</text>
+        </g>
+
+        <!-- n4 decision (diamond-ish rounded) -->
+        <g class="node-group">
+          <rect class="node-glow" x="518" y="179" width="86" height="62" rx="16" transform="rotate(0)"></rect>
+          <path class="node-shape decision" d="M561,181 L602,210 L561,239 L520,210 Z"></path>
+          <text class="node-label" x="561" y="206">判断</text>
+          <text class="node-sub" x="561" y="220" font-size="9.5">复测仍超差？</text>
+        </g>
+
+        <!-- n5 parallel_split (hexagon) -->
+        <g class="node-group">
+          <rect class="node-glow" x="678" y="216" width="86" height="48" rx="10"></rect>
+          <path class="node-shape parallel" d="M700,218 L742,218 L762,240 L742,262 L700,262 L680,240 Z"></path>
+          <text class="node-label" x="721" y="236">并行拆分</text>
+          <text class="node-sub" x="721" y="250" font-size="9.5">同时原因分析</text>
+        </g>
+
+        <!-- n6 activity: 设备侧检查 -->
+        <g class="node-group">
+          <rect class="node-glow" x="858" y="126" width="84" height="48" rx="12"></rect>
+          <rect class="node-shape" x="860" y="128" width="84" height="44" rx="10"></rect>
+          <text class="node-label" x="902" y="146">设备侧检查</text>
+          <text class="node-sub" x="902" y="161">设备工程师</text>
+        </g>
+
+        <!-- n7 activity: 工艺/刀具侧检查 -->
+        <g class="node-group">
+          <rect class="node-glow" x="858" y="306" width="84" height="48" rx="12"></rect>
+          <rect class="node-shape" x="860" y="308" width="84" height="44" rx="10"></rect>
+          <text class="node-label" x="902" y="326">工艺侧检查</text>
+          <text class="node-sub" x="902" y="341">工艺工程师</text>
+        </g>
+
+        <!-- n8 parallel_join -->
+        <g class="node-group">
+          <rect class="node-glow" x="998" y="216" width="86" height="48" rx="10"></rect>
+          <path class="node-shape merge" d="M1020,218 L1062,218 L1082,240 L1062,262 L1020,262 L1000,240 Z"></path>
+          <text class="node-label" x="1041" y="236">汇合</text>
+          <text class="node-sub" x="1041" y="250" font-size="9.5">汇总分析结果</text>
+        </g>
+
+        <!-- n9 activity: 试产并首件检验 (+ retry badge) -->
+        <g class="node-group">
+          <rect class="node-glow" x="1158" y="186" width="84" height="48" rx="12"></rect>
+          <rect class="node-shape" x="1160" y="188" width="84" height="44" rx="10"></rect>
+          <text class="node-label" x="1202" y="203" font-size="11.5">试产 / 首件检验</text>
+          <g class="retry-badge" transform="translate(1236,188)">
+            <circle r="10"></circle>
+            <text y="1">↺</text>
+          </g>
+        </g>
+
+        <!-- n10 end -->
+        <g class="node-group">
+          <rect class="node-glow" x="1298" y="168" width="100" height="44" rx="22"></rect>
+          <rect class="node-shape startend" x="1300" y="170" width="100" height="40" rx="20"></rect>
+          <text class="node-label" x="1350" y="188">结束</text>
+          <text class="node-sub" x="1350" y="202">恢复生产</text>
+        </g>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--node-startend-fill);border-color:var(--node-startend-stroke)"></i>起点/终点</span>
+      <span><i style="background:var(--node-neutral-fill);border-color:var(--node-neutral-stroke)"></i>活动</span>
+      <span><i style="background:var(--node-decision-fill);border-color:var(--node-decision-stroke)"></i>判断</span>
+      <span><i style="background:var(--node-parallel-fill);border-color:var(--node-parallel-stroke)"></i>并行拆分/汇合</span>
+      <span><i style="background:#fff;border-color:#f97316;border-style:dashed"></i>交接边</span>
+      <span>⟲ 节点角标 = 有返工/重试语义（不是环边，见 PRD 第 7.1/3.3 节）</span>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-title"><h2>当前结构摘要</h2></div>
+      <div class="grid2">
+        <div class="kv"><span>制造模式</span><b>多品种小批量</b></div>
+        <div class="kv"><span>行业</span><b>精密机加工</b></div>
+        <div class="kv"><span>流程类型</span><b>异常响应</b></div>
+        <div class="kv"><span>结构特点</span><b>分支 + 并行 + 返工</b></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>规则与经验</h2></div>
+      <div class="rule"><strong>规则</strong><br>连续 3 件超差 → 通知质量工程师</div>
+      <div class="rule"><strong>经验判断</strong><br>异常持续扩大时 → 操作员可先停机</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><h2>还需要确认</h2><span class="caption">2 项</span></div>
+    <div class="todo"><span class="dot"></span><span>设备检查与工艺检查完成后，谁负责汇总并决定下一步？</span></div>
+    <div class="todo"><span class="dot"></span><span>首件检验不合格时，是回到"并行原因分析"重新做，还是有单独的升级路径？</span></div>
+  </div>
+</main>
+</body>
+</html>

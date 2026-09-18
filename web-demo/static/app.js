@@ -1,11 +1,8 @@
 // Voice + text chat demo — browser side. Talks to the local relay at /ws (see server.py),
-// which forwards to Qwen's Realtime API with the API key attached server-side, and to
-// the mock AgentNexus endpoints at /agentnexus-mock/* (see agentnexus.js).
+// which forwards to Qwen's Realtime API with the API key attached server-side.
 //
-// Protocol is the same Realtime-API event shape used by VoiceChat/Realtime/*.swift
-// in the iOS app (session.update / input_audio_buffer.append / response.audio.delta / …).
-// Memory grounding mirrors VoiceChat/ConversationViewModel.swift's groundAndRespond:
-// turn_detection.create_response is false, so nothing auto-replies — every user turn
+// Memory grounding: turn_detection.create_response is false, so nothing auto-replies —
+// every user turn
 // (typed or transcribed) goes through handleUserTurn, which searches local memory,
 // injects what's relevant as background context, then explicitly requests a reply.
 //
@@ -133,21 +130,20 @@ function addBubble(role, text) {
   // User bubbles are always created with their full, final text in one call (unlike
   // assistant bubbles, which start empty and get filled in via appendToAssistantBubble/
   // setAssistantFinalText as deltas stream in) -- so this one spot covers every
-  // user-turn source (voice transcript, typed, dictation) for both local history and
-  // (via ConversationHistory.add(), see history.js) the AgentNexus push. The matching
-  // assistant-turn persistence+push lives in finalizeAssistantTurn(), once the full
-  // reply text is actually known.
+  // user-turn source (voice transcript, typed, dictation) for local history
+  // (ConversationHistory.add(), see history.js). The matching assistant-turn
+  // persistence lives in finalizeAssistantTurn(), once the full reply text is
+  // actually known.
   if (role === "user" && text) ConversationHistory.add("user", text);
   return bubble;
 }
 
 // Called once an assistant reply is actually complete (response.done) -- captures the
-// full accumulated text before assistantBubbleEl gets reset, persists it locally and
-// pushes it to AgentNexus (docs/app-design.md 8.4: previously only the user's half of
-// the conversation was pushed/stored anywhere at all). Deliberately not called on
-// barge-in (input_audio_buffer.speech_started) -- that's an interrupted, incomplete
-// reply, not a finished turn, so it's just discarded same as before, not persisted
-// half-formed.
+// full accumulated text before assistantBubbleEl gets reset and persists it locally
+// (docs/app-design.md 8.4: previously only the user's half of the conversation was
+// stored anywhere at all). Deliberately not called on barge-in
+// (input_audio_buffer.speech_started) -- that's an interrupted, incomplete reply, not
+// a finished turn, so it's just discarded same as before, not persisted half-formed.
 //
 // Also triggers memory extraction (docs/app-design.md 7.3) on the completed
 // user+assistant pair -- fire-and-forget, doesn't block anything else here. Skipped
@@ -157,8 +153,6 @@ function addBubble(role, text) {
 function finalizeAssistantTurn(session) {
   if (session) session.responsePending = false;
   const text = assistantBubbleEl ? assistantBubbleEl.textContent : "";
-  // ConversationHistory.add() also pushes to AgentNexus (with sync-status tracking +
-  // retry) -- see history.js.
   if (text) ConversationHistory.add("assistant", text);
 
   const userText = session?.pendingUserText;
@@ -609,7 +603,7 @@ const textSession = { getWs: () => textWs, updater: textUpdater, pendingUserText
  * section 8: these are two independent connections now, not one shared one).
  *
  * An explicit "记住…" turn takes a different path: it writes a curated entry into
- * AgentNexus's structured memory layers (not just the raw message log every turn
+ * local memory (tagged layer: "PROGRESS", not just the raw message log every turn
  * gets) and skips memory retrieval — it's a command, not a question, so the model
  * just needs to briefly confirm rather than search-and-answer.
  */
@@ -658,17 +652,7 @@ async function handleUserTurn(rawText, session) {
   const saveIntent = SaveIntent.detect(text);
 
   if (saveIntent) {
-    // source defaults to "local" here (not "agentnexus") -- honestly reflects "not yet
-    // confirmed synced" until createMemoryEntry below actually succeeds, per
-    // docs/roadmap-todo.md's "记忆" section item 3. "过户" to agentnexus + the real
-    // sourceId happens via markSynced once that's confirmed, not assumed up front.
-    const localEntry = LocalMemory.add(saveIntent.content, { layer: "PROGRESS" });
-    try {
-      const created = await AgentNexusBridge.createMemoryEntry("PROGRESS", saveIntent.content);
-      if (localEntry) LocalMemory.markSynced(localEntry.id, { source: "agentnexus", sourceId: created.entry_id });
-    } catch (e) {
-      console.warn("save-intent write to AgentNexus failed (stayed local only, source stays \"local\" for a retry later):", e);
-    }
+    LocalMemory.add(saveIntent.content, { layer: "PROGRESS" });
     const instructions = `${BASE_INSTRUCTIONS}\n\n用户刚才明确要求记住这件事："${saveIntent.content}"，你已经帮TA记下了。只需要简短确认一句就行，不要复述内容、不要追问。`;
     await session.updater.updateInstructionsAndWait(instructions);
     if (session === voiceSession) markTurnTiming("sessionUpdatedAckAt");
@@ -743,8 +727,7 @@ function handleServerEvent(json) {
       // Barge-in: Qwen reports interrupt_response support server-side too. Stopping
       // local playback alone isn't enough -- without response.cancel the server keeps
       // generating/streaming after the user interrupts, and any response.audio.delta
-      // that arrives after this point would just restart playback. Matches iOS's
-      // onSpeechStarted (interruptPlayback + cancelResponse), which already did both.
+      // that arrives after this point would just restart playback.
       //
       // If a response is still waiting out its debounce window (see
       // scheduleVoiceResponse above), the user has already resumed talking before the
@@ -794,11 +777,6 @@ async function start() {
 
   startPromise = (async () => {
     setState(STATE.CONNECTING);
-
-    // Pull-sync from AgentNexus before the conversation starts — bounded by the
-    // fetch itself; on failure we just proceed with whatever's in local cache.
-    await AgentNexusBridge.pullMemory();
-    ConversationHistory.retryUnsynced();
 
     // setupPlayback() *before* getUserMedia() -- deliberately, not incidental order.
     // Real-device report (2026-08-26): with all four tuning-panel presets, the
@@ -970,15 +948,6 @@ async function start() {
   }
 }
 
-/** Tear down voice, text, and dictation sessions before leaving the page. */
-function stopAllSessions() {
-  stop();
-  stopTextSession();
-  if (dictationState !== DICTATION_STATE.IDLE) {
-    cancelDictation();
-  }
-}
-
 function stop(reason) {
   // A patch we're mid-wait on (updateInstructionsAndWait/sendSessionUpdateAndWait) can
   // no longer be acked once we're tearing the connection down — resolve it now instead
@@ -1113,8 +1082,6 @@ async function startTextSession() {
 
   textStartPromise = (async () => {
     setTextState(TEXT_STATE.CONNECTING);
-    await AgentNexusBridge.pullMemory();
-    ConversationHistory.retryUnsynced();
 
     textLastConnErrorMessage = null;
     await new Promise((resolveOpen) => {
@@ -1405,13 +1372,6 @@ function cancelDictation() {
 async function promoteDictationConnectionToTextSession() {
   setTextState(TEXT_STATE.CONNECTING);
 
-  // startTextSession() always awaits this before connecting -- dictation never has
-  // (it doesn't need memory grounding to just transcribe), so if this is the user's
-  // very first action in the session, do it now too, in parallel with the instructions
-  // patch below, so handleUserTurn's memory search isn't working off a never-synced
-  // local cache.
-  const pullMemoryPromise = AgentNexusBridge.pullMemory();
-
   textWs = dictationWs;
   dictationWs = null;
 
@@ -1436,8 +1396,6 @@ async function promoteDictationConnectionToTextSession() {
   // same formats/turn_detection a text session uses -- only `instructions` differs
   // (empty vs BASE_INSTRUCTIONS) -- so this one-field patch is all promoting it needs.
   await textUpdater.updateInstructionsAndWait(BASE_INSTRUCTIONS);
-  await pullMemoryPromise;
-  ConversationHistory.retryUnsynced();
   setTextState(TEXT_STATE.READY);
 }
 
@@ -1607,12 +1565,9 @@ const TUNING_STORAGE_KEY = "voiceChat.tuning";
 // start), so changing it applies immediately to an in-progress conversation.
 const TUNING_DEFAULTS = { threshold: 0.6, silenceMs: 900, fadeMs: 15, prebufferMs: 150, responseDebounceMs: 500 };
 
-// Explanation text for the "?" tip buttons next to each field above -- threshold/
-// silenceMs wording mirrors VoiceChat/Settings/SettingsView.swift's SettingsTip enum
-// so both platforms explain the shared server-side params the same way; fadeMs/
-// prebufferMs/responseDebounceMs are web-only (no iOS equivalent -- see
-// pcm-player-worklet.js's history comments for fadeMs/prebufferMs; responseDebounceMs
-// has no iOS port yet, see scheduleVoiceResponse's comment).
+// Explanation text for the "?" tip buttons next to each field above -- see
+// pcm-player-worklet.js's history comments for fadeMs/prebufferMs, and
+// scheduleVoiceResponse's comment for responseDebounceMs.
 const TUNING_TIPS = {
   threshold:
     "服务端判断“用户正在说话”的灵敏度，范围 0–1。数值越低，越容易把小声音也当成“有人在说话”（更容易打断 AI，但环境噪音也更容易被误判成插话）；数值越高，需要更明显的声音才会被判定为说话（不容易被打断，但小声说话可能被漏判）。推荐范围 0.5–0.6。",
@@ -1720,23 +1675,3 @@ tuningPanel.addEventListener("click", (event) => {
 
 renderSuggestions();
 setState(STATE.IDLE);
-
-if (window.VoiceModeSwitcher) {
-  VoiceModeSwitcher.mountSwitcher(document.getElementById("modeSwitcher"), {
-    currentMode: "qwen",
-    onBeforeLeave: async () => {
-      stopAllSessions();
-    },
-  });
-}
-
-// Refresh the local memory cache when the tab regains focus, on top of the existing
-// pull-on-conversation-start -- covers "memory changed on another device/tab while this
-// one sat idle in the background" without needing to poll on a timer (docs/roadmap-todo.md,
-// "拉取时机加一条 app 回到前台时也拉一次").
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    AgentNexusBridge.pullMemory();
-    ConversationHistory.retryUnsynced();
-  }
-});

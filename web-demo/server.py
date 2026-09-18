@@ -11,9 +11,7 @@ Run: python3 server.py   (reads QWEN_API_KEY etc. from ../.env)
 
 Binds to 127.0.0.1 by default (local-only, matches the docs above). Set HOST=0.0.0.0
 in .env only when fronting this with a tunnel/reverse proxy that needs to reach it
-from outside the machine. When doing that, also set PRODUCTION=1 to stop registering
-the AgentNexus mock routes (agentnexus_mock.py is seed-data-only, not meant to be
-reachable from outside).
+from outside the machine.
 """
 import asyncio
 import json
@@ -24,8 +22,6 @@ import aiohttp
 import websockets
 from aiohttp import web, WSMsgType
 from dotenv import load_dotenv
-
-import agentnexus_mock
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR.parent / ".env")
@@ -44,7 +40,6 @@ QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen3.5-omni-flash-realtime")
 QWEN_VOICE = os.environ.get("QWEN_VOICE", "Jennifer")
 
 HOST = os.environ.get("HOST", "127.0.0.1")
-PRODUCTION = os.environ.get("PRODUCTION", "").lower() in ("1", "true", "yes")
 
 # Switched to this shortlist (2026-08-28) -- full list of ~47 voices Qwen3.5-Omni-Realtime
 # supports: https://help.aliyun.com/zh/model-studio/omni-voice-list. Unlike the previous
@@ -267,17 +262,11 @@ app.router.add_get("/api/config", config)
 app.router.add_post("/api/dictation-cleanup", dictation_cleanup)
 app.router.add_post("/api/memory-extract", memory_extract)
 app.router.add_get("/ws", relay)
-if not PRODUCTION:
-    agentnexus_mock.register(app)
 app.router.add_static("/static/", BASE_DIR / "static")
 
 if __name__ == "__main__":
     domain_kind = "workspace-specific" if QWEN_WORKSPACE_ID else "shared (consider setting QWEN_WORKSPACE_ID)"
     print(f"Model: {QWEN_MODEL}  Voice: {QWEN_VOICE}  Key loaded: {bool(QWEN_API_KEY)}")
     print(f"Realtime endpoint: {upstream_ws_base()} [{domain_kind}]")
-    if PRODUCTION:
-        print("AgentNexus mock: disabled (PRODUCTION=1)")
-    else:
-        print("AgentNexus mock: /agentnexus-mock/* (see agentnexus_mock.py)")
     print(f"Listening on {HOST}:8765")
     web.run_app(app, host=HOST, port=8765)

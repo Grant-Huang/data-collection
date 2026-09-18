@@ -1,19 +1,20 @@
 # 语音对话网页 Demo
 
-对接 Realtime API 协议（`session.update` / `input_audio_buffer.append` / `response.audio.delta` / …），这个 demo 可以直接在浏览器里跑起来实测。项目最早同时维护一个原生 iOS App，跑同一套协议，2026-08-28 决定暂时移除只保留网页版（见根目录 `README.md`）——这份文档里偶尔出现的 `VoiceChat/`（iOS 端源码路径）引用是那段历史留下的，指的是已经从当前代码里删除、但还在 git 历史里的内容。
+对接 Realtime API 协议（`session.update` / `input_audio_buffer.append` / `response.audio.delta` / …），这个 demo 可以直接在浏览器里跑起来实测。
 
 界面：类似 ChatGPT 主对话框——顶部状态栏、中间滚动的对话气泡、底部一个可以打字的输入框 + 一个开始/结束合一的大圆按钮（不是两个按钮，点一下开始，再点一下结束，图标和颜色跟着状态变）。打字发送消息会自动开始会话，不用先点麦克风。
 
-## 本地记忆 + AgentNexus Mock
+## 本地记忆
 
-- `static/memory.js`：本地记忆（`localStorage`），跟 `VoiceChat/Memory/MemoryStore.swift` 同一套逻辑——关键词重合度 + 时间新鲜度打分，没有语义检索。
-- `static/agentnexus.js` + `agentnexus_mock.py`：**Mock 出智枢按 `docs/agentnexus-memory-integration-proposal.md` 改完之后的样子**——长期 Token 直接能用（mock 里任何非空 Bearer token 都算通过）、标准的频道记忆/消息 REST API。默认指向本地的 `/agentnexus-mock/*`（内置了三条示例记忆种子数据），生产环境要换成真实智枢地址时只需要改 `agentnexus.js` 里的 `config`。
-- 每次开始对话，先从 AgentNexus Mock 拉一次记忆合并进本地缓存；对话过程中每一轮（不管是打字还是说话）都用本地记忆检索，命中的话会喂给模型；原始对话内容顺带推给 AgentNexus 当消息记录。
-- `static/saveIntent.js`：识别"记住""帮我记一下""提醒我"这类明确意图，命中的话**不**走普通的检索问答流程，而是把内容写进 AgentNexus 的结构化记忆层（`PROGRESS`，通过 `agentnexus.js` 的 `createMemoryEntry`），模型只需要简短确认，不用检索/复述。跟"每轮对话都当消息推送"是两条不同的路径，对应提案文档里"原始对话 vs 精选记忆"的分工。
+纯本地、不接任何外部记忆服务——用户的对话数据只存在这台浏览器的 `localStorage` 里。
+
+- `static/memory.js`（`LocalMemory`）：可检索的记忆片段——关键词重合度 + 时间新鲜度打分，没有语义检索。对话过程中每一轮（不管是打字还是说话）都会先搜一次本地记忆，命中的话喂给模型当背景信息。
+- `static/history.js`（`ConversationHistory`）：完整的原始对话记录（带说话人、带顺序），跟 `LocalMemory` 是两个不同粒度的东西——一个是抽取出来的可检索片段，一个是逐字的完整转写。
+- `static/saveIntent.js`：识别"记住""帮我记一下""提醒我"这类明确意图，命中的话**不**走普通的检索问答流程，而是直接写进 `LocalMemory`（打上 `layer: "PROGRESS"`），模型只需要简短确认，不用检索/复述。
 
 ## 提示词（2026-08-22 修订）
 
-`BASE_INSTRUCTIONS`（`app.js`）/ `systemInstructions`（`VoiceChat/ConversationViewModel.swift`）两边同步改了一版：
+`BASE_INSTRUCTIONS`（`app.js`）改了一版：
 
 - **不再限制"1-3 句话"**：改成按问题类型决定长度——闲聊/简单问题几句说完；工作纪要、待办清单、技术问题可以说得详细，但要按口语习惯组织（"主要有这么几件事，第一……第二……"），不是书面分点腔调，内容特别多就先说整体再问要不要展开。
 - **背景信息缺失时的过渡语**：不是额外传"本地记忆没命中"这个信号给模型，而是让模型自己根据背景信息里到底有没有相关内容来判断——命中了就有内容可用，没命中背景信息就是空的，模型看到没相关信息、又是需要具体记录的问题时，会按指令诚实说"这个我目前没有相关记录"而不是编。这条纯粹是提示词层面的改动，不依赖 Function Calling 能不能用。
@@ -22,15 +23,15 @@
 
 ## 一个关键的实测发现：怎么把记忆喂给模型是有讲究的
 
-最早的设计（跟 iOS 项目一开始的实现一样）是用 `conversation.item.create` 插入一条 `role: "system"` 的消息来传递检索到的记忆。**实测发现 Qwen 会完全无视这条消息**——不管放在用户提问之前还是之后，也试过伪装成一条 `role: "assistant"` 的历史消息，模型都没有用上这些信息，只会给一个不痛不痒的通用回复。
+最早的设计是用 `conversation.item.create` 插入一条 `role: "system"` 的消息来传递检索到的记忆。**实测发现 Qwen 会完全无视这条消息**——不管放在用户提问之前还是之后，也试过伪装成一条 `role: "assistant"` 的历史消息，模型都没有用上这些信息，只会给一个不痛不痒的通用回复。
 
 唯一实测有效的方式是：**把记忆内容拼进 `session.update` 的 `instructions` 字段**（也就是系统提示词本身），每一轮对话根据检索结果动态патch这个字段，再触发 `response.create`。另外还发现：如果连续发两次 `session.update` 而不等第一次的 `session.updated` 确认回包，会导致后面的回复整个失败（空回复）——所以每次 patch instructions 之后必须等 `session.updated` 回来了，才能继续发 `response.create`。
 
-这个问题在 iOS 项目里也一样存在，已经用相同方式修复了（`RealtimeClient.updateInstructions` + 等 ack 之后再 `requestResponse`）。四种写法的完整实测对比在下面"记忆注入方式实测对比"里。
+四种写法的完整实测对比在下面"记忆注入方式实测对比"里。
 
 ## 为什么需要本地中转服务
 
-浏览器原生 `WebSocket` API 不能自定义请求头，没法直接带 `Authorization: Bearer <key>` 连 DashScope。所以 `server.py` 起一个本地服务：网页连 `ws://127.0.0.1:8765/ws`（不需要认证），`server.py` 再拿着 `.env` 里的 Key 去连真正的 DashScope 地址，两边转发消息。**Key 全程只在这个 Python 进程里，不会出现在浏览器/前端代码里。** 同一个服务也顺带 serve 了 AgentNexus Mock（`/agentnexus-mock/*`）。
+浏览器原生 `WebSocket` API 不能自定义请求头，没法直接带 `Authorization: Bearer <key>` 连 DashScope。所以 `server.py` 起一个本地服务：网页连 `ws://127.0.0.1:8765/ws`（不需要认证），`server.py` 再拿着 `.env` 里的 Key 去连真正的 DashScope 地址，两边转发消息。**Key 全程只在这个 Python 进程里，不会出现在浏览器/前端代码里。**
 
 ## 运行
 
@@ -54,7 +55,7 @@ Key 从仓库根目录的 `.env` 读取（`QWEN_API_KEY=...`），这个文件�
 | `wss://dashscope.aliyuncs.com/api-ws/v1/realtime` | `qwen-omni-turbo-realtime` | ✅ 连通，`session.created` 返回的 `turn_detection` 带 `create_response: true` 和 `interrupt_response: true` |
 | `wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime` | `qwen-omni-turbo-realtime` | ❌ HTTP 401（这个 Key 对国际站点无效，大概率是账号/区域问题，不是 Key 本身坏了） |
 
-所以 iOS App 和这个网页 demo 现在都默认用 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime` + `qwen-omni-turbo-realtime`——之前从文档里查到的"按工作空间分域名"的地址（`{WorkspaceId}.cn-beijing.maas.aliyuncs.com`）**没有用上**，实测这个通用地址就直接能连，不需要工作空间 ID。
+所以这个网页 demo 现在默认用 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime` + `qwen-omni-turbo-realtime`——之前从文档里查到的"按工作空间分域名"的地址（`{WorkspaceId}.cn-beijing.maas.aliyuncs.com`）**没有用上**，实测这个通用地址就直接能连，不需要工作空间 ID。
 
 请求的音色 `Cherry` 没被接受，服务端实际用的是 `Chelsie`，已经改成默认值。
 
@@ -93,7 +94,7 @@ Key 从仓库根目录的 `.env` 读取（`QWEN_API_KEY=...`），这个文件�
 
 ## 多轮日程问答实测（2026-08-22）
 
-限流窗口过后，跑了一次完整的多轮测试：在本地记忆里 mock 了 4 条内容（周二产品评审会、周四财务预算、下周一交季度报告、用户身份偏好），用跟 `MemoryStore.swift`/`memory.js` 完全一致的关键词检索逻辑，在**同一个 WebSocket 连接**上连续问了 5 个问题（脚本：`test_schedule_mock.py`）。原始输出：
+限流窗口过后，跑了一次完整的多轮测试：在本地记忆里 mock 了 4 条内容（周二产品评审会、周四财务预算、下周一交季度报告、用户身份偏好），用 `memory.js` 的关键词检索逻辑，在**同一个 WebSocket 连接**上连续问了 5 个问题（脚本：`test_schedule_mock.py`）。原始输出：
 
 | # | 提问 | 本地检索命中 | 模型回答 |
 |---|---|---|---|
@@ -194,21 +195,20 @@ Sources: [限流文档](https://help.aliyun.com/zh/model-studio/rate-limit) · [
 
 **结论**：连续几天反复出现的"`session.update` 发出去没反应"这个问题，看起来根源就是共享域名（`dashscope.aliyuncs.com`）本身的问题——不管是"中心化共享域名没有流量隔离"这个官方文档暗示的原因，还是别的什么，**换成专属域名之后这个问题彻底消失了**。之前那么多次"限流""哑火""不稳定"的排查，最后的答案很可能一直都是"用错域名了"。
 
-**已完成**（2026-08-23 当天完成切换）：App（iOS + 网页 demo）默认配置已经切换到专属域名 + `qwen3.5-omni-flash-realtime`（不是 Plus——官方定位 Flash 才是"大多数生产场景的默认选择"，延迟更低更便宜，Plus 留作可选项）+ `Ethan`。Workspace ID 做成了新的用户可配置项（网页 demo 走 `.env`，iOS 走设置页），没填时都会自动回退到共享域名并给出提示。音色也从旧模型不支持的 `Chelsie` 换成了新模型的音色体系——从官方 47 个音色里挑了 14 个逐一实测（不是只看文档）确认可用，做成了下拉/选择器，不再是自由文本框。完整配置说明和踩坑记录见 `docs/qwen-realtime-voice-setup.md`。
+**已完成**（2026-08-23 当天完成切换）：网页 demo 默认配置已经切换到专属域名 + `qwen3.5-omni-flash-realtime`（不是 Plus——官方定位 Flash 才是"大多数生产场景的默认选择"，延迟更低更便宜，Plus 留作可选项）+ `Ethan`。Workspace ID 做成了新的用户可配置项（走 `.env`），没填时都会自动回退到共享域名并给出提示。音色也从旧模型不支持的 `Chelsie` 换成了新模型的音色体系——从官方 47 个音色里挑了 14 个逐一实测（不是只看文档）确认可用，做成了下拉/选择器，不再是自由文本框。完整配置说明和踩坑记录见 `docs/qwen-realtime-voice-setup.md`。
 
 ## 文件说明
 
-- `server.py` — 中转服务（aiohttp）：serve 静态文件 + `/api/config` + `/ws`（转发到 DashScope）+ 挂载 AgentNexus Mock 路由。
-- `agentnexus_mock.py` — Mock 出智枢按提案改完之后的记忆/消息 REST API，纯内存存储，重启会重置回种子数据。
+- `server.py` — 中转服务（aiohttp）：serve 静态文件 + `/api/config` + `/ws`（转发到 DashScope）。
 - `index.html` / `static/styles.css` — 页面结构和样式（开始/结束合一按钮、文字输入框）。
 - `static/app.js` — 核心逻辑：麦克风采集（`ScriptProcessorNode`，降采样到 16kHz PCM16）、流式播放（24kHz PCM16 顺序调度播放）、WebSocket 事件收发、`session.update` instructions patch 记忆注入、气泡渲染。
 - `static/memory.js` — 本地记忆存储 + 检索。
-- `static/agentnexus.js` — 拉取/推送 AgentNexus（Mock）记忆的桥接层。
+- `static/history.js` — 完整对话历史的本地持久化。
 - `static/saveIntent.js` — 识别"记住…"类明确保存意图，从中抽取要保存的内容。
 
 ## 已知限制
 
 - `ScriptProcessorNode` 已经是浏览器标记为 deprecated 的 API（但仍被广泛支持），更现代的写法是 `AudioWorkletNode`，demo 图简单没换。
-- 本地记忆检索还是关键词打分，没有语义理解（跟 iOS 项目的已知限制一样）。
-- `agentnexus_mock.py` 是纯内存存储，没有持久化，也没有完整模拟"定期整理"这类后台任务（提案里的建议二）。
+- 本地记忆检索还是关键词打分，没有语义理解。
+- 记忆和对话历史都只存在这台浏览器的 `localStorage` 里，换设备/换浏览器不会同步，清空浏览器数据会丢失。
 - 连接失败会明确提示用户并回到可重试状态（见上面"连接生命周期设计"），但没有自动重连/自动重试——需要用户自己再按一次开始。
