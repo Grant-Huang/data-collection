@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>实验中心 —— 参考原型</title>
+<style>
+  :root{
+    --bg:#f9f9f7;--surface:#fcfcfb;--line:#e1e0d9;
+    --text:#0b0b0b;--text-2:#52514e;--muted:#898781;
+    --blue:#2a78d6;--blue-100:#cde2fb;
+    --orange:#eb6834;--aqua:#1baf7a;
+    --good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+  header.topbar{background:var(--surface);border-bottom:1px solid var(--line);padding:14px 26px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+  .brand{font-weight:800;font-size:15px;display:flex;align-items:center;gap:10px}
+  .brand .tag{font-size:11px;font-weight:700;color:var(--blue);background:var(--blue-100);padding:3px 8px;border-radius:999px}
+  .nav{display:flex;gap:4px}
+  .nav button{border:1px solid var(--line);background:var(--surface);padding:8px 14px;border-radius:9px;font-size:12.5px;font-weight:600;color:var(--text-2);cursor:pointer}
+  .nav button.active{background:var(--blue);border-color:var(--blue);color:#fff}
+
+  main{max-width:1180px;margin:0 auto;padding:22px 26px 60px}
+  .view{display:none}
+  .view.active{display:block}
+  .note{background:var(--blue-100);border:1px solid #bfdbfe;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#184f95;line-height:1.6;margin-bottom:18px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+  .panel h2{font-size:14px;margin:0 0 4px;font-weight:800}
+  .panel .desc{font-size:12px;color:var(--muted);margin-bottom:14px}
+
+  /* ---- 实验列表 ---- */
+  .list-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .list-toolbar .filters{display:flex;gap:8px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--text-2);background:var(--surface)}
+  .btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:10px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px}
+  td.num{font-variant-numeric:tabular-nums;text-align:right}
+  .status-pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+  .status-pill i{width:6px;height:6px;border-radius:50%}
+  .status-done{background:#e7f7e7;color:#0a6b0a}
+  .status-done i{background:var(--good)}
+  .status-running{background:#fff3dc;color:#8a5a00}
+  .status-running i{background:var(--warning)}
+  .status-failed{background:#fdeceb;color:#a52a2a}
+  .status-failed i{background:var(--critical)}
+  .status-queued{background:#f2f2f0;color:var(--text-2)}
+  .status-queued i{background:var(--muted)}
+  .exp-name{font-weight:700;color:var(--blue);cursor:pointer}
+  .exp-name .meta{display:block;font-weight:400;color:var(--muted);font-size:11px}
+
+  /* ---- 结果页 ---- */
+  .interp-card{border:1px solid #bfdbfe;background:linear-gradient(180deg,#f4f9ff,var(--surface));border-radius:var(--radius);padding:18px 20px;margin-bottom:18px}
+  .interp-card h3{margin:0 0 8px;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .interp-card h3 .ai-tag{font-size:10.5px;font-weight:700;color:var(--blue);background:var(--blue-100);padding:2px 8px;border-radius:999px}
+  .interp-summary{font-size:13px;line-height:1.75;color:var(--text)}
+  .interp-points{margin:12px 0 0;padding-left:18px;font-size:12.5px;line-height:1.8;color:var(--text-2)}
+  .interp-points li{margin-bottom:6px}
+  .interp-footer{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed #bfdbfe}
+  .interp-disclaimer{font-size:10.5px;color:var(--muted)}
+  .interp-actions{display:flex;gap:8px}
+  .interp-actions button{font-size:11px;border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 10px;cursor:pointer;color:var(--text-2)}
+
+  .stat4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+  .stat .label{font-size:11px;color:var(--muted)}
+  .stat .value{font-size:21px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+  .stat .value.warn-text{color:#8a5a00}
+
+  .layer-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  .layer-tab{padding:9px 14px;font-size:12.5px;font-weight:600;color:var(--text-2);cursor:pointer;border-bottom:2px solid transparent}
+  .layer-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+  .layer-panel{display:none}
+  .layer-panel.active{display:block}
+
+  .fail-mode{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:8px;font-size:12px}
+  .fail-mode b{font-size:12.5px}
+  .fail-mode .count{float:right;color:var(--muted);font-weight:600}
+
+  /* ---- 对比视图 ---- */
+  .compare-select{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .compare-select .chip{border:1px solid var(--blue);background:var(--blue-100);color:#184f95;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600}
+  .cmp-table td.best{font-weight:800;color:#0a6b0a}
+  .legend-row{display:flex;gap:16px;font-size:11.5px;color:var(--text-2);margin:10px 0 4px}
+  .legend-row span{display:inline-flex;align-items:center;gap:6px}
+  .legend-row i{width:12px;height:12px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">实验中心 <span class="tag">桌面专属 · 研究员/管理员可见</span></div>
+  <div class="nav">
+    <button class="active" data-view="list">实验列表</button>
+    <button data-view="result">单实验结果</button>
+    <button data-view="compare">实验对比</button>
+  </div>
+</header>
+
+<main>
+  <div class="note">对应 PRD 第 14 节。数据均为示例，用于验证页面结构（14.0）、结果解读卡片（14.5）与对比视图（14.6）的呈现方式，不代表真实实验结果。</div>
+
+  <!-- ============ 视图一：实验列表 ============ -->
+  <section class="view active" id="view-list">
+    <div class="panel">
+      <div class="list-toolbar">
+        <div class="filters">
+          <span class="pill">状态：全部</span>
+          <span class="pill">数据源：全部</span>
+          <span class="pill">创建人：全部</span>
+        </div>
+        <button class="btn primary">＋ 新建实验</button>
+      </div>
+      <table>
+        <tr>
+          <th></th><th>实验名称</th><th>数据源</th><th>数据集版本</th><th>方法/模型</th><th>状态</th>
+          <th style="text-align:right">Node F1</th><th style="text-align:right">Graph F1</th><th>创建人</th><th>时间</th>
+        </tr>
+        <tr>
+          <td><input type="checkbox" checked></td>
+          <td class="exp-name">exp-A baseline<span class="meta">seed=42</span></td>
+          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GPT-baseline</td>
+          <td><span class="status-pill status-done"><i></i>已完成</span></td>
+          <td class="num">0.71</td><td class="num">0.66</td><td>Grant</td><td>09-15</td>
+        </tr>
+        <tr>
+          <td><input type="checkbox" checked></td>
+          <td class="exp-name">exp-B GraphLLM-v3<span class="meta">seed=42</span></td>
+          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GraphLLM-v3</td>
+          <td><span class="status-pill status-done"><i></i>已完成</span></td>
+          <td class="num">0.89</td><td class="num">0.83</td><td>Grant</td><td>09-17</td>
+        </tr>
+        <tr>
+          <td><input type="checkbox"></td>
+          <td class="exp-name">exp-C Public 对照<span class="meta">seed=7</span></td>
+          <td>Public</td><td>v2.0</td><td>Sequence Projection + GraphLLM-v3</td>
+          <td><span class="status-pill status-running"><i></i>运行中</span></td>
+          <td class="num">—</td><td class="num">—</td><td>Wei</td><td>09-18</td>
+        </tr>
+        <tr>
+          <td><input type="checkbox"></td>
+          <td class="exp-name">exp-D 消融：无回复长度策略<span class="meta">seed=42</span></td>
+          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GraphLLM-v3</td>
+          <td><span class="status-pill status-queued"><i></i>排队中</span></td>
+          <td class="num">—</td><td class="num">—</td><td>Grant</td><td>09-18</td>
+        </tr>
+        <tr>
+          <td><input type="checkbox"></td>
+          <td class="exp-name">exp-E 超参搜索#7<span class="meta">seed=3</span></td>
+          <td>Expert</td><td>v1.2</td><td>Text Serialization + GraphLLM-v2</td>
+          <td><span class="status-pill status-failed"><i></i>失败</span></td>
+          <td class="num">—</td><td class="num">—</td><td>Wei</td><td>09-14</td>
+        </tr>
+      </table>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end">
+        <button class="btn primary">对比选中的 2 个实验 →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图二：单实验结果页 ============ -->
+  <section class="view" id="view-result">
+    <div class="panel" style="padding-bottom:6px">
+      <h2 style="font-size:16px">exp-B GraphLLM-v3</h2>
+      <div class="desc">Expert · 数据集 v1.3 · Node/Edge Graph 表示 · seed=42 · 完成于 09-17 14:02</div>
+    </div>
+
+    <div class="interp-card">
+      <h3>结果解读 <span class="ai-tag">AI 生成</span></h3>
+      <p class="interp-summary">本次实验在主干节点识别上表现良好（Node F1 0.89），但在条件分支的识别上偏弱（Branch Condition Accuracy 0.61），最常见的错误是把多条件分支漏识别成两条件。Graph 结构层面的整体相似度（Structural F1 0.83）相比上一版 baseline 有明显提升。</p>
+      <ul class="interp-points">
+        <li><strong>现象</strong>：分支条件识别偏弱（0.61）→ <strong>可能原因</strong>：训练数据里三条件以上的分支样本较少（结构多样性维度分数 61，见 Dashboard）→ <strong>建议</strong>：优先补充多分支场景的专家采集样本</li>
+        <li><strong>现象</strong>：并行结构识别较好（0.85）→ <strong>可能原因</strong>：并行拆分/汇合的语言模式相对固定，模型容易学到规律 → <strong>建议</strong>：可作为下一步扩展到"回路/重试"语义识别的参照基线</li>
+        <li><strong>现象</strong>：Graph Edit Distance 比 baseline 下降 27%（越低越好）→ <strong>可能原因</strong>：整体结构还原能力提升 → <strong>建议</strong>：可以考虑把此版本设为新的对照基线</li>
+      </ul>
+      <div class="interp-footer">
+        <span class="interp-disclaimer">以上解读由 AI 根据本次实验指标自动生成，请结合下方明细数据核实。</span>
+        <div class="interp-actions"><button>重新生成</button><button>编辑</button></div>
+      </div>
+    </div>
+
+    <div class="layer-tabs">
+      <div class="layer-tab active" data-layer="summary">Summary</div>
+      <div class="layer-tab" data-layer="graph">Graph</div>
+      <div class="layer-tab" data-layer="error">Error Analysis</div>
+      <div class="layer-tab" data-layer="slice">Dataset Slice</div>
+    </div>
+
+    <div class="layer-panel active" id="layer-summary">
+      <div class="stat4">
+        <div class="stat"><div class="label">Node F1</div><div class="value">0.89</div></div>
+        <div class="stat"><div class="label">Edge F1</div><div class="value">0.85</div></div>
+        <div class="stat"><div class="label">Branch Condition Acc.</div><div class="value warn-text">0.61</div></div>
+        <div class="stat"><div class="label">Structural F1</div><div class="value">0.83</div></div>
+      </div>
+    </div>
+
+    <div class="layer-panel" id="layer-graph">
+      <div class="panel" style="margin:0">
+        <table>
+          <tr><th>指标</th><th style="text-align:right">数值</th></tr>
+          <tr><td>Graph Edit Distance（越低越好）</td><td class="num">4.2</td></tr>
+          <tr><td>Path Similarity</td><td class="num">0.79</td></tr>
+          <tr><td>Reachability Consistency</td><td class="num">0.91</td></tr>
+          <tr><td>Parallel Structure Accuracy</td><td class="num">0.85</td></tr>
+          <tr><td>Merge Accuracy</td><td class="num">0.80</td></tr>
+          <tr><td>Role Assignment Accuracy</td><td class="num">0.88</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="layer-panel" id="layer-error">
+      <div class="fail-mode"><b>多条件分支被识别成两条件</b><span class="count">17 例</span><br>模型倾向于只捕捉最明显的二元对立（如"合格/不合格"），漏掉第三种"待复检"分支。</div>
+      <div class="fail-mode"><b>角色指代消解错误</b><span class="count">9 例</span><br>专家用"他""对方"指代前文提到的角色时，模型有时会关联到错误的角色实体。</div>
+      <div class="fail-mode"><b>返工语义误判为独立节点</b><span class="count">6 例</span><br>模型偶尔把 retry_semantics 的口语描述抽取成一个新的普通活动节点，而不是附加语义。</div>
+    </div>
+
+    <div class="layer-panel" id="layer-slice">
+      <div class="panel" style="margin:0">
+        <table>
+          <tr><th>切片</th><th style="text-align:right">样本数</th><th style="text-align:right">Node F1</th><th style="text-align:right">Structural F1</th></tr>
+          <tr><td>异常响应</td><td class="num">54</td><td class="num">0.91</td><td class="num">0.86</td></tr>
+          <tr><td>标准运营</td><td class="num">31</td><td class="num">0.90</td><td class="num">0.84</td></tr>
+          <tr><td>工程变更</td><td class="num">12</td><td class="num">0.83</td><td class="num">0.72</td></tr>
+          <tr><td>持续改善</td><td class="num">8</td><td class="num">0.79</td><td class="num">0.68</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图三：实验对比 ============ -->
+  <section class="view" id="view-compare">
+    <div class="panel">
+      <h2>实验对比</h2>
+      <div class="desc">已选中 2 个已完成实验（14.6 节）</div>
+      <div class="compare-select">
+        <span class="chip">● exp-A baseline</span>
+        <span class="chip" style="border-color:#eb6834;background:#fde8de;color:#8a3010">● exp-B GraphLLM-v3</span>
+      </div>
+
+      <table class="cmp-table">
+        <tr><th>指标</th><th style="text-align:right">exp-A baseline</th><th style="text-align:right">exp-B GraphLLM-v3</th></tr>
+        <tr><td>Node F1</td><td class="num">0.71</td><td class="num best">0.89</td></tr>
+        <tr><td>Edge F1</td><td class="num">0.68</td><td class="num best">0.85</td></tr>
+        <tr><td>Branch Condition Accuracy</td><td class="num">0.55</td><td class="num best">0.61</td></tr>
+        <tr><td>Graph Structural F1</td><td class="num">0.66</td><td class="num best">0.83</td></tr>
+        <tr><td>Graph Edit Distance（越低越好）</td><td class="num best">3.8</td><td class="num">4.2</td></tr>
+      </table>
+
+      <div style="margin-top:20px">
+        <svg width="100%" height="230" viewBox="0 0 1080 230">
+          <line x1="40" y1="10" x2="40" y2="190" stroke="#e1e0d9"></line>
+          <line x1="40" y1="190" x2="1060" y2="190" stroke="#e1e0d9"></line>
+          <!-- 4 metric groups, 2 bars each -->
+          <!-- Node F1 -->
+          <rect x="90" y="59" width="40" height="131" fill="#2a78d6" rx="3"></rect>
+          <rect x="135" y="12" width="40" height="178" fill="#eb6834" rx="3"></rect>
+          <text x="130" y="205" text-anchor="middle" font-size="11" fill="#52514e">Node F1</text>
+          <!-- Edge F1 -->
+          <rect x="330" y="66" width="40" height="124" fill="#2a78d6" rx="3"></rect>
+          <rect x="375" y="26" width="40" height="164" fill="#eb6834" rx="3"></rect>
+          <text x="370" y="205" text-anchor="middle" font-size="11" fill="#52514e">Edge F1</text>
+          <!-- Branch Acc -->
+          <rect x="570" y="91" width="40" height="99" fill="#2a78d6" rx="3"></rect>
+          <rect x="615" y="79" width="40" height="111" fill="#eb6834" rx="3"></rect>
+          <text x="610" y="205" text-anchor="middle" font-size="11" fill="#52514e">Branch Acc.</text>
+          <!-- Structural F1 -->
+          <rect x="820" y="72" width="40" height="118" fill="#2a78d6" rx="3"></rect>
+          <rect x="865" y="34" width="40" height="156" fill="#eb6834" rx="3"></rect>
+          <text x="860" y="205" text-anchor="middle" font-size="11" fill="#52514e">Structural F1</text>
+        </svg>
+        <div class="legend-row">
+          <span><i style="background:#2a78d6"></i>exp-A baseline</span>
+          <span><i style="background:#eb6834"></i>exp-B GraphLLM-v3</span>
+        </div>
+      </div>
+
+      <div class="interp-card" style="margin-top:18px">
+        <h3>对比解读 <span class="ai-tag">AI 生成</span></h3>
+        <p class="interp-summary">exp-B（GraphLLM-v3）相比 exp-A（baseline）在全部四个核心指标上都有提升，其中 Graph Structural F1 提升幅度最大（0.66 → 0.83，+26%），说明新方法在还原完整图结构上进步明显。Branch Condition Accuracy 虽然也有提升但幅度较小（0.55 → 0.61），仍是两个版本共同的短板。唯一变差的指标是 Graph Edit Distance（3.8 → 4.2，越低越好），提示新版本在个别样本上的结构编辑距离有轻微上升，建议结合 Error Analysis 层核实具体样本再下结论。</p>
+        <div class="interp-footer">
+          <span class="interp-disclaimer">以上解读由 AI 根据本次实验指标自动生成，请结合上方明细数据核实。</span>
+          <div class="interp-actions"><button>重新生成</button><button>编辑</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+  document.querySelectorAll('.nav button').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById('view-'+b.dataset.view).classList.add('active');
+    });
+  });
+  document.querySelectorAll('.layer-tab').forEach(t=>{
+    t.addEventListener('click', ()=>{
+      document.querySelectorAll('.layer-tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.layer-panel').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById('layer-'+t.dataset.layer).classList.add('active');
+    });
+  });
+  document.querySelectorAll('.exp-name').forEach(el=>{
+    el.addEventListener('click', ()=>document.querySelector('[data-view="result"]').click());
+  });
+</script>
+</body>
+</html>
