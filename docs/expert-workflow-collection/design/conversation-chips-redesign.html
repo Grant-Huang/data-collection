@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>会话追问气泡 —— 参考原型</title>
+<style>
+  :root{
+    --bg:#f9f9f7;--surface:#fcfcfb;--line:#e1e0d9;
+    --text:#0b0b0b;--text-2:#52514e;--muted:#898781;
+    --blue:#2a78d6;--blue-100:#cde2fb;
+    --good:#0ca30c;--warning:#fab219;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:20px 24px 8px;max-width:920px;margin:0 auto}
+  header h1{font-size:18px;margin:0 0 6px}
+  header p{margin:0;color:var(--text-2);font-size:13px;line-height:1.7}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 0;font-size:11.5px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--text-2)}
+  .legend i{width:8px;height:8px;border-radius:50%}
+  .legend .lg-none i{background:var(--muted)}
+  .legend .lg-chip i{background:var(--blue)}
+  .legend .lg-split i{background:var(--warning)}
+  .legend .lg-fallback i{background:#8b5cf6}
+
+  main{max-width:520px;margin:18px auto 60px;background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.05)}
+  .chat-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .chat-head .avatar{width:30px;height:30px;border-radius:50%;background:var(--blue-100);color:#184f95;display:grid;place-items:center;font-weight:800;font-size:12px}
+  .chat-head .title{font-size:13px;font-weight:700}
+  .chat-head .sub{font-size:11px;color:var(--muted)}
+
+  .messages{padding:18px 16px 8px;display:flex;flex-direction:column;gap:6px}
+
+  .turn{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .row{display:flex;gap:8px;align-items:flex-end}
+  .row.user{justify-content:flex-end}
+  .bubble{max-width:78%;padding:10px 13px;border-radius:14px;font-size:13px;line-height:1.6}
+  .row.bot .bubble{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+  .row.user .bubble{background:var(--blue);color:#fff;border-bottom-right-radius:4px}
+  .bot-avatar{width:24px;height:24px;border-radius:50%;background:var(--blue-100);color:#184f95;display:grid;place-items:center;font-size:10px;font-weight:800;flex:0 0 auto}
+
+  .tag{align-self:flex-start;margin-left:32px;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+  .tag i{width:6px;height:6px;border-radius:50%}
+  .tag.none{background:#f2f2f0;color:var(--text-2)}
+  .tag.none i{background:var(--muted)}
+  .tag.chip{background:var(--blue-100);color:#184f95}
+  .tag.chip i{background:var(--blue)}
+  .tag.split{background:#fff3dc;color:#8a5a00}
+  .tag.split i{background:var(--warning)}
+  .tag.fallback{background:#f0ecfd;color:#5b3fb8}
+  .tag.fallback i{background:#8b5cf6}
+
+  .why{margin-left:32px;font-size:11px;color:var(--muted);line-height:1.6;max-width:82%}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-left:32px}
+  .chip-btn{border:1px solid #bcd4f2;background:#f4f9ff;color:#184f95;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:600;cursor:pointer}
+  .chip-btn:hover{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .chip-btn.fallback-btn{border-color:#d9d0f7;background:#f7f4fe;color:#5b3fb8}
+  .chip-btn.fallback-btn:hover{background:#8b5cf6;color:#fff;border-color:#8b5cf6}
+
+  footer.composer{border-top:1px solid var(--line);padding:12px 16px 16px}
+  .compose-box{border:1px solid var(--line);border-radius:22px;background:#fff;display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px}
+  .compose-box textarea{flex:1;border:0;outline:none;resize:none;font-size:13px;line-height:1.5;max-height:70px;font-family:inherit;background:transparent}
+  .compose-box textarea.filled{color:var(--text)}
+  .compose-hint{font-size:10.5px;color:var(--muted);margin-top:6px;padding-left:4px}
+  .send-btn{width:32px;height:32px;border-radius:50%;background:var(--blue);border:0;color:#fff;font-size:14px;cursor:pointer;flex:0 0 auto}
+  .mic-btn{width:32px;height:32px;border-radius:50%;background:#f2f4f7;border:0;color:var(--text-2);font-size:13px;cursor:pointer;flex:0 0 auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>会话追问气泡（Quick-Reply Chips）—— 参考原型</h1>
+  <p>对应 PRD 第 18 节。同一条 CNC 尺寸超差处理案例的完整追问链路，标注每一步是否提供气泡、为什么。适用于桌面主栏与移动会话页，交互逻辑一致。点击任意气泡可以看到文字回填输入框、需要手动发送的真实交互（不是截图）。</p>
+  <div class="legend">
+    <span class="lg-none"><i></i>无气泡 · 回忆类问题</span>
+    <span class="lg-chip"><i></i>有气泡 · 结构判断</span>
+    <span class="lg-split"><i></i>半开放 · 拆成两步</span>
+    <span class="lg-fallback"><i></i>兜底气泡 · 无主选项</span>
+  </div>
+</header>
+
+<main>
+  <div class="chat-head">
+    <div class="avatar">AI</div>
+    <div><div class="title">制造流程采集助手</div><div class="sub">CNC尺寸超差处理 · 采集中</div></div>
+  </div>
+
+  <div class="messages" id="messages">
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">你好，我会把你讲的真实工作整理成一张流程图，不用你自己画图。请先回忆一件你亲自参与、比较熟悉的制造工作。</div></div>
+      <div class="tag chip"><i></i>有气泡 · 帮助回忆分类，不预设内容</div>
+      <div class="chips">
+        <button class="chip-btn" data-fill="设备/质量异常相关的工作">设备/质量异常</button>
+        <button class="chip-btn" data-fill="标准生产工作相关的经历">标准生产工作</button>
+        <button class="chip-btn" data-fill="持续改善相关的经历">持续改善</button>
+        <button class="chip-btn" data-fill="工程/工艺变更相关的经历">工程/工艺变更</button>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">我讲一个精密加工车间里，连续出现尺寸超差以后怎么处理的。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">好。当时是谁最先发现的？发现后第一件事做什么？</div></div>
+      <div class="tag none"><i></i>无气泡 · 回忆类问题</div>
+      <div class="why">答案是专家要现场回忆的具体细节（谁发现、第一反应是什么），给选项等于替专家编内容，直接影响真实性。</div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">操作员自己测出来的，连续5件都超了，他就停了机器，叫了质量工程师。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">明白。质量工程师复测之后，这里是不是只有一种处理方式，还是不同情况下会走不同方向？</div></div>
+      <div class="tag chip"><i></i>有气泡 · 结构判断（P1 分支）</div>
+      <div class="why">答案空间是系统要确认的拓扑结构（单一路径 / 有分支），不是让专家凭空生成新信息。</div>
+      <div class="chips">
+        <button class="chip-btn" data-fill="只有一种处理方式，没有分支">只有一种处理方式</button>
+        <button class="chip-btn" data-fill="会根据情况走不同方向">会走不同方向</button>
+        <button class="chip-btn fallback-btn" data-fill="不确定，我再想想怎么说">不确定，再想想</button>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">对。正常就可以准备恢复，如果还是超差，就要查设备和刀具。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">设备检查和工艺/刀具检查，这两件事是先后做，还是可以同时进行？</div></div>
+      <div class="tag chip"><i></i>有气泡 · 结构判断（P2 并行）</div>
+      <div class="chips">
+        <button class="chip-btn" data-fill="先后做，不是同时">先后做</button>
+        <button class="chip-btn" data-fill="可以同时进行">同时做</button>
+        <button class="chip-btn fallback-btn" data-fill="不确定，我再想想怎么说">不确定，再想想</button>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">两个是同时查的，设备工程师和工艺工程师一起看。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">两边查完、准备恢复生产之前，是直接继续，还是需要谁确认一下？</div></div>
+      <div class="tag split"><i></i>半开放 · 第一步只问"要不要确认"</div>
+      <div class="why">"是否需要确认"是结构判断，可以给气泡；但"谁来确认"是回忆内容，要留到下一轮单独开放问，不能在同一个气泡里预设候选人。</div>
+      <div class="chips">
+        <button class="chip-btn" data-fill="直接继续，不需要额外确认">直接继续</button>
+        <button class="chip-btn" data-fill="需要有人确认才能恢复">需要确认</button>
+        <button class="chip-btn fallback-btn" data-fill="不确定，我再想想怎么说">不确定，再想想</button>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">需要确认才能恢复。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">好的。具体是谁有权批准恢复生产？</div></div>
+      <div class="tag none"><i></i>无气泡 · 追问具体角色（回忆类）</div>
+      <div class="why">即使系统能猜到几个常见角色（质量主管/班组长），这里专家还没说过这些名字，属于"生成候选"，本节原则明确不允许——只有专家自己先说过、系统需要消歧时才能用候选气泡（见 PRD 3.4/18.2）。</div>
+    </div>
+
+    <div class="turn">
+      <div class="row user"><div class="bubble">质量主管批准。</div></div>
+    </div>
+
+    <div class="turn">
+      <div class="row bot"><div class="bot-avatar">AI</div><div class="bubble">连续超差通知质量工程师这一步，是公司标准规定，还是当时现场的经验判断？</div></div>
+      <div class="tag fallback"><i></i>兜底气泡 · 不给"标准/经验"主选项</div>
+      <div class="why">强行给"标准"和"经验"两个气泡会掩盖"部分是标准、部分是经验"这种真实的复杂情况，所以只给一个兜底选项，主答案必须专家自己用文字说清楚。</div>
+      <div class="chips">
+        <button class="chip-btn fallback-btn" data-fill="两种情况都有，我详细说说">两者都有，我详细说说</button>
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="composer">
+    <div class="compose-box">
+      <button class="mic-btn">🎤</button>
+      <textarea id="inputBox" placeholder="点上面的气泡试试，文字会填进来，你可以改完再发送……" rows="1"></textarea>
+      <button class="send-btn">↑</button>
+    </div>
+    <div class="compose-hint">气泡只是草稿，不会自动发送——点击后请确认或修改文字，再手动发送（第 18.4 节）。</div>
+  </footer>
+</main>
+
+<script>
+  const box = document.getElementById('inputBox');
+  document.querySelectorAll('.chip-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      box.value = btn.dataset.fill;
+      box.classList.add('filled');
+      box.focus();
+      box.scrollIntoView({behavior:'smooth', block:'nearest'});
+    });
+  });
+</script>
+</body>
+</html>
