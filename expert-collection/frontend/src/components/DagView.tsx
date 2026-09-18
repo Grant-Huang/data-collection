@@ -1,7 +1,7 @@
 // DAG rendering: React Flow for interaction, elkjs for auto-layout, styled to match
 // docs/expert-workflow-collection/design/dag-view-redesign.html's palette (PRD section 11.3)
 // so the working app visually matches the approved prototype rather than diverging from it.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -9,6 +9,7 @@ import ReactFlow, {
   Position,
   type Edge as RFEdge,
   type Node as RFNode,
+  type ReactFlowInstance,
   MarkerType,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -50,26 +51,28 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
         position: "relative",
       }}
     >
-      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       {data.label}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
           ↺
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
 }
 
 const nodeTypes = { workflow: WorkflowNode };
 
-async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[] }> {
+async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
   const elkGraph = {
     id: "root",
     layoutOptions: {
       "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
+      // Top-to-bottom reads more naturally for a step-by-step manufacturing workflow and
+      // matches how the expert narrates it (this step, then that step...).
+      "elk.direction": "DOWN",
       "elk.spacing.nodeNode": "50",
       "elk.layered.spacing.nodeNodeBetweenLayers": "90",
     },
@@ -110,12 +113,27 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[] 
     labelStyle: { fontSize: 11, fill: "#667085" },
   }));
 
-  return { nodes: rfNodes, edges: rfEdges };
+  return { nodes: rfNodes, edges: rfEdges, width: result.width ?? 800, height: result.height ?? 600 };
 }
 
-export function DagView({ graph }: { graph: Graph }) {
+interface DagViewProps {
+  graph: Graph;
+  onNodeTap?: (node: GraphNode) => void;
+  readOnly?: boolean;
+  emptyLabel?: string;
+  // When true, the canvas is sized to exactly fit the laid-out graph (no internal fitView
+  // zoom) and its own pan/zoom gestures are disabled, so the *page* scrolls to reveal the
+  // rest of a tall graph instead of the graph panning inside a fixed viewport. Used by the
+  // mobile DAG page, which reads top-to-bottom and scrolls like the rest of the page.
+  scrollable?: boolean;
+}
+
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const flowInstance = useRef<ReactFlowInstance | null>(null);
   const nodeCount = graph.nodes.length;
   const edgeCount = graph.edges.length;
 
@@ -129,6 +147,7 @@ export function DagView({ graph }: { graph: Graph }) {
       if (!cancelled) {
         setNodes(res.nodes);
         setEdges(res.edges);
+        setSize({ width: res.width, height: res.height });
       }
     });
     return () => {
@@ -137,18 +156,72 @@ export function DagView({ graph }: { graph: Graph }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey]);
 
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    if (!scrollable || !containerRef.current) return;
+    const el = containerRef.current;
+    const observer = new ResizeObserver((entries) => setContainerWidth(entries[0].contentRect.width));
+    observer.observe(el);
+    setContainerWidth(el.clientWidth);
+    return () => observer.disconnect();
+  }, [scrollable]);
+
+  // Scrollable (mobile) mode: scale the graph down so its full width always fits the
+  // container -- no horizontal scrolling, only vertical (PRD-requested top-down + scroll).
+  const fitZoom = scrollable && containerWidth > 0 && size.width > 0 ? Math.min(1, (containerWidth - 32) / size.width) : 1;
+
+  useEffect(() => {
+    if (!scrollable || !flowInstance.current || size.width === 0) return;
+    const scaledWidth = size.width * fitZoom;
+    const x = Math.max(16, (containerWidth - scaledWidth) / 2);
+    flowInstance.current.setViewport({ x, y: 20, zoom: fitZoom });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollable, fitZoom, containerWidth, size.width, layoutKey]);
+
   if (nodeCount === 0) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#667085", fontSize: 13 }}>
-        流程图会随着对话逐步生成，先在左侧回答第一个问题吧。
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
+        {emptyLabel ?? "流程图会随着对话逐步生成，先在左侧回答第一个问题吧。"}
       </div>
     );
   }
 
-  return (
-    <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}>
+  const flow = (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      fitView={!scrollable}
+      defaultViewport={scrollable ? { x: 20, y: 20, zoom: 1 } : undefined}
+      onInit={(instance) => {
+        flowInstance.current = instance;
+      }}
+      proOptions={{ hideAttribution: true }}
+      nodesDraggable={!readOnly && !scrollable}
+      nodesConnectable={false}
+      elementsSelectable={!readOnly}
+      panOnDrag={!scrollable}
+      zoomOnScroll={!scrollable}
+      zoomOnPinch={!scrollable}
+      zoomOnDoubleClick={!scrollable}
+      minZoom={0.3}
+      maxZoom={3}
+      onNodeClick={(_, node) => {
+        const original = graph.nodes.find((n) => n.node_id === node.id);
+        if (original) onNodeTap?.(original);
+      }}
+    >
       <Background color="#e5e7eb" gap={20} />
-      <Controls showInteractive={false} />
+      {!readOnly && !scrollable && <Controls showInteractive={false} />}
     </ReactFlow>
   );
+
+  if (scrollable) {
+    return (
+      <div ref={containerRef} style={{ width: "100%", height: size.height * fitZoom + 40, minHeight: 200 }}>
+        {flow}
+      </div>
+    );
+  }
+  return flow;
 }

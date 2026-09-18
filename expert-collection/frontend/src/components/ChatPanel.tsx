@@ -3,6 +3,7 @@
 // committing, and open recall questions (chips === null) render as plain text with no chips.
 import { useState } from "react";
 import type { ConversationTurn, NextQuestion } from "../api/types";
+import { MessageList } from "./MessageList";
 
 interface Props {
   turns: ConversationTurn[];
@@ -28,26 +29,7 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 12 }}>
-        {turns.map((t) => (
-          <div
-            key={t.turn_id}
-            style={{
-              alignSelf: t.role === "expert" ? "flex-end" : "flex-start",
-              maxWidth: "82%",
-              background: t.role === "expert" ? "#2a78d6" : "#f1f3f5",
-              color: t.role === "expert" ? "#fff" : "#1f2937",
-              borderRadius: 12,
-              padding: "8px 12px",
-              fontSize: 13.5,
-              lineHeight: 1.5,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {t.text}
-          </div>
-        ))}
-      </div>
+      <MessageList turns={turns} />
 
       {nextQuestion?.chips && !confirmed && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "0 16px 8px" }}>

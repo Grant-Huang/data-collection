@@ -63,6 +63,7 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "turns": [{"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": reply}],
         "unresolved": [next_question] if next_question else [],
         "completion": {"score": 0.0, "ready_for_confirmation": False},
+        "validation": graph_validator.validate(graph),
         "created_at": now,
         "updated_at": now,
         "_guide_state": state,
@@ -120,6 +121,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     ready = new_state["stage"] == "review" and graph_validator.is_valid(record["graph"])
     record["completion"] = {"score": score, "ready_for_confirmation": ready}
     record["unresolved"] = [next_question] if next_question else []
+    record["validation"] = issues
     if ready and record["status"] != "expert_confirmed":
         record["status"] = "needs_confirmation"
     record["updated_at"] = _now()
@@ -152,6 +154,7 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
         node["expert_confirmed"] = True
     for edge in record["graph"]["edges"]:
         edge["expert_confirmed"] = True
+    record["validation"] = issues
     record["updated_at"] = _now()
     db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record))
