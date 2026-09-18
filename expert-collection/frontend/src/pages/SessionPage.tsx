@@ -1,27 +1,41 @@
 // Desktop three-column layout (PRD 4/5: session history | conversation | DAG) for the
-// expert conversational collection loop.
+// expert conversational collection loop. The left (history) and right (DAG) panels are
+// resizable and collapsible; the middle conversation column always fills what's left.
 import { useWorkflowSession } from "../hooks/useWorkflowSession";
+import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { DagView } from "../components/DagView";
 import { HistoryDrawer } from "../components/HistoryDrawer";
+import { ResizeHandle } from "../components/ResizeHandle";
 
 export function SessionPage() {
   const { workflows, active, sending, creating, error, selectWorkflow, createWorkflow, sendTurn, confirmWorkflow } =
     useWorkflowSession();
 
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "240px 420px 1fr", height: "100vh", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
-      <div style={{ borderRight: "1px solid #e5e7eb" }}>
-        <HistoryDrawer
-          workflows={workflows}
-          activeId={active?.id ?? null}
-          onSelect={selectWorkflow}
-          onCreate={createWorkflow}
-          creating={creating}
-        />
-      </div>
+  const left = useResizablePanel("history", 260, 180, 420);
+  const right = useResizablePanel("dag", 460, 280, 800);
 
-      <div style={{ borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column" }}>
+  return (
+    <div style={{ display: "flex", height: "100vh", position: "relative", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
+      <div style={{ width: left.collapsed ? 0 : left.width, overflow: "hidden", flexShrink: 0, transition: left.collapsed ? "width 0.15s ease-out" : undefined }}>
+        <div style={{ width: left.width, height: "100%" }}>
+          <HistoryDrawer
+            workflows={workflows}
+            activeId={active?.id ?? null}
+            onSelect={selectWorkflow}
+            onCreate={createWorkflow}
+            creating={creating}
+          />
+        </div>
+      </div>
+      <ResizeHandle
+        panelSide="left"
+        collapsed={left.collapsed}
+        onToggleCollapse={left.toggleCollapsed}
+        onResize={(dx) => left.resizeBy(dx, 1)}
+      />
+
+      <div style={{ flex: 1, minWidth: 0, borderLeft: "1px solid #e5e7eb", borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column" }}>
         {active ? (
           <>
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb" }}>
@@ -57,14 +71,23 @@ export function SessionPage() {
         )}
       </div>
 
-      <div style={{ position: "relative" }}>
-        {active && <DagView graph={active.graph} />}
-        {error && (
-          <div style={{ position: "absolute", bottom: 16, left: 16, right: 16, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
-            {error}
-          </div>
-        )}
+      <ResizeHandle
+        panelSide="right"
+        collapsed={right.collapsed}
+        onToggleCollapse={right.toggleCollapsed}
+        onResize={(dx) => right.resizeBy(dx, -1)}
+      />
+      <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined }}>
+        <div style={{ width: right.width, height: "100%" }}>
+          {active && <DagView graph={active.graph} />}
+        </div>
       </div>
+
+      {error && (
+        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12, zIndex: 10 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }
