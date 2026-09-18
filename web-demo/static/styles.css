@@ -1,0 +1,429 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --border: #e5e5e5;
+  --text: #1f1f1f;
+  --muted: #6e6e80;
+  --user-bubble: #10a37f;
+  --user-bubble-text: #ffffff;
+  --assistant-bubble: #f1f1f3;
+  --assistant-bubble-text: #1f1f1f;
+  --accent: #10a37f;
+  --danger: #e5484d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--bg);
+}
+
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.modeSwitcherHost {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.modeSwitcher {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.modeSwitcherBtn {
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.modeSwitcherBtn.active {
+  background: var(--accent);
+  color: #fff;
+  cursor: default;
+}
+
+.modeSwitcherBtn:not(.active):hover {
+  color: var(--text);
+}
+
+.compare-link {
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.voiceSelect {
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  max-width: 160px;
+}
+
+.tuningToggle {
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.tuningPanel[hidden] {
+  display: none;
+}
+
+.tuningPanel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.tuningPanel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tuningLabelRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tipBtn {
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tuningPanel input {
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  width: 90px;
+}
+
+.tuningActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tuningActions button {
+  font-size: 12px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.tuningHint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 16px 100px;
+}
+
+.empty {
+  max-width: 640px;
+  margin: 140px auto 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.suggestionChip {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.suggestionChip:active {
+  transform: scale(0.97);
+}
+
+.bubble-row {
+  max-width: 720px;
+  margin: 0 auto 14px;
+  display: flex;
+}
+
+.bubble-row.user { justify-content: flex-end; }
+.bubble-row.assistant { justify-content: flex-start; }
+
+.bubble {
+  max-width: 75%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble.user {
+  background: var(--user-bubble);
+  color: var(--user-bubble-text);
+  border-bottom-right-radius: 4px;
+}
+
+.bubble.assistant {
+  background: var(--assistant-bubble);
+  color: var(--assistant-bubble-text);
+  border-bottom-left-radius: 4px;
+}
+
+.controls {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 18px 24px;
+  background: linear-gradient(to top, var(--bg) 65%, transparent);
+}
+
+/* Text input pill + voice button side by side in one row, not stacked — matches the
+   reference ChatGPT/Grok layout instead of a separate full-width mic button below. */
+.composerRow {
+  width: 100%;
+  max-width: 620px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.textRow {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 6px 6px 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.textInput {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  background: transparent;
+  color: var(--text);
+}
+
+.sendBtn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sendBtn:active {
+  transform: scale(0.95);
+}
+
+.dictateBtn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dictateBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dictationRow {
+  width: 100%;
+  max-width: 620px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 8px 6px 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.dictationStatus {
+  flex: 1;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.dictationCancelBtn,
+.dictationStopBtn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dictationSendBtn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Single start/stop toggle button — one control, two visual states. Sized to match
+   the composer pill's height and sit right beside it, not a separate full-width row. */
+.micBtn {
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.micBtn:active {
+  transform: scale(0.96);
+}
+
+.micBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.micBtn.active {
+  background: var(--danger);
+}
+
+.micBtn.speaking {
+  animation: speakingPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes speakingPulse {
+  0%, 100% { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); }
+  50% { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 0 0 8px rgba(229, 72, 77, 0.15); }
+}
+
+/* Voice-session "tech orb" (docs/app-design.md 8.3) -- replaces the transcript view
+   while the voice session is active. transform/box-shadow are driven entirely from JS
+   (see updateVoiceOrb() in app.js) so the audio-reactive scale and the idle "breathing"
+   baseline don't fight over the same CSS properties via a separate @keyframes rule. */
+.voiceOrbContainer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.voiceOrb {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 32%, #d6f0ff, #6ab8ff 55%, #2f7fe0 100%);
+  will-change: transform, box-shadow;
+}
