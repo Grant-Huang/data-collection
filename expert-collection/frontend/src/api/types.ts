@@ -94,6 +94,7 @@ export interface WorkflowRecord {
   turns: ConversationTurn[];
   unresolved: NextQuestion[];
   completion: Completion;
+  validation: ValidationIssue[];
   created_at: string;
   updated_at: string;
 }

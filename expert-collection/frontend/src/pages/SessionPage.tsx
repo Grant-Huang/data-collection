@@ -1,91 +1,13 @@
 // Desktop three-column layout (PRD 4/5: session history | conversation | DAG) for the
-// expert conversational collection loop -- Phase 1 scope only.
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../api/client";
-import type { WorkflowRecord, WorkflowSummary } from "../api/types";
+// expert conversational collection loop.
+import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { ChatPanel } from "../components/ChatPanel";
 import { DagView } from "../components/DagView";
 import { HistoryDrawer } from "../components/HistoryDrawer";
 
 export function SessionPage() {
-  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
-  const [active, setActive] = useState<WorkflowRecord | null>(null);
-  const [sending, setSending] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshList = useCallback(async () => {
-    const list = await api.listWorkflows();
-    setWorkflows(list);
-    return list;
-  }, []);
-
-  const selectWorkflow = useCallback(async (id: string) => {
-    setError(null);
-    const record = await api.getWorkflow(id);
-    setActive(record);
-  }, []);
-
-  useEffect(() => {
-    refreshList()
-      .then((list) => {
-        if (list.length > 0) return selectWorkflow(list[0].id);
-      })
-      .catch((e) => setError(String(e)));
-  }, [refreshList, selectWorkflow]);
-
-  async function handleCreate() {
-    setCreating(true);
-    setError(null);
-    try {
-      const record = await api.createWorkflow();
-      setActive(record);
-      await refreshList();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleSend(text: string) {
-    if (!active) return;
-    setSending(true);
-    setError(null);
-    // Optimistic local append so the expert's own message shows immediately.
-    setActive({
-      ...active,
-      turns: [...active.turns, { turn_id: `local-${Date.now()}`, role: "expert", text }],
-    });
-    try {
-      const resp = await api.postTurn(active.id, text);
-      const refreshed = await api.getWorkflow(active.id);
-      setActive(refreshed);
-      void resp;
-      await refreshList();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function handleConfirm() {
-    if (!active) return;
-    setError(null);
-    try {
-      const record = await api.confirmWorkflow(active.id);
-      setActive(record);
-      await refreshList();
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  const errorIssues = active
-    ? [] // live validation issues are shown inline via the last turn response; kept minimal for Phase 1
-    : [];
-  void errorIssues;
+  const { workflows, active, sending, creating, error, selectWorkflow, createWorkflow, sendTurn, confirmWorkflow } =
+    useWorkflowSession();
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "240px 420px 1fr", height: "100vh", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
@@ -94,7 +16,7 @@ export function SessionPage() {
           workflows={workflows}
           activeId={active?.id ?? null}
           onSelect={selectWorkflow}
-          onCreate={handleCreate}
+          onCreate={createWorkflow}
           creating={creating}
         />
       </div>
@@ -114,7 +36,7 @@ export function SessionPage() {
               <ChatPanel
                 turns={active.turns}
                 nextQuestion={active.unresolved[0] ?? null}
-                onSend={handleSend}
+                onSend={sendTurn}
                 sending={sending}
                 confirmed={active.status === "expert_confirmed"}
               />
@@ -122,7 +44,7 @@ export function SessionPage() {
             {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && (
               <div style={{ padding: 16, borderTop: "1px solid #e5e7eb" }}>
                 <button
-                  onClick={handleConfirm}
+                  onClick={confirmWorkflow}
                   style={{ width: "100%", border: "none", borderRadius: 8, padding: "10px 0", background: "#0ca30c", color: "#fff", fontWeight: 600, cursor: "pointer" }}
                 >
                   确认并提交

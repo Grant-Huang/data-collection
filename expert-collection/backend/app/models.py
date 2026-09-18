@@ -108,6 +108,7 @@ class WorkflowRecord(BaseModel):
     turns: list[ConversationTurn]
     unresolved: list[NextQuestion]
     completion: Completion
+    validation: list[ValidationIssue] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
