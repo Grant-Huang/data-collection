@@ -1,0 +1,696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/workflow-graph-v2.schema.json",
+  "title": "Graph-based Workflow Dataset Schema v2",
+  "type": "object",
+  "required": [
+    "dataset_meta",
+    "records"
+  ],
+  "properties": {
+    "dataset_meta": {
+      "type": "object",
+      "required": [
+        "dataset_id",
+        "name",
+        "source_type",
+        "schema_version",
+        "created_at"
+      ],
+      "properties": {
+        "dataset_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "public_extracted",
+            "expert_collected"
+          ]
+        },
+        "schema_version": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "dataset_version": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "license_or_consent": {
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        },
+        "recommended_usage": {
+          "type": "string",
+          "enum": [
+            "main_experiment",
+            "auxiliary_experiment",
+            "needs_review",
+            "excluded"
+          ]
+        }
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workflow_record"
+      }
+    }
+  },
+  "$defs": {
+    "workflow_record": {
+      "type": "object",
+      "required": [
+        "record_id",
+        "manufacturing_context",
+        "scenario",
+        "graph",
+        "provenance"
+      ],
+      "properties": {
+        "record_id": {
+          "type": "string"
+        },
+        "record_version": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "expert_confirmed",
+            "reviewed",
+            "gold",
+            "rejected"
+          ]
+        },
+        "manufacturing_context": {
+          "type": "object",
+          "properties": {
+            "manufacturing_mode": {
+              "type": "string",
+              "enum": [
+                "mass_repetitive",
+                "high_automation",
+                "high_mix_low_volume",
+                "eto_mto",
+                "large_project",
+                "regulated_traceable",
+                "other"
+              ]
+            },
+            "industry": {
+              "type": "string"
+            },
+            "site_type": {
+              "type": "string"
+            },
+            "process_area": {
+              "type": "string"
+            },
+            "product_family": {
+              "type": "string"
+            },
+            "shift_context": {
+              "type": "string"
+            }
+          }
+        },
+        "scenario": {
+          "type": "object",
+          "properties": {
+            "workflow_type": {
+              "type": "string",
+              "enum": [
+                "exception_response",
+                "standard_operation",
+                "continuous_improvement",
+                "change_introduction"
+              ]
+            },
+            "scenario_category": {
+              "type": "string"
+            },
+            "scenario_name": {
+              "type": "string"
+            },
+            "trigger": {
+              "type": "string"
+            },
+            "business_goal": {
+              "type": "string"
+            }
+          }
+        },
+        "graph": {
+          "type": "object",
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "properties": {
+            "graph_type": {
+              "type": "string",
+              "enum": [
+                "linear",
+                "dag",
+                "directed_graph"
+              ]
+            },
+            "start_node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "end_node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/node"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/edge"
+              }
+            },
+            "subgraphs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/subgraph"
+              }
+            }
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entity"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        },
+        "experience_judgements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/judgement"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "required": [
+            "source_type"
+          ],
+          "properties": {
+            "source_type": {
+              "type": "string",
+              "enum": [
+                "public_extracted",
+                "expert_collected"
+              ]
+            },
+            "source_reference": {
+              "type": "string"
+            },
+            "source_date": {
+              "type": "string"
+            },
+            "collector_or_extractor": {
+              "type": "string"
+            },
+            "expert_role": {
+              "type": "string"
+            },
+            "expert_years_experience": {
+              "type": "number"
+            },
+            "expert_id_hash": {
+              "type": "string"
+            },
+            "consent_status": {
+              "type": "string"
+            },
+            "conversation_id": {
+              "type": "string"
+            },
+            "source_turn_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "annotation": {
+          "type": "object",
+          "properties": {
+            "has_gold_nodes": {
+              "type": "boolean"
+            },
+            "has_gold_edges": {
+              "type": "boolean"
+            },
+            "has_gold_roles": {
+              "type": "boolean"
+            },
+            "has_gold_boundaries": {
+              "type": "boolean"
+            },
+            "annotator_count": {
+              "type": "integer"
+            },
+            "adjudicated": {
+              "type": "boolean"
+            },
+            "agreement_metrics": {
+              "type": "object"
+            },
+            "annotation_notes": {
+              "type": "string"
+            }
+          }
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "coverage_score": {
+              "type": "number"
+            },
+            "completeness_score": {
+              "type": "number"
+            },
+            "extractability_score": {
+              "type": "number"
+            },
+            "authenticity_score": {
+              "type": "number"
+            },
+            "annotation_readiness_score": {
+              "type": "number"
+            },
+            "diversity_score": {
+              "type": "number"
+            },
+            "leakage_risk_score": {
+              "type": "number"
+            },
+            "overall_readiness_score": {
+              "type": "number"
+            },
+            "quality_flags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "node_id",
+        "node_type",
+        "label"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string"
+        },
+        "node_type": {
+          "type": "string",
+          "enum": [
+            "start",
+            "activity",
+            "decision",
+            "parallel_split",
+            "parallel_join",
+            "merge",
+            "event",
+            "wait",
+            "approval",
+            "handoff",
+            "subprocess",
+            "end"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "actor_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "actor_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "system_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "equipment_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input_artifact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output_artifact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decision_question": {
+          "type": "string"
+        },
+        "decision_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "judgement_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_duration": {
+          "type": "string"
+        },
+        "is_optional": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        },
+        "source_turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "edge_id",
+        "from",
+        "to",
+        "edge_type"
+      ],
+      "properties": {
+        "edge_id": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "edge_type": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "conditional",
+            "parallel",
+            "merge",
+            "loop_back",
+            "exception",
+            "timeout",
+            "handoff"
+          ]
+        },
+        "condition": {
+          "type": "string"
+        },
+        "condition_expression": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        },
+        "source_turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "subgraph": {
+      "type": "object",
+      "properties": {
+        "subgraph_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "entity_id",
+        "entity_type"
+      ],
+      "properties": {
+        "raw_name": {
+          "type": "string"
+        },
+        "entity_id": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "person",
+            "role",
+            "equipment",
+            "line_station",
+            "system",
+            "product",
+            "material",
+            "document",
+            "organization",
+            "other"
+          ]
+        },
+        "business_role": {
+          "type": "string"
+        },
+        "normalized_name": {
+          "type": "string"
+        },
+        "attributes": {
+          "type": "object"
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "rule_text"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "rule_text": {
+          "type": "string"
+        },
+        "rule_source": {
+          "type": "string",
+          "enum": [
+            "sop",
+            "standard",
+            "system_rule",
+            "management_rule",
+            "regulation",
+            "other"
+          ]
+        },
+        "trigger_condition": {
+          "type": "string"
+        },
+        "applicable_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_reference": {
+          "type": "string"
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "judgement": {
+      "type": "object",
+      "required": [
+        "judgement_id",
+        "judgement_text"
+      ],
+      "properties": {
+        "judgement_id": {
+          "type": "string"
+        },
+        "judgement_text": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "applicable_condition": {
+          "type": "string"
+        },
+        "actor_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "applicable_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_type"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "document",
+            "record",
+            "inspection_result",
+            "work_order",
+            "drawing",
+            "parameter_set",
+            "report",
+            "message",
+            "other"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "system_of_record": {
+          "type": "string"
+        },
+        "uri_or_reference": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
