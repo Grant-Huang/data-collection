@@ -1,22 +1,23 @@
 # 制造专家会话式 DAG 工作流采集 —— 产品需求设计文档（PRD）
 
-版本：v0.1（草案，待评审）
+版本：v0.2（草案，待评审）
 状态：draft
-覆盖范围：桌面端现状梳理 + 移动端浏览器新增需求
-撰写依据：本目录下 `design/`、`schema/`、`legacy-prototype/` 中的全部原始设计资料（见文末《资料来源》）
+覆盖范围：专家数据采集（桌面 + 移动） + 数据集管理 + Dashboard + 实验中心 —— 本产品的完整实验设计与数据采集设计
+撰写依据：本目录下 `design/`、`schema/`、`legacy-prototype/` 中的全部原始设计资料（见文末《资料来源》），第 11 节起为本轮新增设计，仅以原始 HTML 原型为参考、不受其视觉方案约束
 
 ---
 
 ## 0. 文档定位与阅读方式
 
-这份 PRD 不是从零设计，而是把你已经沉淀的多份设计资料（桌面三栏会话式采集设计 v2.1、更早的 Graph-based Workflow Schema v2 说明书、数据集/Dashboard/实验中心规范、Schema JSON 与样例数据、以及更早的 Streamlit 原型 `cwd_microflow_expert_wizard`）收敛成一份可评审、可拆卡片的产品需求文档，并在此基础上补齐这次明确提出的**移动端浏览器需求**。
+这份 PRD 不是从零设计，而是把你已经沉淀的多份设计资料（桌面三栏会话式采集设计 v2.1、更早的 Graph-based Workflow Schema v2 说明书、数据集/Dashboard/实验中心规范、Schema JSON 与样例数据、以及更早的 Streamlit 原型 `cwd_microflow_expert_wizard`）收敛成一份可评审、可拆卡片的产品需求文档。v0.1 覆盖了专家采集层（桌面 + 移动端浏览器）；v0.2（本版本）按你的要求把**数据集导入导出、Dashboard、实验中心**正式收编进本 PRD 的 in-scope 范围，并重新设计了 DAG 可视化方案——原有 `design/*.html` 原型此后只作为参考，不再是视觉规范本身。
 
 阅读顺序建议：
-1. 第 1 节了解目标与范围边界
+1. 第 1 节了解目标与范围边界（v0.2 已更新 scope）
 2. 第 2 节看清「已经确定」与「本次待你确认后落地」的移动端方案
-3. 第 3～6 节是完整的功能需求（桌面 + 移动）
+3. 第 3～6 节是专家采集层的完整功能需求（桌面 + 移动）
 4. 第 7 节是三份原始资料之间存在的**设计冲突**，需要你选择口径
-5. 第 8 节起是技术方案要点、验收标准、里程碑
+5. 第 8～10 节是专家采集层的验收标准、里程碑、资料来源
+6. **第 11～15 节是本轮新增内容**：DAG 可视化重新设计、数据集导入导出、Dashboard 完整设计、实验中心与结果文字解释、以及你要求的 **LLM 使用清单**（第 15 节，直接回答"哪些环节需要 LLM"）
 
 ---
 
@@ -34,8 +35,13 @@ MES/车间管理、质量、设备、工艺、计划、IE、精益生产等制�
 
 ### 1.3 本次 PRD 的范围
 
-- **In scope**：专家会话式采集的桌面端产品需求盘点（已有设计的结构化整理） + 移动浏览器端新增体验设计（会话主页、语音输入、DAG 只读查看）。
-- **Out of scope（沿用现状，不在本次重新设计）**：数据集管理、Dashboard、实验中心——这三块已有独立的设计文档（`design/dataset_design_spec.md`、`design/manufacturing_workflow_platform_design_v2.md` 第16~31节），本次不改动，仅在第7节指出它们与采集层共享同一套 Schema 时需要注意的口径问题。
+- **In scope**：
+  - 专家会话式采集的桌面端产品需求盘点（已有设计的结构化整理） + 移动浏览器端新增体验设计（会话主页、语音输入、DAG 只读查看）——第 1～10 节
+  - **DAG 可视化重新设计**（第 11 节）：原有 `design/*.html` 原型只作参考，本 PRD 重新给出美观直观、面向非专业人士的视觉与交互规范，桌面右栏与移动 DAG 页统一采用
+  - **数据集导入导出**（第 12 节）：正式收编进本 PRD，在 `design/dataset_design_spec.md`、`design/manufacturing_workflow_platform_design_v2.md` 第16~21节基础上补全为可开发的功能设计
+  - **Dashboard 完整设计**（第 13 节）：含数据集质量评价（八维评估 + Graph 专用质量指标）
+  - **实验中心设计**（第 14 节）：新增"实验结果详细文字解释"能力（原有设计只有量化指标表格，没有面向人的解读）
+  - **LLM 使用清单**（第 15 节）：直接回答"本产品哪些环节需要 LLM"这个问题，供你评估
 - **不做**：
   - 移动端 DAG 图的编辑能力（本次评审已确认，见 2.2）
   - **移动端不提供实验中心入口**：手机浏览器端只服务"专家数据采集"这一件事（会话页 + 历史抽屉 + DAG只读页），不做数据集管理、Dashboard、实验中心的移动适配，这三块继续保持桌面专属（详见 4.6）
@@ -360,8 +366,9 @@ v2.1 的 MVP 节点集合比更早版本少了 `event`、`subprocess`（v2.1 第
 | `design/conversational_collection_design.md` | 会话式采集设计 v2.1（DAG-first，本次移动端设计的主要对照基准） |
 | `design/conversational_expert_collection.html` | 对应 v2.1 的桌面高保真原型（三栏，可直接在浏览器打开预览） |
 | `design/manufacturing_workflow_platform_design_v2.md` | 更早版本的完整平台说明书（含数据集/Dashboard/实验中心，Schema 与 v2.1 存在 7.1 节所述差异） |
-| `design/manufacturing_expert_workflow_collection_v2.html` | 对应的平台级原型（专家采集/数据集/Dashboard/实验中心四个页签） |
-| `design/dataset_design_spec.md` | 数据集评估维度、导入导出规范（本次不改动，仅供了解采集数据如何被下游使用） |
+| `design/manufacturing_expert_workflow_collection_v2.html` | 对应的平台级原型（专家采集/数据集/Dashboard/实验中心四个页签，视觉仅供参考，见第11节） |
+| `design/dag-view-redesign.html` | **本轮新增**，对应第 11 节 DAG 可视化重新设计的参考原型 |
+| `design/dataset_design_spec.md` | 数据集评估维度、导入导出规范，第 12～13 节在此基础上补全 |
 | `schema/workflow_graph_schema_v2.json` | Graph-based Workflow Dataset Schema v2 的 JSON Schema 定义 |
 | `schema/workflow_graph_v2_sample.json` | 对应 Schema 的真实样例记录（含 `loop_back` 边，见 7.1 节冲突说明） |
 | `legacy-prototype/cwd_microflow_expert_wizard/` | 更早的 Streamlit 研究原型（Collaborative Workflow Distillation 实验平台），采集逻辑已被会话式设计取代，保留作为研究方法论参考 |
@@ -370,4 +377,242 @@ v2.1 的 MVP 节点集合比更早版本少了 `event`、`subprocess`（v2.1 第
 
 ---
 
-*本文档为草案，第 7 节的两处设计冲突建议在开发排期前完成裁定；其余内容可直接作为开发评审的输入。*
+## 11. DAG 可视化重新设计（桌面 + 移动通用视觉语言）
+
+### 11.1 定位：原型仅供参考，本节是新的视觉规范
+
+`design/conversational_expert_collection.html`、`design/manufacturing_expert_workflow_collection_v2.html` 里的 DAG 展示（简单的绝对定位节点 + 直线连线，`.dag` 容器手写坐标）只是**验证信息结构够不够用**的草图，不是视觉终稿——手写坐标无法应对真实专家流程的节点数量和分支复杂度，颜色和间距也偏工程感。本产品的核心用户是**制造一线专家，不是算法/产品同事**，DAG 图是他们唯一要"读懂并纠错"的界面，美观直观的优先级不低于功能正确性。本节给出替代方案，第 12～14 节的其他页面如涉及图表，也遵循这里定的视觉基调（克制、留白、语义化颜色），不单独另定一套。
+
+### 11.2 设计原则
+
+1. **一眼看懂结构，不需要图例也能猜个大概**：起点/终点用胶囊形状+柔和灰底一眼区分于"事情"；判断用菱形或圆角矩形+暖黄区分；并行/汇合用有方向性的图形提示（左右对称的分叉/汇入形状），不是靠专家去记颜色对照表
+2. **颜色只做语义分类，不做装饰**：一种结构类型固定一种色相（活动=中性灰/蓝、判断=琥珀、并行=紫、汇合=靛蓝、审批=绿、起止=更浅的灰），同一色相的浅底+深描边用于默认态，选中态整体加深，不引入额外的强调色系统
+3. **自动布局，专家不用摆位置**：分层有向图（ELK.js `layered` 算法），主干在一条水平/垂直基线上，分支和并行结构在基线两侧展开，避免连线交叉——这是"美观"里权重最高的一条，连线交叉是专家看不懂图的头号原因
+4. **渐进呈现，先见森林后见树木**：默认缩放级别只显示节点形状+极短标签（4~6字），聚焦/放大后才显示完整描述、角色、规则引用——避免小屏幕或整体缩略图时文字糊成一团（呼应第 4.4.1 节移动端要求，桌面端同样适用）
+5. **不做 BPMN 重型图标**：不用泳道（swimlane）、不用信号/消息/定时器等 BPMN 专业符号，这些术语专家不认识；角色信息用节点内一行小字（"质量工程师"）而不是泳道分栏
+
+### 11.3 视觉规范（供前端直接取用的具体数值）
+
+| 节点类型 | 形状 | 填充色 | 描边色 | 图标 |
+|---|---|---|---|---|
+| `start` / `end` | 圆角胶囊 | `#F8FAFC`（近白） | `#94A3B8` | 空心圆点 |
+| `activity` | 圆角矩形（8px） | `#FFFFFF` | `#CBD5E1` | 无（默认态） |
+| `decision` | 菱形圆角 | `#FFFBEB` | `#F59E0B` | 问号 |
+| `parallel_split` / `parallel_join` | 六边形 | `#F5F3FF` | `#8B5CF6` | 分叉/汇入箭头 |
+| `merge` | 圆角矩形+左侧竖条 | `#EFF6FF` | `#3B82F6` | 汇入箭头 |
+| `approval` | 圆角矩形+右上角徽标 | `#ECFDF5` | `#10B981` | 对勾徽标 |
+| `handoff` | 圆角矩形+虚线右边框 | `#FFFFFF` | `#CBD5E1`（虚线部分 `#F97316`） | 交接图标（两个箭头） |
+
+- 边（Edge）：默认 1.5px 实线 `#94A3B8`，条件边（`conditional`）额外带一个浮动小标签（白底+细描边，显示条件文字，如"复测正常"），不用箭头颜色区分条件——颜色留给节点类型专用
+- 字体：系统默认无衬线字体（`-apple-system, "PingFang SC", "Microsoft YaHei"` 兜底），节点主标签 13–14px 加粗，副标签（角色/系统）11px 常规灰色
+- 间距：同层节点间距 ≥ 32px，层间距 ≥ 64px（分支展开后视觉上不拥挤）
+- 圆角统一 8–10px（六边形/菱形除外），阴影极轻（`0 1px 3px rgba(0,0,0,.06)`），不用重投影制造"卡片悬浮"的厚重感
+
+### 11.4 交互层
+
+- **默认自动布局 + 自动适配画布**：图更新后重新跑一次 ELK 布局，但保留专家手动拖动过的节点位置（`manual_position`，`design/conversational_collection_design.md` 第31节已有此设计，本节沿用），避免图跳动过大打断阅读
+- **Hover/点击高亮路径**：桌面端 hover 一个节点，高亮它的直接上下游边和节点，其余淡化（不删除，只降低不透明度到 40%），帮助专家在复杂图里定位"这一步之前/之后是什么"
+- **图例常驻但极简**：桌面右栏图下方一行小图例（形状+色块+一个词），不用弹窗解释，移动端收进"检查流程"入口里
+- **详情展示**：桌面点节点在右侧/下方展开详情面板；移动端用底部半屏卡片（4.4.1 节已定），两端内容结构一致（自然语言描述、角色、关联规则/经验判断）
+
+### 11.5 参考实现
+
+已按以上规范产出一份可直接在浏览器打开预览的重设计原型：[`design/dag-view-redesign.html`](design/dag-view-redesign.html)（同一张 CNC 尺寸超差处理案例图，对照 `design/conversational_expert_collection.html` 原版可以直接看出视觉差异）。这份文件是**设计目标参考**，不是最终前端实现——真实前端仍按 6.1 节的 React Flow + ELK.js 技术方案构建，样式规范取自本节的 11.3 表格。
+
+---
+
+## 12. 数据集管理：导入导出
+
+本节把 `design/dataset_design_spec.md` 第三节、`design/manufacturing_workflow_platform_design_v2.md` 第16~21节的既有设计正式收编为本产品的功能需求，并补全为可直接排期开发的颗粒度。
+
+### 12.1 页面结构
+
+沿用已有设计的六个 Tab（`design/manufacturing_workflow_platform_design_v2.md` 第16节）：
+
+| Tab | 内容 |
+|---|---|
+| 数据集列表 | `public_extracted` / `expert_collected` 两类分开展示，每个数据集显示名称/类型/版本/样本数/Graph类型分布/Gold比例/Dataset Readiness/更新时间/推荐用途 |
+| 数据浏览 | 逐条记录列表，可筛选 |
+| 导入 | 见 12.2 |
+| 导出 | 见 12.3 |
+| 数据评估 | 跳转/内嵌 Dashboard（第 13 节）对应数据集的详情视图 |
+| 版本记录 | 每个数据集的版本历史（`dataset_version`），谁在什么时候基于什么导入/编辑产生了新版本 |
+
+单个数据集详情沿用"三栏"结构（`design/manufacturing_workflow_platform_design_v2.md` 第18节）：左侧 metadata，中间 Graph（复用第 11 节的可视化规范，只读），右侧 provenance/annotation/quality。
+
+### 12.2 导入设计
+
+#### 12.2.1 流程
+
+```
+上传 JSON → 预检（不直接入库）→ 预检报告 → 用户确认 → 正式导入
+```
+
+预检顺序（合并 `dataset_design_spec.md` 与 `manufacturing_workflow_platform_design_v2.md` 第19节，去重后的完整清单）：
+
+1. JSON Schema 校验（对照 `schema/workflow_graph_schema_v2.json`，见第 7 节口径确认后的版本）
+2. `source_type` 一致性检查（`dataset_meta.source_type` 与每条 `provenance.source_type` 是否一致）
+3. 必填字段完整度检查
+4. 制造模式/行业/流程类型合法值检查（`manufacturing_context`/`scenario` 枚举值）
+5. Graph Validator（第 3.3/3.4 节同一套规则：node/edge 唯一性、start/end 合法性、decision 出口数、parallel_split/join 完整性、孤立节点等）
+6. record_id 重复检查
+7. 近重复流程检查（结构相似度 + 文本相似度，见 12.2.2）
+8. 实体角色完整度检查
+9. Gold 标注可用性检查
+10. 自动生成数据集评估（调用第 13 节的八维 + Graph 质量评分逻辑，产出本次导入批次的预览分数，不写入正式 Dashboard）
+
+#### 12.2.2 近重复检测怎么做（原设计未展开，这次补全）
+
+两层检测，都是规则/统计方法，**不需要 LLM**：
+
+- **文本层**：记录的 `scenario.trigger` + 节点 `label` 拼接后的 TF-IDF/MinHash 相似度，超过阈值（建议 0.85）标记为疑似近重复
+- **结构层**：Graph Edit Distance（复用第 14 节实验指标里已有的图编辑距离算法）低于阈值 + 节点数/边数接近，标记为疑似同模板改写
+
+两层任一命中都标"警告"级别，不阻断导入，交给用户在预检报告里决定是否仍要导入。
+
+#### 12.2.3 预检报告
+
+至少显示（沿用两份原设计文档已列的完整清单）：总记录数、可导入记录数、阻断错误数、警告数、Coverage/Balance/Completeness/Extractability/Authenticity/Annotation Readiness/Diversity/Leakage Risk 八维分数、Graph 结构分布（Linear/DAG/Directed Graph 比例、平均节点数/边数/分支数/并行结构数）、Dataset Readiness Score，以及系统给出的用途建议（可用于主实验 / 适合辅助实验 / 需人工复核 / 不建议使用）。只有用户点"确认导入"后才正式入库。
+
+### 12.3 导出设计
+
+- 范围：整个数据集 / 当前筛选结果 / 指定记录
+- 格式：`raw`（原始版）/ `anonymized`（匿名版，需要设计一版专家个人信息脱敏规则，见 12.4）/ `role_normalized`（角色归一化版，把"质量工程师""QE""质检"统一映射成标准角色名）
+- 可选是否包含 Gold Annotation
+- 可按 `source_type`/行业/制造模式/流程类型/`graph_type`/标注状态/推荐用途筛选
+- **导出文件必须保留** `dataset_meta.source_type` 和每条记录 `provenance.source_type`（两份原设计都强调这条，避免外部系统回传后丢失来源属性——沿用不变）
+
+### 12.4 匿名化规则（原设计未展开，这次补全）
+
+导出 `anonymized` 版本时，至少做：
+
+- `provenance.expert_id_hash` 保留哈希、去掉可反推真实身份的 `expert_role`+`expert_years_experience` 组合中的极端值（例如"唯一一位有35年经验的退休返聘专家"这种描述性极强的字段建议分桶处理，如"30年以上"）
+- 节点/规则/经验判断里如果专家口述时提到了具体姓名（"李工""张主管"），需要在会话阶段或导出阶段做人名脱敏——**这一步需要 LLM 辅助**（识别自然语言文本里的人名指代并替换成角色代称），规则式脱敏（正则匹配姓氏词典）召回率不够，详见第 15 节清单
+- `role_normalized` 版本本身也依赖 LLM/规则混合做角色名归一化，见第 15 节
+
+---
+
+## 13. Dashboard 完整设计
+
+### 13.1 定位与原则
+
+沿用两份原设计文档的核心主张（`design/dataset_design_spec.md` 第二节、`design/manufacturing_workflow_platform_design_v2.md` 第22~26节）：**重点不是"有多少数据"，而是"这批数据是否足以支撑公平、可复现的实验"**。默认区分专家集/公共集，一键切换，不混合统计。
+
+### 13.2 一级指标（顶部卡片）
+
+数据集数、Workflow 数、专家数、公共来源数、Gold 数量、Dataset Readiness、最近新增、待复核——沿用原设计。
+
+### 13.3 数据集质量评价：完整的十维评分体系
+
+这是本节的核心，也是你这次特别点名要完整设计的部分。合并 `dataset_design_spec.md` 的八维通用评估 + `manufacturing_workflow_platform_design_v2.md` 第25节的 Graph 专用质量指标，形成完整的 **Dataset Readiness Score v2**：
+
+| 维度 | 权重 | 具体子指标 |
+|---|---:|---|
+| 覆盖度 Coverage | 15% | 制造模式覆盖率、垂直行业覆盖率、场景类型覆盖率、四类流程类型覆盖率、岗位覆盖率、系统/设备对象覆盖率 |
+| 平衡度 Balance | 10% | 各制造模式/行业/流程类型样本偏斜度、单一专家贡献占比、单一来源/企业占比 |
+| 流程完整度 Completeness | 15% | 平均步骤数、≥5步样本比例、有明确触发/结束条件比例、有角色/系统信息比例、有关键判断节点比例 |
+| Graph 结构完整度 Graph Completeness | 15% | 有明确 start/end 比例、decision 条件完整率、parallel_join 完整率、`retry_semantics` 条件完整率（对应第 7.1 节口径）、孤立节点比例（应为 0） |
+| 可抽取性 Extractability | 10% | 步骤顺序明确率、单步动作清晰率、角色-动作可对应率、判断条件可解析率、模糊词/省略词比例、重复/空步骤比例 |
+| 真实性与来源可信度 Authenticity | 10% | 专家集：岗位已知率、经验年限已知率、真实案例确认率、人工复核比例；公共集：来源可追溯率、一手来源比例、原文引用完整率 |
+| 标注成熟度 Annotation Readiness | 10% | Gold Boundary/Role/Edge/Node 覆盖率、双人标注比例、已仲裁比例、标注一致性（Cohen's Kappa / Boundary F1 Agreement） |
+| 多样性 Diversity | 5% | 专家数量、岗位数量、流程长度分布、协作人数分布、系统组合数量、决策分支复杂度 |
+| 结构多样性 Structural Diversity | 5% | Linear/DAG/Directed Graph 比例、含分支/并行/回路/异常路径比例——避免数据集被采成"全是简单线性流程"（呼应 `design/conversational_collection_design.md` 第29节 Dashboard 设计初衷） |
+| 低泄漏风险 Low Leakage Risk | 5% | 近重复流程比例、同模板改写比例、Train/Test 高相似样本数量、同一专家跨训练/测试泄漏风险 |
+
+**总分只是概览，Dashboard 必须同时展示全部原始子指标**，不能只给一个数字——两份原设计都反复强调这条，本次保留为硬性要求。
+
+### 13.4 详情下钻
+
+- 点击任意维度分数 → 展开该维度的子指标明细图表
+- 点击"定位问题样本" → 直接筛出拖低该维度分数的具体记录（例如"孤立节点比例"分数低，点击后列出所有含孤立节点的记录，可以直接跳转到该记录的 Graph 详情去看是哪个节点）——这是"能定位具体问题样本"这一验收标准（原设计第37节）的具体落地方式
+- 完整度明细表、泄漏与重复检查表（沿用 `manufacturing_expert_workflow_collection_v2.html` 原型里已有的两张表格样式）
+
+### 13.5 可视化设计要点
+
+Dashboard 大量使用条形进度条（分数条）、表格、少量趋势图（新增数据随时间的变化）。遵循第 11.2 节的克制原则：进度条用统一的单一强调色（不为每个维度分配不同颜色，八/十个维度同时出现时过多颜色会干扰"哪个分数低"这个核心问题的识别），只用条长本身传达信息；八维评估建议用横向条形图并排（不用雷达图——雷达图在维度多、量纲一致时确实直观，但对色弱用户和小尺寸屏幕不友好，横向条形图在移动端/打印场景也更稳）。
+
+### 13.6 计算方式：全部是确定性统计，不需要 LLM
+
+需要特别说明：**第 13.3 节的十维评分体系里，绝大多数子指标是可以纯规则/统计计算的**（比例、计数、分布、Kappa 系数等），不需要调用 LLM——这是"用户端可解释、可复现"的重要前提，如果分数本身依赖 LLM 判断，就会引入不可控的波动。少数需要语义判断的子指标（如"模糊词/省略词比例"里判断某个描述是否算"模糊"）建议用规则词典（一批"待确认""可能""大概"之类的高频模糊表达）而不是 LLM 分类，同样出于可复现性考虑。唯一需要 LLM 的例外见第 15 节。
+
+---
+
+## 14. 实验中心设计（含结果详细文字解释）
+
+### 14.1 实验创建
+
+沿用两份原设计文档的字段（`design/dataset_design_spec.md` 第四节、`design/manufacturing_workflow_platform_design_v2.md` 第27节）：
+
+- 数据源：Public / Expert
+- 数据集
+- Split：Train / Validation / Test
+- 输入版本：Raw / Anonymized / Role-normalized
+- Graph 表示：Sequence Projection / Node-Edge Graph / Event Log / Text Serialization
+- Gold Annotation：Nodes / Edges / Boundary / Roles / Conditions
+
+**两类数据必须分开跑**：Public 单独实验、Expert 单独实验；允许 Combined Train，但 Test 仍必须分别报告，禁止只给一个混合总分——这是原设计的硬性规则，本次保留。
+
+### 14.2 实验卡片界面
+
+沿用横向动态实验卡片设计（`manufacturing_workflow_platform_design_v2.md` 第30节）：固定宽度卡片，屏幕默认显示 4–5 个，横向滚动，右侧固定"+ 新增实验"。每张卡至少含 Experiment Name / Dataset / Source Type / Representation / Model / Prompt / Parameters / Seed / Run / Status。
+
+### 14.3 实验指标（沿用原设计，完整列出）
+
+Node（Precision/Recall/F1）、Edge（Precision/Recall/F1）、Branch（Condition Accuracy）、Parallel（Structure Accuracy）、Merge（Accuracy）、Loop/Retry（Detection F1，对应第 7.1 节口径确认后的 `retry_semantics` 或 `loop_back`）、Role（Assignment Accuracy）、Graph-level（Graph Edit Distance / Path Similarity / Reachability Consistency / Structural F1）、Downstream（Process Discovery Quality / Conformance Fitness / Precision / Generalization）。
+
+### 14.4 结果页面：四层结构
+
+沿用原设计的四层（`manufacturing_workflow_platform_design_v2.md` 第31节）：**Summary / Graph / Error Analysis / Dataset Slice**（按行业/制造模式/场景/Workflow Type/Graph Type/Graph Complexity/Public vs Expert 切片）。
+
+### 14.5 新增：实验结果的详细文字解释（本轮新增需求）
+
+原设计的结果页只有指标表格和图表，对不熟悉这些指标定义的人（产品经理、专家本人、甚至算法同事临时切换到不熟悉的实验类型时）不够友好。本次新增一个**"结果解读"卡片**，放在 Summary 层的最上方：
+
+#### 14.5.1 内容结构
+
+一段总览（100–200字，直接说结论："本次实验在主干节点识别上表现良好（Node F1 0.89），但在条件分支的识别上偏弱（Branch Condition Accuracy 0.61），最常见的错误是把多条件分支漏识别成两条件"）+ 分点列表（3–5条，每条对应一个维度的具体解读，格式统一为"**现象** → **可能原因** → **建议**"）。
+
+#### 14.5.2 解读怎么生成：LLM，但受控输入，不是让模型自由发挥
+
+- **输入严格限定为结构化数据**：本次实验的全部指标数值、（如有）对照实验/baseline 的同一批指标、Error Analysis 层已经聚类好的典型错误案例摘要（不是全部原始记录，避免超长上下文和信息过载）——不给模型任何本 PRD 之外的背景假设
+- **Prompt 明确要求**：只基于给定的数字和案例做解读，不允许编造没有数据支撑的结论；每条解读必须落到具体维度和具体数字，禁止"整体表现不错"这类空泛套话；文字风格面向非算法背景的读者，避免堆砌指标术语而不解释
+- **必须提示"这是自动生成的摘要"**：解读卡片下方固定一行小字"以上解读由 AI 根据本次实验指标自动生成，请结合下方明细数据核实"，不能让用户误以为是人工撰写的正式结论
+- **可重新生成、可编辑**：研究人员对生成的解读不满意时可以点"重新生成"，或者直接编辑后保存（编辑后的版本标记为"已人工修订"，不会被下次重新生成覆盖）
+- **生成时机**：实验 Run 完成、所有指标计算完毕后触发一次，不在实验运行过程中生成（不是关键延迟路径，可以等 5-10 秒）；也支持事后对已完成的实验手动触发生成
+
+#### 14.5.3 Error Analysis 层的典型案例聚类（同样建议用 LLM，作为 14.5.2 的输入准备步骤）
+
+原设计的 Error Analysis 层只说"典型失败案例"，没说案例从哪来、怎么归类。建议：数量较多的失败案例先用规则/统计做初步分组（比如按"哪个 Graph 结构类型出错"分组），组内数量仍然很大时，用 LLM 对组内案例做二次归纳，提炼出 2–4 种"典型失败模式"的描述（而不是要求人工翻看几十条案例各自的原始输出），这个归纳结果同时也是 14.5.2 解读卡片的输入之一。
+
+---
+
+## 15. 本产品需要 LLM 的环节清单
+
+直接回答你的问题：以下是本产品（专家采集 + 数据集 + Dashboard + 实验中心）里**明确需要 LLM** 的环节，按是否在关键交互延迟路径上分组。所有环节都遵循第 4.7 节确立的边界——**不联网检索，只基于会话/实验/数据集自身内容做处理**。
+
+### 15.1 关键路径（用户等着看结果，需要低延迟）
+
+| 环节 | 用途 | 对应章节 | 建议模型量级 |
+|---|---|---|---|
+| 专家采集会话引导 | 复述、澄清、生成下一条追问、把自然语言转成 Graph Ops（结构化抽取） | 第 3.2、3.3 节 | 7B 级别（原设计定位），需要低延迟和稳定的结构化输出（JSON） |
+| 移动端语音口述整理（可选） | 把 ASR 原始转写整理成书面语（是否需要取决于实测转写质量，见 6.2 节） | 第 6.2 节 | 轻量模型（`qwen-turbo` 级别），一次性调用 |
+
+### 15.2 非关键路径（异步/事后生成，可以用更强模型、容忍数秒延迟）
+
+| 环节 | 用途 | 对应章节 | 建议模型量级 |
+|---|---|---|---|
+| 实验结果文字解读 | 把量化指标 + 典型错误案例转成面向人的自然语言解读 | 第 14.5.2 节 | 更强的模型（`qwen-plus`/`qwen-max` 级别均可，非延迟敏感） |
+| Error Analysis 案例聚类归纳 | 把大量失败案例归纳成几种典型失败模式 | 第 14.5.3 节 | 中等模型即可，输入是已经过规则初筛的案例摘要 |
+| 导出匿名化：人名脱敏 | 识别专家口述/记录文本里的人名指代并替换成角色代称 | 第 12.4 节 | 轻量模型或规则+LLM混合，命中率要求高于速度要求 |
+| 角色归一化（role_normalized 导出） | 把"质量工程师""QE""质检"等同义表达映射到标准角色名 | 第 12.4 节 | 轻量模型，可配合一份人工维护的同义词典兜底 |
+
+### 15.3 明确不需要 LLM 的环节（容易被误以为需要，特此说明）
+
+- **数据集质量评分（第 13.3 节十维体系）**：全部是确定性统计计算，不调用 LLM，保证分数可复现、可解释
+- **Graph Validator**（第 3.3、3.4、12.2.1 节）：结构合法性校验是纯规则逻辑（唯一性、连通性、出入度要求等），不需要语义理解
+- **近重复检测**（第 12.2.2 节）：文本相似度 + 结构相似度算法，不需要 LLM
+- **完成度 Completion Score**（第 3.5 节）：按固定权重公式计算，不需要 LLM
+
+---
+
+*本文档为草案，第 7 节的两处设计冲突建议在开发排期前完成裁定；第 11～14 节涉及具体 LLM Prompt 设计的部分（尤其 14.5 节的结果解读生成）建议先做小范围试跑再固化模板；其余内容可直接作为开发评审的输入。*
