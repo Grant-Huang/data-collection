@@ -51,7 +51,7 @@
   .status-queued{background:#f2f2f0;color:var(--text-2)}
   .status-queued i{background:var(--muted)}
   .exp-name{font-weight:700;color:var(--blue);cursor:pointer}
-  .exp-name .meta{display:block;font-weight:400;color:var(--muted);font-size:11px}
+  .exp-name .meta,td .meta{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-top:2px}
 
   /* ---- 结果页 ---- */
   .interp-card{border:1px solid #bfdbfe;background:linear-gradient(180deg,#f4f9ff,var(--surface));border-radius:var(--radius);padding:18px 20px;margin-bottom:18px}
@@ -116,43 +116,50 @@
       </div>
       <table>
         <tr>
-          <th></th><th>实验名称</th><th>数据源</th><th>数据集版本</th><th>方法/模型</th><th>状态</th>
+          <th></th><th>实验名称</th><th>数据集</th><th>方法（模型）</th><th>状态</th>
           <th style="text-align:right">Node F1</th><th style="text-align:right">Graph F1</th><th>创建人</th><th>时间</th>
         </tr>
         <tr>
           <td><input type="checkbox" checked></td>
           <td class="exp-name">exp-A baseline<span class="meta">seed=42</span></td>
-          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GPT-baseline</td>
+          <td>Expert Workflow Collection<span class="meta">Expert · v1.3</span></td><td>Node/Edge Graph + GPT-baseline</td>
           <td><span class="status-pill status-done"><i></i>已完成</span></td>
           <td class="num">0.71</td><td class="num">0.66</td><td>Grant</td><td>09-15</td>
         </tr>
         <tr>
           <td><input type="checkbox" checked></td>
           <td class="exp-name">exp-B GraphLLM-v3<span class="meta">seed=42</span></td>
-          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GraphLLM-v3</td>
+          <td>Expert Workflow Collection<span class="meta">Expert · v1.3</span></td><td>Node/Edge Graph + GraphLLM（qwen3.5-plus）</td>
           <td><span class="status-pill status-done"><i></i>已完成</span></td>
           <td class="num">0.89</td><td class="num">0.83</td><td>Grant</td><td>09-17</td>
         </tr>
         <tr>
           <td><input type="checkbox"></td>
           <td class="exp-name">exp-C Public 对照<span class="meta">seed=7</span></td>
-          <td>Public</td><td>v2.0</td><td>Sequence Projection + GraphLLM-v3</td>
+          <td>Public Manufacturing Cases<span class="meta">Public · v2.0</span></td><td>Sequence Projection + GraphLLM（qwen3.5-plus）</td>
           <td><span class="status-pill status-running"><i></i>运行中</span></td>
           <td class="num">—</td><td class="num">—</td><td>Wei</td><td>09-18</td>
         </tr>
         <tr>
           <td><input type="checkbox"></td>
           <td class="exp-name">exp-D 消融：无回复长度策略<span class="meta">seed=42</span></td>
-          <td>Expert</td><td>v1.3</td><td>Node/Edge Graph + GraphLLM-v3</td>
+          <td>Expert Workflow Collection<span class="meta">Expert · v1.3</span></td><td>Node/Edge Graph + GraphLLM（qwen3.5-plus）</td>
           <td><span class="status-pill status-queued"><i></i>排队中</span></td>
           <td class="num">—</td><td class="num">—</td><td>Grant</td><td>09-18</td>
         </tr>
         <tr>
           <td><input type="checkbox"></td>
           <td class="exp-name">exp-E 超参搜索#7<span class="meta">seed=3</span></td>
-          <td>Expert</td><td>v1.2</td><td>Text Serialization + GraphLLM-v2</td>
+          <td>Expert Workflow Collection<span class="meta">Expert · v1.2</span></td><td>Text Serialization + GraphLLM（qwen3.5-turbo）</td>
           <td><span class="status-pill status-failed"><i></i>失败</span></td>
           <td class="num">—</td><td class="num">—</td><td>Wei</td><td>09-14</td>
+        </tr>
+        <tr>
+          <td></td>
+          <td class="exp-name" style="cursor:default;color:var(--text-2)">exp-F consensus_dfg baseline<span class="meta">seed=1</span></td>
+          <td>Expert Workflow Collection<span class="meta">Expert · v1.3</span></td><td>Event Log + consensus_dfg<span class="meta">纯规则方法，无需模型</span></td>
+          <td><span class="status-pill status-done"><i></i>已完成</span></td>
+          <td class="num">0.58</td><td class="num">0.51</td><td>Grant</td><td>09-12</td>
         </tr>
       </table>
       <div style="margin-top:14px;display:flex;justify-content:flex-end">
