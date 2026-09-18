@@ -310,9 +310,9 @@ MES/车间管理、质量、设备、工艺、计划、IE、精益生产等制�
 
 ---
 
-## 7. 需要你裁定的设计冲突（重要，请优先处理）
+## 7. 设计冲突裁定（已解决，进入实现阶段采用的口径）
 
-整理资料时发现两份设计文档在核心数据模型上有分歧，会直接影响 Schema、Validator 和后续数据集/实验层的一致性，建议在开发前明确口径：
+整理资料时发现两份设计文档在核心数据模型上有分歧，会直接影响 Schema、Validator 和后续数据集/实验层的一致性。**开始实现前按下面两条的"建议"方案拍板，不再等待，`schema/` 目录已同步更新**（见 `IMPLEMENTATION_PLAN.md`）：
 
 ### 7.1 返工/重试的表达方式：DAG-only + retry_semantics，还是允许 loop_back 边？
 
@@ -321,11 +321,11 @@ MES/车间管理、质量、设备、工艺、计划、IE、精益生产等制�
 
 两种方案都自洽，但不能同时作为"当前生效方案"——如果按 v2.1 的 DAG-only 口径开发采集层，那么现有的 `workflow_graph_schema_v2.json` 和样例数据就需要同步修订（把 `loop_back` 边改写成 `retry_semantics`）；如果保留 `loop_back` 边，则 v2.1 文档里"主 DAG 不含环"的一系列 Validator 规则（第17节"新增 Edge 后不得形成 cycle"）需要放宽为"仅在特定 `graph_type` 下要求无环"。
 
-**建议**：采用 v2.1（DAG-only + retry_semantics）作为本次移动/桌面采集层的唯一口径——原因是它能保证图始终可拓扑排序，便于移动端"自动布局 + 自动居中"这类依赖 DAG 层级结构的渲染逻辑稳定工作；但这意味着 `schema/` 目录下两份文件需要在正式开发前由你确认是否同步更新。本 PRD 暂不擅自修改 schema 文件，留待你确认。
+**裁定：采用 v2.1（DAG-only + retry_semantics）**，作为采集层（桌面 + 移动）、Graph Validator、Schema 的唯一口径——原因是它能保证图始终可拓扑排序，便于"自动布局 + 自动居中"这类依赖 DAG 层级结构的渲染逻辑稳定工作。`schema/workflow_graph_schema_v2.json` 的 `edge.edge_type` 枚举已去掉 `loop_back`，`schema/workflow_graph_v2_sample.json` 里原来的 `e12`（`loop_back`）已改写成 `n9` 节点上的 `retry_semantics` 字段，两份文件与本节口径保持一致。
 
-### 7.2 节点类型集合的差异
+### 7.2 节点类型集合的差异（已裁定）
 
-v2.1 的 MVP 节点集合比更早版本少了 `event`、`subprocess`（v2.1 第10节标注为"后续可扩展"），而 `schema/workflow_graph_schema_v2.json` 已经把两者列为正式支持类型。若按 v2.1 做 Phase A/B 的 MVP，需要明确：Schema 里已经存在但产品暂不采集的字段，是保留在 Schema 里"允许但本期不产出"，还是本期就直接支持。建议保留在 Schema 里但采集 UI 暂不引导专家产出，两者不冲突，只是需要在 Graph Validator 里确认不会因为"缺失 `event`/`subprocess` 相关字段"而报错。
+v2.1 的 MVP 节点集合比更早版本少了 `event`、`subprocess`。**裁定：两者保留在 Schema 里（允许出现），但 Phase A/B 的采集 UI 不引导专家产出这两类节点**——Graph Validator 不会因为记录里缺失 `event`/`subprocess` 相关字段而报错，留给 Phase C 按需扩展采集引导逻辑。
 
 ---
 

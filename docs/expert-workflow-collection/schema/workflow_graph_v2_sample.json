@@ -93,7 +93,13 @@
           {
             "node_id": "n9",
             "node_type": "activity",
-            "label": "试产并首件检验"
+            "label": "试产并首件检验",
+            "retry_semantics": {
+              "enabled": true,
+              "rework_reference_node_id": "n5",
+              "condition": "首件不合格",
+              "description": "重新进入并行原因分析阶段"
+            }
           },
           {
             "node_id": "n10",
@@ -170,13 +176,6 @@
             "to": "n10",
             "edge_type": "conditional",
             "condition": "首件合格"
-          },
-          {
-            "edge_id": "e12",
-            "from": "n9",
-            "to": "n5",
-            "edge_type": "loop_back",
-            "condition": "首件不合格"
           }
         ]
       },
