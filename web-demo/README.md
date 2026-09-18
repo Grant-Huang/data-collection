@@ -4,12 +4,13 @@
 
 界面：类似 ChatGPT 主对话框——顶部状态栏、中间滚动的对话气泡、底部一个可以打字的输入框 + 一个开始/结束合一的大圆按钮（不是两个按钮，点一下开始，再点一下结束，图标和颜色跟着状态变）。打字发送消息会自动开始会话，不用先点麦克风。
 
-## 本地记忆 + AgentNexus Mock
+## 本地记忆
 
-- `static/memory.js`：本地记忆（`localStorage`）——关键词重合度 + 时间新鲜度打分，没有语义检索。
-- `static/agentnexus.js` + `agentnexus_mock.py`：**Mock 出智枢按 `docs/agentnexus-memory-integration-proposal.md` 改完之后的样子**——长期 Token 直接能用（mock 里任何非空 Bearer token 都算通过）、标准的频道记忆/消息 REST API。默认指向本地的 `/agentnexus-mock/*`（内置了三条示例记忆种子数据），生产环境要换成真实智枢地址时只需要改 `agentnexus.js` 里的 `config`。
-- 每次开始对话，先从 AgentNexus Mock 拉一次记忆合并进本地缓存；对话过程中每一轮（不管是打字还是说话）都用本地记忆检索，命中的话会喂给模型；原始对话内容顺带推给 AgentNexus 当消息记录。
-- `static/saveIntent.js`：识别"记住""帮我记一下""提醒我"这类明确意图，命中的话**不**走普通的检索问答流程，而是把内容写进 AgentNexus 的结构化记忆层（`PROGRESS`，通过 `agentnexus.js` 的 `createMemoryEntry`），模型只需要简短确认，不用检索/复述。跟"每轮对话都当消息推送"是两条不同的路径，对应提案文档里"原始对话 vs 精选记忆"的分工。
+纯本地、不接任何外部记忆服务——用户的对话数据只存在这台浏览器的 `localStorage` 里。
+
+- `static/memory.js`（`LocalMemory`）：可检索的记忆片段——关键词重合度 + 时间新鲜度打分，没有语义检索。对话过程中每一轮（不管是打字还是说话）都会先搜一次本地记忆，命中的话喂给模型当背景信息。
+- `static/history.js`（`ConversationHistory`）：完整的原始对话记录（带说话人、带顺序），跟 `LocalMemory` 是两个不同粒度的东西——一个是抽取出来的可检索片段，一个是逐字的完整转写。
+- `static/saveIntent.js`：识别"记住""帮我记一下""提醒我"这类明确意图，命中的话**不**走普通的检索问答流程，而是直接写进 `LocalMemory`（打上 `layer: "PROGRESS"`），模型只需要简短确认，不用检索/复述。
 
 ## 提示词（2026-08-22 修订）
 
@@ -30,7 +31,7 @@
 
 ## 为什么需要本地中转服务
 
-浏览器原生 `WebSocket` API 不能自定义请求头，没法直接带 `Authorization: Bearer <key>` 连 DashScope。所以 `server.py` 起一个本地服务：网页连 `ws://127.0.0.1:8765/ws`（不需要认证），`server.py` 再拿着 `.env` 里的 Key 去连真正的 DashScope 地址，两边转发消息。**Key 全程只在这个 Python 进程里，不会出现在浏览器/前端代码里。** 同一个服务也顺带 serve 了 AgentNexus Mock（`/agentnexus-mock/*`）。
+浏览器原生 `WebSocket` API 不能自定义请求头，没法直接带 `Authorization: Bearer <key>` 连 DashScope。所以 `server.py` 起一个本地服务：网页连 `ws://127.0.0.1:8765/ws`（不需要认证），`server.py` 再拿着 `.env` 里的 Key 去连真正的 DashScope 地址，两边转发消息。**Key 全程只在这个 Python 进程里，不会出现在浏览器/前端代码里。**
 
 ## 运行
 
@@ -198,17 +199,16 @@ Sources: [限流文档](https://help.aliyun.com/zh/model-studio/rate-limit) · [
 
 ## 文件说明
 
-- `server.py` — 中转服务（aiohttp）：serve 静态文件 + `/api/config` + `/ws`（转发到 DashScope）+ 挂载 AgentNexus Mock 路由。
-- `agentnexus_mock.py` — Mock 出智枢按提案改完之后的记忆/消息 REST API，纯内存存储，重启会重置回种子数据。
+- `server.py` — 中转服务（aiohttp）：serve 静态文件 + `/api/config` + `/ws`（转发到 DashScope）。
 - `index.html` / `static/styles.css` — 页面结构和样式（开始/结束合一按钮、文字输入框）。
 - `static/app.js` — 核心逻辑：麦克风采集（`ScriptProcessorNode`，降采样到 16kHz PCM16）、流式播放（24kHz PCM16 顺序调度播放）、WebSocket 事件收发、`session.update` instructions patch 记忆注入、气泡渲染。
 - `static/memory.js` — 本地记忆存储 + 检索。
-- `static/agentnexus.js` — 拉取/推送 AgentNexus（Mock）记忆的桥接层。
+- `static/history.js` — 完整对话历史的本地持久化。
 - `static/saveIntent.js` — 识别"记住…"类明确保存意图，从中抽取要保存的内容。
 
 ## 已知限制
 
 - `ScriptProcessorNode` 已经是浏览器标记为 deprecated 的 API（但仍被广泛支持），更现代的写法是 `AudioWorkletNode`，demo 图简单没换。
 - 本地记忆检索还是关键词打分，没有语义理解。
-- `agentnexus_mock.py` 是纯内存存储，没有持久化，也没有完整模拟"定期整理"这类后台任务（提案里的建议二）。
+- 记忆和对话历史都只存在这台浏览器的 `localStorage` 里，换设备/换浏览器不会同步，清空浏览器数据会丢失。
 - 连接失败会明确提示用户并回到可重试状态（见上面"连接生命周期设计"），但没有自动重连/自动重试——需要用户自己再按一次开始。

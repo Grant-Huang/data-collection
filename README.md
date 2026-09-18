@@ -10,7 +10,6 @@
 
 - [`docs/app-design.md`](docs/app-design.md) — 完整功能设计（三种交互模式、口述转文字、回复长度策略等）
 - [`docs/qwen-realtime-voice-setup.md`](docs/qwen-realtime-voice-setup.md) — Qwen Realtime API 踩过的坑（域名选择、模型/音色选型）
-- [`docs/agentnexus-memory-integration-proposal.md`](docs/agentnexus-memory-integration-proposal.md) — 给智枢（AgentNexus）团队的记忆体系集成建议
 - [`docs/roadmap-todo.md`](docs/roadmap-todo.md) — 开发讨论纪要/已完成事项记录
 - [`docs/testing-deployment.md`](docs/testing-deployment.md) — 部署/测试相关笔记
 
