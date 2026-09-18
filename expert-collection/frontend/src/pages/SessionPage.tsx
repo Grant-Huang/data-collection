@@ -12,8 +12,11 @@ export function SessionPage() {
   const { workflows, active, sending, creating, error, selectWorkflow, createWorkflow, sendTurn, confirmWorkflow } =
     useWorkflowSession();
 
-  const left = useResizablePanel("history", 260, 180, 420);
-  const right = useResizablePanel("dag", 460, 280, 800);
+  // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
+  // only used the first time, before anything is stored -- after that the saved px width wins.
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1440;
+  const left = useResizablePanel("history", Math.round(viewportWidth * 0.18), 160, 560);
+  const right = useResizablePanel("dag", Math.round(viewportWidth * 0.3), 220, 900);
 
   return (
     <div style={{ display: "flex", height: "100vh", position: "relative", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
