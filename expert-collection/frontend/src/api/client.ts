@@ -1,4 +1,4 @@
-import type { TurnResponse, WorkflowRecord, WorkflowSummary } from "./types";
+import type { DatasetVersionSummary, SourceType, TurnResponse, WorkflowRecord, WorkflowSummary } from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -24,4 +24,11 @@ export const api = {
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
+
+  getDraftPool: (sourceType: SourceType) =>
+    req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),
+  publishDataset: (sourceType: SourceType) =>
+    req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType }),
+  listDatasetVersions: (sourceType: SourceType) =>
+    req<DatasetVersionSummary[]>("GET", `/api/datasets/versions?source_type=${sourceType}`),
 };

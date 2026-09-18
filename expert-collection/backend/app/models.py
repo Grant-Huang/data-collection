@@ -128,3 +128,39 @@ class TurnResponse(BaseModel):
     completion: Completion
     validation: list[ValidationIssue]
     next_question: Optional[NextQuestion] = None
+
+
+# --- Dataset / Dashboard (PRD 12/13, Phase 3 sub-scope -- see IMPLEMENTATION_PLAN.md section 6) ---
+
+SourceType = Literal["expert_collected", "public_extracted"]
+
+
+class DimensionScore(BaseModel):
+    score: Optional[float] = None
+    band: str
+    sub_indicators: dict
+    scope_note: str
+    explanation: str = ""
+
+
+class DatasetReadiness(BaseModel):
+    overall: Optional[float] = None
+    band: str
+    sample_size: int
+    dimensions: dict[str, DimensionScore]
+
+
+class DatasetVersionSummary(BaseModel):
+    id: str
+    source_type: SourceType
+    version_number: int
+    workflow_count: int
+    total_steps: int
+    microflow_count: Optional[int] = None
+    created_at: str
+    readiness: DatasetReadiness
+
+
+class PublishDatasetRequest(BaseModel):
+    source_type: SourceType = "expert_collected"
+    name: Optional[str] = None

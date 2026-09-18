@@ -28,6 +28,17 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dataset_versions (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     return conn
 
 
@@ -58,5 +69,42 @@ def list_all() -> list[dict]:
     try:
         rows = conn.execute("SELECT data FROM workflows ORDER BY updated_at DESC").fetchall()
         return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def save_dataset_version(version: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO dataset_versions (id, source_type, version_number, data, created_at) VALUES (?, ?, ?, ?, ?)",
+            (version["id"], version["source_type"], version["version_number"],
+             json.dumps(version, ensure_ascii=False), version["created_at"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_dataset_versions(source_type: Optional[str] = None) -> list[dict]:
+    conn = _connect()
+    try:
+        if source_type:
+            rows = conn.execute(
+                "SELECT data FROM dataset_versions WHERE source_type = ? ORDER BY version_number DESC",
+                (source_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT data FROM dataset_versions ORDER BY created_at DESC").fetchall()
+        return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_dataset_version(version_id: str) -> Optional[dict]:
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT data FROM dataset_versions WHERE id = ?", (version_id,)).fetchone()
+        return json.loads(row[0]) if row else None
     finally:
         conn.close()
