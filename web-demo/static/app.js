@@ -2,10 +2,8 @@
 // which forwards to Qwen's Realtime API with the API key attached server-side, and to
 // the mock AgentNexus endpoints at /agentnexus-mock/* (see agentnexus.js).
 //
-// Protocol is the same Realtime-API event shape used by VoiceChat/Realtime/*.swift
-// in the iOS app (session.update / input_audio_buffer.append / response.audio.delta / …).
-// Memory grounding mirrors VoiceChat/ConversationViewModel.swift's groundAndRespond:
-// turn_detection.create_response is false, so nothing auto-replies — every user turn
+// Memory grounding: turn_detection.create_response is false, so nothing auto-replies —
+// every user turn
 // (typed or transcribed) goes through handleUserTurn, which searches local memory,
 // injects what's relevant as background context, then explicitly requests a reply.
 //
@@ -743,8 +741,7 @@ function handleServerEvent(json) {
       // Barge-in: Qwen reports interrupt_response support server-side too. Stopping
       // local playback alone isn't enough -- without response.cancel the server keeps
       // generating/streaming after the user interrupts, and any response.audio.delta
-      // that arrives after this point would just restart playback. Matches iOS's
-      // onSpeechStarted (interruptPlayback + cancelResponse), which already did both.
+      // that arrives after this point would just restart playback.
       //
       // If a response is still waiting out its debounce window (see
       // scheduleVoiceResponse above), the user has already resumed talking before the
@@ -967,15 +964,6 @@ async function start() {
     await startPromise;
   } finally {
     startPromise = null;
-  }
-}
-
-/** Tear down voice, text, and dictation sessions before leaving the page. */
-function stopAllSessions() {
-  stop();
-  stopTextSession();
-  if (dictationState !== DICTATION_STATE.IDLE) {
-    cancelDictation();
   }
 }
 
@@ -1607,12 +1595,9 @@ const TUNING_STORAGE_KEY = "voiceChat.tuning";
 // start), so changing it applies immediately to an in-progress conversation.
 const TUNING_DEFAULTS = { threshold: 0.6, silenceMs: 900, fadeMs: 15, prebufferMs: 150, responseDebounceMs: 500 };
 
-// Explanation text for the "?" tip buttons next to each field above -- threshold/
-// silenceMs wording mirrors VoiceChat/Settings/SettingsView.swift's SettingsTip enum
-// so both platforms explain the shared server-side params the same way; fadeMs/
-// prebufferMs/responseDebounceMs are web-only (no iOS equivalent -- see
-// pcm-player-worklet.js's history comments for fadeMs/prebufferMs; responseDebounceMs
-// has no iOS port yet, see scheduleVoiceResponse's comment).
+// Explanation text for the "?" tip buttons next to each field above -- see
+// pcm-player-worklet.js's history comments for fadeMs/prebufferMs, and
+// scheduleVoiceResponse's comment for responseDebounceMs.
 const TUNING_TIPS = {
   threshold:
     "服务端判断“用户正在说话”的灵敏度，范围 0–1。数值越低，越容易把小声音也当成“有人在说话”（更容易打断 AI，但环境噪音也更容易被误判成插话）；数值越高，需要更明显的声音才会被判定为说话（不容易被打断，但小声说话可能被漏判）。推荐范围 0.5–0.6。",
@@ -1720,15 +1705,6 @@ tuningPanel.addEventListener("click", (event) => {
 
 renderSuggestions();
 setState(STATE.IDLE);
-
-if (window.VoiceModeSwitcher) {
-  VoiceModeSwitcher.mountSwitcher(document.getElementById("modeSwitcher"), {
-    currentMode: "qwen",
-    onBeforeLeave: async () => {
-      stopAllSessions();
-    },
-  });
-}
 
 // Refresh the local memory cache when the tab regains focus, on top of the existing
 // pull-on-conversation-start -- covers "memory changed on another device/tab while this

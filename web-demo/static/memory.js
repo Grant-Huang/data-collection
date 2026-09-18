@@ -1,4 +1,5 @@
-// Local memory store — JS port of VoiceChat/Memory/MemoryStore.swift.
+// Local memory store — keyword-score + recency search over a flat array, persisted
+// to localStorage.
 //
 // Every transcribed/typed user turn gets stored here (localStorage), and later turns
 // retrieve relevant past entries by keyword overlap + recency to ground the model's
