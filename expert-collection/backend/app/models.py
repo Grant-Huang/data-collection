@@ -159,8 +159,83 @@ class DatasetVersionSummary(BaseModel):
     microflow_count: Optional[int] = None
     created_at: str
     readiness: DatasetReadiness
+    archived: bool = False
 
 
 class PublishDatasetRequest(BaseModel):
     source_type: SourceType = "expert_collected"
     name: Optional[str] = None
+    actor_role: Optional[str] = None
+
+
+# --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---
+
+ExperimentMethod = Literal["consensus_dfg", "pm4py_inductive", "pm4py_heuristics", "llm_extractor"]
+ExperimentStatus = Literal["queued", "running", "completed", "failed"]
+Representation = Literal["sequence_projection", "node_edge_graph", "event_log", "text_serialization"]
+InputVersion = Literal["raw", "anonymized", "role_normalized"]
+
+
+class CreateExperimentRequest(BaseModel):
+    name: str
+    source_type: SourceType = "expert_collected"
+    dataset_version_id: str
+    input_version: InputVersion = "raw"
+    representation: Representation = "node_edge_graph"
+    method: ExperimentMethod = "consensus_dfg"
+    model_name: Optional[str] = None  # only meaningful when method == "llm_extractor"
+    prompt_version: Optional[str] = None
+    temperature: Optional[float] = None
+    seed: int = 42
+    train_split: float = 0.7
+    gold_nodes: bool = False
+    gold_edges: bool = False
+    gold_boundary: bool = False
+    gold_roles: bool = False
+    actor_role: Optional[str] = None
+
+
+class ExperimentSummary(BaseModel):
+    id: str
+    name: str
+    dataset_version_id: str
+    dataset_label: str
+    method: ExperimentMethod
+    model_name: Optional[str] = None
+    status: ExperimentStatus
+    created_by: str
+    created_at: str
+    node_f1: Optional[float] = None
+    graph_structural_f1: Optional[float] = None
+
+
+class ExperimentDetail(ExperimentSummary):
+    source_type: SourceType
+    input_version: InputVersion
+    representation: Representation
+    prompt_version: Optional[str] = None
+    temperature: Optional[float] = None
+    seed: int
+    train_split: float
+    train_count: Optional[int] = None
+    test_count: Optional[int] = None
+    metrics: dict = Field(default_factory=dict)
+    explanation: Optional[str] = None
+    explanation_edited: bool = False
+    consensus_graph: Optional[Graph] = None
+    error_analysis: list[dict] = Field(default_factory=list)
+    failure_reason: Optional[str] = None
+
+
+class ExplanationUpdateRequest(BaseModel):
+    text: str
+
+
+class ComparisonRequest(BaseModel):
+    experiment_ids: list[str]
+
+
+class ComparisonResult(BaseModel):
+    experiments: list[ExperimentSummary]
+    metric_table: dict
+    narrative: str
