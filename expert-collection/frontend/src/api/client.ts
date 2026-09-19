@@ -1,4 +1,16 @@
-import type { DatasetVersionSummary, SourceType, TurnResponse, WorkflowRecord, WorkflowSummary } from "./types";
+import type {
+  AuditLogEntry,
+  ComparisonResult,
+  CreateExperimentRequest,
+  DatasetVersionSummary,
+  ExperimentDetail,
+  ExperimentSummary,
+  Settings,
+  SourceType,
+  TurnResponse,
+  WorkflowRecord,
+  WorkflowSummary,
+} from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -27,8 +39,31 @@ export const api = {
 
   getDraftPool: (sourceType: SourceType) =>
     req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),
-  publishDataset: (sourceType: SourceType) =>
-    req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType }),
-  listDatasetVersions: (sourceType: SourceType) =>
-    req<DatasetVersionSummary[]>("GET", `/api/datasets/versions?source_type=${sourceType}`),
+  publishDataset: (sourceType: SourceType, actorRole?: string) =>
+    req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType, actor_role: actorRole }),
+  archiveDatasetVersion: (versionId: string) =>
+    req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/archive`),
+  listDatasetVersions: (sourceType: SourceType, includeArchived = false) =>
+    req<DatasetVersionSummary[]>(
+      "GET",
+      `/api/datasets/versions?source_type=${sourceType}&include_archived=${includeArchived}`,
+    ),
+
+  listExperiments: () => req<ExperimentSummary[]>("GET", "/api/experiments"),
+  createExperiment: (payload: CreateExperimentRequest) =>
+    req<ExperimentDetail>("POST", "/api/experiments", payload),
+  getExperiment: (id: string) => req<ExperimentDetail>("GET", `/api/experiments/${id}`),
+  updateExplanation: (id: string, text: string) =>
+    req<ExperimentDetail>("PUT", `/api/experiments/${id}/explanation`, { text }),
+  regenerateExplanation: (id: string) =>
+    req<ExperimentDetail>("POST", `/api/experiments/${id}/regenerate-explanation`),
+  compareExperiments: (experimentIds: string[]) =>
+    req<ComparisonResult>("POST", "/api/experiments/compare", { experiment_ids: experimentIds }),
+
+  getSettings: () => req<Settings>("GET", "/api/settings"),
+  updateSettings: (patch: Record<string, unknown>) => req<Settings>("PUT", "/api/settings", patch),
+  testConnection: (slot: string) =>
+    req<{ ok: boolean; message: string }>("POST", `/api/settings/llm/${slot}/test-connection`),
+
+  getAuditLog: () => req<AuditLogEntry[]>("GET", "/api/admin/audit-log"),
 };

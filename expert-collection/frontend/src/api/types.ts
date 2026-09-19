@@ -157,4 +157,145 @@ export interface DatasetVersionSummary {
   microflow_count: number | null;
   created_at: string;
   readiness: DatasetReadiness;
+  archived: boolean;
+}
+
+// --- Experiment Center (PRD 14) ---
+
+export type ExperimentMethod = "consensus_dfg" | "pm4py_inductive" | "pm4py_heuristics" | "llm_extractor";
+export type ExperimentStatus = "queued" | "running" | "completed" | "failed";
+export type Representation = "sequence_projection" | "node_edge_graph" | "event_log" | "text_serialization";
+export type InputVersion = "raw" | "anonymized" | "role_normalized";
+
+export const METHOD_LABELS: Record<ExperimentMethod, string> = {
+  consensus_dfg: "consensus_dfg（规则 baseline）",
+  pm4py_inductive: "pm4py_inductive",
+  pm4py_heuristics: "pm4py_heuristics",
+  llm_extractor: "基于 LLM 的抽取器",
+};
+
+export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg"];
+
+export interface CreateExperimentRequest {
+  name: string;
+  source_type: SourceType;
+  dataset_version_id: string;
+  input_version: InputVersion;
+  representation: Representation;
+  method: ExperimentMethod;
+  model_name?: string | null;
+  prompt_version?: string | null;
+  temperature?: number | null;
+  seed: number;
+  train_split: number;
+  gold_nodes: boolean;
+  gold_edges: boolean;
+  gold_boundary: boolean;
+  gold_roles: boolean;
+  actor_role?: string | null;
+}
+
+export interface ExperimentSummary {
+  id: string;
+  name: string;
+  dataset_version_id: string;
+  dataset_label: string;
+  method: ExperimentMethod;
+  model_name: string | null;
+  status: ExperimentStatus;
+  created_by: string;
+  created_at: string;
+  node_f1: number | null;
+  graph_structural_f1: number | null;
+}
+
+export interface ErrorCase {
+  workflow_name: string;
+  node_f1: number;
+  edge_f1: number;
+  structural_match: number;
+  group: string;
+}
+
+export interface ExperimentDetail extends ExperimentSummary {
+  source_type: SourceType;
+  input_version: InputVersion;
+  representation: Representation;
+  prompt_version: string | null;
+  temperature: number | null;
+  seed: number;
+  train_split: number;
+  train_count: number | null;
+  test_count: number | null;
+  metrics: Record<string, number>;
+  explanation: string | null;
+  explanation_edited: boolean;
+  consensus_graph: Graph | null;
+  error_analysis: ErrorCase[];
+  failure_reason: string | null;
+}
+
+export interface ComparisonMetricRow {
+  key: string;
+  label: string;
+  direction: "higher" | "lower";
+  values: (number | null)[];
+  best_value: number | null;
+}
+
+export interface ComparisonResult {
+  experiments: ExperimentSummary[];
+  metric_table: { rows: ComparisonMetricRow[] };
+  narrative: string;
+}
+
+// --- Settings (PRD 17) ---
+
+export interface LlmSlotConfig {
+  category: string;
+  endpoint?: string;
+  model_name?: string;
+  temperature?: number;
+  enabled?: boolean;
+  api_key_set: boolean;
+}
+
+export interface Settings {
+  llm_configs: Record<string, LlmSlotConfig>;
+  voice: { workspace_id: string; realtime_model: string };
+  quality_params: {
+    min_sample_size: number;
+    near_dup_text_threshold: number;
+    near_dup_structure_threshold: number | null;
+    completion_threshold: number;
+    publish_prompt_count: number;
+    publish_prompt_days: number;
+  };
+  run_params: {
+    max_concurrent_experiments: number;
+    run_timeout_seconds: number;
+    audit_log_retention_days: number;
+    mobile_session_timeout_minutes: number | null;
+  };
+}
+
+export const LLM_SLOT_LABELS: Record<string, string> = {
+  guide_service: "专家采集会话引导", mobile_speech_polish: "移动端语音口述整理",
+  experiment_explain: "实验结果文字解读", experiment_compare_explain: "多实验对比解读",
+  error_clustering: "Error Analysis 案例聚类归纳", anonymize_name: "导出匿名化人名脱敏",
+  role_normalize: "角色归一化", dashboard_explain: "Dashboard 评分项解释生成",
+};
+
+// --- Admin (PRD 16) ---
+
+export type Role = "expert" | "researcher" | "admin";
+
+export const ROLE_LABELS: Record<Role, string> = { expert: "专家", researcher: "研究员", admin: "管理员" };
+
+export interface AuditLogEntry {
+  id: string;
+  actor_role: string;
+  action: string;
+  detail: Record<string, unknown>;
+  created_at: string;
 }

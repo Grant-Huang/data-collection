@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS } from "../api/types";
-import type { DatasetVersionSummary, SourceType } from "../api/types";
+import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 
@@ -20,7 +20,7 @@ const TABS: { key: Tab; label: string }[] = [
 const BAND_COLOR: Record<string, string> = { good: "#0ca30c", warning: "#fab219", poor: "#ec835a", insufficient_sample: "#94a3b8" };
 const BAND_LABEL: Record<string, string> = { good: "良好", warning: "待改善", poor: "较差", insufficient_sample: "样本不足" };
 
-export function DashboardPage() {
+export function DashboardPage({ role }: { role: Role }) {
   const [sourceType, setSourceType] = useState<SourceType>("expert_collected");
   const [versions, setVersions] = useState<DatasetVersionSummary[]>([]);
   const [draftCount, setDraftCount] = useState(0);
@@ -46,12 +46,22 @@ export function DashboardPage() {
     setPublishing(true);
     setError(null);
     try {
-      await api.publishDataset(sourceType);
+      await api.publishDataset(sourceType, role);
       await refresh(sourceType);
     } catch (e) {
       setError(String(e));
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function handleArchive(versionId: string) {
+    setError(null);
+    try {
+      await api.archiveDatasetVersion(versionId);
+      await refresh(sourceType);
+    } catch (e) {
+      setError(String(e));
     }
   }
 
@@ -96,17 +106,27 @@ export function DashboardPage() {
                 草稿池中有 <b>{draftCount}</b> 条已确认但尚未发布的采集记录
                 {latest && <span style={{ color: "#94a3b8" }}>（当前版本 v{latest.version_number}，发布于 {new Date(latest.created_at).toLocaleDateString("zh-CN")}）</span>}
               </div>
-              <button
-                onClick={handlePublish}
-                disabled={publishing || draftCount === 0}
-                style={{
-                  border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 12.5,
-                  background: draftCount === 0 ? "#e5e7eb" : "#2a78d6", color: draftCount === 0 ? "#94a3b8" : "#fff",
-                  cursor: draftCount === 0 ? "default" : "pointer",
-                }}
-              >
-                {publishing ? "发布中…" : "发布新版本"}
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {role === "admin" && latest && (
+                  <button
+                    onClick={() => handleArchive(latest.id)}
+                    style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" }}
+                  >
+                    归档当前版本
+                  </button>
+                )}
+                <button
+                  onClick={handlePublish}
+                  disabled={publishing || draftCount === 0}
+                  style={{
+                    border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 12.5,
+                    background: draftCount === 0 ? "#e5e7eb" : "#2a78d6", color: draftCount === 0 ? "#94a3b8" : "#fff",
+                    cursor: draftCount === 0 ? "default" : "pointer",
+                  }}
+                >
+                  {publishing ? "发布中…" : "发布新版本"}
+                </button>
+              </div>
             </div>
 
             {!latest ? (
@@ -151,7 +171,7 @@ export function DashboardPage() {
                         </>
                       ) : (
                         <div style={{ fontSize: 16, fontWeight: 700, color: "#94a3b8" }}>
-                          样本量不足（{readiness.sample_size}/20），暂不评分
+                          样本量不足（{readiness.sample_size}/{(readiness.dimensions.coverage?.sub_indicators as { threshold?: number })?.threshold ?? "?"}），暂不评分
                         </div>
                       )}
                     </div>

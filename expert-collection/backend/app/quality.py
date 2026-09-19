@@ -95,17 +95,22 @@ def _dim(score: float, sub: dict[str, Any], scope_note: str) -> dict:
     return {"score": round(max(0.0, min(100.0, score)), 1), "band": _band(score), "sub_indicators": sub, "scope_note": scope_note}
 
 
-def compute_readiness(graphs: list[dict]) -> dict:
-    """graphs: list of Graph dicts (nodes/edges) for every workflow in the dataset version."""
+def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE) -> dict:
+    """graphs: list of Graph dicts (nodes/edges) for every workflow in the dataset version.
+
+    min_sample_size defaults to the PRD 13.5.1 value but callers pass the live value from
+    Settings (17.4) so a threshold change actually takes effect on the next publish, per
+    IMPLEMENTATION_PLAN.md section 7.
+    """
     n = len(graphs)
     dims: dict[str, dict] = {}
 
-    if n < MIN_SAMPLE_SIZE:
+    if n < min_sample_size:
         for key in DIMENSION_WEIGHTS:
             dims[key] = {
                 "score": None, "band": "insufficient_sample",
-                "sub_indicators": {"sample_size": n, "threshold": MIN_SAMPLE_SIZE},
-                "scope_note": "样本量不足，暂不评分（PRD 13.5.1：低于 20 条已确认记录时不计算比例类指标，避免误导）。",
+                "sub_indicators": {"sample_size": n, "threshold": min_sample_size},
+                "scope_note": f"样本量不足，暂不评分（PRD 13.5.1：低于 {min_sample_size} 条已确认记录时不计算比例类指标，避免误导）。",
             }
         return {"overall": None, "band": "insufficient_sample", "sample_size": n, "dimensions": dims}
 
