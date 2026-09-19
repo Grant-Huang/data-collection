@@ -66,4 +66,39 @@ export const api = {
     req<{ ok: boolean; message: string }>("POST", `/api/settings/llm/${slot}/test-connection`),
 
   getAuditLog: () => req<AuditLogEntry[]>("GET", "/api/admin/audit-log"),
+
+  importPrecheck: (payload: unknown) => req<ImportPrecheckReport>("POST", "/api/datasets/import/precheck", payload),
+  importConfirm: (payload: unknown, actorRole: string, importRecordsWithoutErrors: boolean) =>
+    req<DatasetVersionSummary>("POST", "/api/datasets/import/confirm", {
+      payload, actor_role: actorRole, import_records_without_errors: importRecordsWithoutErrors,
+    }),
+  exportVersionUrl: (versionId: string, format: string) => `${BASE}/api/datasets/versions/${versionId}/export?format=${format}`,
+  drillDown: (versionId: string, dimension: string) =>
+    req<{ dimension: string; score: number | null; problem_records: { record_id: string; name: string; reason: string }[] }>(
+      "GET",
+      `/api/datasets/versions/${versionId}/drill-down?dimension=${dimension}`,
+    ),
+  getTrend: (sourceType: SourceType) =>
+    req<{ source_type: SourceType; points: TrendPoint[] }>("GET", `/api/datasets/trend?source_type=${sourceType}`),
 };
+
+export interface ImportPrecheckReport {
+  total_records: number;
+  importable_records: number;
+  error_count: number;
+  warning_count: number;
+  issues: { level: "error" | "warning"; code: string; message: string; record_id: string | null }[];
+  preview_readiness: { overall: number | null } | null;
+  gold_annotation_note: string;
+  recommendation: string;
+  text_threshold: number;
+  structure_threshold: number;
+  importable_record_ids: string[];
+}
+
+export interface TrendPoint {
+  version_number: number;
+  created_at: string;
+  overall: number | null;
+  dimensions: Record<string, number | null>;
+}

@@ -168,6 +168,13 @@ class PublishDatasetRequest(BaseModel):
     actor_role: Optional[str] = None
 
 
+class ImportConfirmRequest(BaseModel):
+    payload: dict
+    name: Optional[str] = None
+    actor_role: Optional[str] = None
+    import_records_without_errors: bool = False
+
+
 # --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---
 
 ExperimentMethod = Literal["consensus_dfg", "pm4py_inductive", "pm4py_heuristics", "llm_extractor"]

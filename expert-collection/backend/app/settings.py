@@ -32,7 +32,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "quality_params": {
         "min_sample_size": 20,
         "near_dup_text_threshold": 0.85,
-        "near_dup_structure_threshold": None,
+        "near_dup_structure_threshold": 0.7,
         "completion_threshold": 80,
         "publish_prompt_count": 20,
         "publish_prompt_days": 14,

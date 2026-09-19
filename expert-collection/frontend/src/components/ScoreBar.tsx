@@ -2,6 +2,7 @@
 // the good/warning/poor badge uses fixed status colors, never the bar's own blue (13.5's
 // "两者不混用" rule). Click the row to open the explanation modal (13.3.1).
 import { useState } from "react";
+import { api } from "../api/client";
 import type { DimensionScore, ScoreBand } from "../api/types";
 
 const BAND_STYLE: Record<ScoreBand, { color: string; label: string }> = {
@@ -16,12 +17,26 @@ interface Props {
   label: string;
   weight: number;
   dim: DimensionScore;
+  versionId?: string;
 }
 
-export function ScoreBar({ label, weight, dim }: Props) {
+export function ScoreBar({ dimensionKey, label, weight, dim, versionId }: Props) {
   const [open, setOpen] = useState(false);
+  const [problems, setProblems] = useState<{ record_id: string; name: string; reason: string }[] | null>(null);
+  const [loadingProblems, setLoadingProblems] = useState(false);
   const band = BAND_STYLE[dim.band];
   const pct = dim.score ?? 0;
+
+  async function handleDrillDown() {
+    if (!versionId) return;
+    setLoadingProblems(true);
+    try {
+      const res = await api.drillDown(versionId, dimensionKey);
+      setProblems(res.problem_records);
+    } finally {
+      setLoadingProblems(false);
+    }
+  }
 
   return (
     <>
@@ -81,6 +96,38 @@ export function ScoreBar({ label, weight, dim }: Props) {
                 {dim.explanation}
               </div>
             </div>
+
+            {versionId && dim.score !== null && (
+              <div style={{ marginTop: 16 }}>
+                {problems === null ? (
+                  <button
+                    onClick={handleDrillDown}
+                    disabled={loadingProblems}
+                    style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}
+                  >
+                    {loadingProblems ? "定位中…" : "定位问题样本"}
+                  </button>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#667085", marginBottom: 6 }}>
+                      问题样本（{problems.length}）
+                    </div>
+                    {problems.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: "#94a3b8" }}>没有找到明显拖低本维度分数的具体记录。</div>
+                    ) : (
+                      <div style={{ maxHeight: 180, overflowY: "auto" }}>
+                        {problems.map((p) => (
+                          <div key={p.record_id} style={{ fontSize: 12, padding: "6px 0", borderBottom: "1px solid #f1f3f5" }}>
+                            <span style={{ fontWeight: 600 }}>{p.name}</span>
+                            <span style={{ color: "#94a3b8" }}> — {p.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
