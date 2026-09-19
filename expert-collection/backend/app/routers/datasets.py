@@ -5,13 +5,14 @@ section 6) -- public_extracted has no import pipeline yet, so its version list i
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from .. import db, explain, quality, settings as settings_module
-from ..models import DatasetVersionSummary, PublishDatasetRequest
+from .. import anonymize, audit, db, explain, import_pipeline, quality, settings as settings_module
+from ..models import DatasetVersionSummary, ImportConfirmRequest, PublishDatasetRequest
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -93,7 +94,6 @@ def publish_dataset(req: PublishDatasetRequest) -> DatasetVersionSummary:
     }
     db.save_dataset_version(version)
 
-    from .. import audit
     audit.log(req.actor_role or "unknown", "dataset_publish", {
         "dataset_version_id": version["id"], "source_type": req.source_type,
         "version_number": version_number, "workflow_count": len(pool),
@@ -110,7 +110,6 @@ def archive_version(version_id: str, actor_role: str = "unknown") -> DatasetVers
     db.archive_dataset_version(version_id)
     version["archived"] = True
 
-    from .. import audit
     audit.log(actor_role, "dataset_archive", {"dataset_version_id": version_id})
 
     return _to_summary(version)
@@ -130,3 +129,183 @@ def get_version(version_id: str) -> DatasetVersionSummary:
     if not version:
         raise HTTPException(status_code=404, detail="dataset version not found")
     return _to_summary(version)
+
+
+def _thresholds() -> tuple[float, float]:
+    qp = settings_module.get_effective_settings()["quality_params"]
+    return qp["near_dup_text_threshold"], qp["near_dup_structure_threshold"] or 0.7
+
+
+@router.post("/import/precheck")
+def import_precheck(payload: dict) -> dict:
+    text_threshold, structure_threshold = _thresholds()
+    try:
+        return import_pipeline.precheck(payload, text_threshold, structure_threshold)
+    except (KeyError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"上传内容不是预期的 {{dataset_meta, records[]}} 结构：{e}")
+
+
+@router.post("/import/confirm", response_model=DatasetVersionSummary)
+def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
+    text_threshold, structure_threshold = _thresholds()
+    report = import_pipeline.precheck(req.payload, text_threshold, structure_threshold)
+    if report["error_count"] > 0 and not req.import_records_without_errors:
+        raise HTTPException(status_code=422, detail={"message": "预检有阻断错误，未确认跳过错误记录", "report": report})
+
+    importable_ids = set(report["importable_record_ids"])
+    records = [r for r in req.payload["records"] if r.get("record_id") in importable_ids]
+    if not records:
+        raise HTTPException(status_code=400, detail="没有可导入的记录")
+
+    dataset_meta = req.payload["dataset_meta"]
+    source_type = dataset_meta["source_type"]
+    graphs = [r["graph"] for r in records]
+
+    min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
+    readiness = quality.compute_readiness(graphs, min_sample_size=min_sample_size)
+    named_records = [{"id": r.get("record_id"), "name": r.get("scenario", {}).get("scenario_name") or r.get("record_id")} for r in records]
+    explanations = explain.explain_all(readiness, named_records)
+
+    existing = db.list_dataset_versions(source_type)
+    version_number = (max((v["version_number"] for v in existing), default=0)) + 1
+
+    version = {
+        "id": uuid.uuid4().hex[:12],
+        "source_type": source_type,
+        "name": req.name or dataset_meta.get("name") or source_type,
+        "version_number": version_number,
+        "workflow_ids": [r.get("record_id") for r in records],
+        "workflow_count": len(records),
+        "total_steps": sum(len(g["nodes"]) for g in graphs),
+        "readiness": readiness,
+        "explanations": explanations,
+        "created_at": _now(),
+        "archived": False,
+        "records": records,  # public_extracted has no separate `workflows` table row per record
+    }
+    db.save_dataset_version(version)
+
+    audit.log(req.actor_role or "unknown", "dataset_import", {
+        "dataset_version_id": version["id"], "source_type": source_type,
+        "version_number": version_number, "record_count": len(records),
+        "skipped_error_records": report["total_records"] - len(records),
+    })
+
+    return _to_summary(version)
+
+
+def _records_for_export(version: dict) -> list[dict]:
+    if version["source_type"] == "public_extracted":
+        return version.get("records", [])
+    # expert_collected: reconstruct a record-shaped dict from each stored WorkflowRecord.
+    out = []
+    for wid in version["workflow_ids"]:
+        w = db.get(wid)
+        if not w:
+            continue
+        out.append({
+            "record_id": w["id"],
+            "scenario": {"scenario_name": w["name"]},
+            "graph": w["graph"],
+            "provenance": {"source_type": "expert_collected"},
+        })
+    return out
+
+
+@router.get("/versions/{version_id}/export")
+def export_version(version_id: str, format: str = "raw") -> Response:
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    if format not in ("raw", "anonymized", "role_normalized"):
+        raise HTTPException(status_code=400, detail="format 必须是 raw / anonymized / role_normalized 之一")
+
+    records = _records_for_export(version)
+    if format == "role_normalized":
+        records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"])} for r in records]
+    elif format == "anonymized":
+        records = [anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}) for r in records]
+
+    export_payload = {
+        "dataset_meta": {
+            "dataset_id": version["id"], "name": version["name"],
+            "source_type": version["source_type"],  # PRD 12.3: must be preserved on export
+            "schema_version": "2.0", "created_at": version["created_at"],
+        },
+        "records": records,
+        "export_format": format,
+    }
+    body = json.dumps(export_payload, ensure_ascii=False, indent=2)
+    return Response(
+        content=body, media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{version["id"]}_{format}.json"'},
+    )
+
+
+@router.get("/versions/{version_id}/drill-down")
+def drill_down(version_id: str, dimension: str) -> dict:
+    """PRD 13.4: locate the specific records dragging a dimension's score down."""
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    dim = version["readiness"]["dimensions"].get(dimension)
+    if not dim:
+        raise HTTPException(status_code=404, detail="未知的评分维度")
+
+    records = _records_for_export(version)
+    problems: list[dict] = []
+    for r in records:
+        graph = r["graph"]
+        name = r.get("scenario", {}).get("scenario_name") or r.get("record_id")
+        flagged, reason = _flag_for_dimension(dimension, graph)
+        if flagged:
+            problems.append({"record_id": r.get("record_id"), "name": name, "reason": reason})
+
+    return {"dimension": dimension, "score": dim["score"], "problem_records": problems[:50]}
+
+
+def _flag_for_dimension(dimension: str, graph: dict) -> tuple[bool, str]:
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    if dimension == "graph_completeness":
+        connected = {e["from"] for e in edges} | {e["to"] for e in edges}
+        isolated = [n for n in nodes if n["node_id"] not in connected]
+        if isolated:
+            return True, f"含孤立节点：{', '.join(n['label'] for n in isolated)}"
+        for n in nodes:
+            if n["node_type"] == "decision":
+                out = [e for e in edges if e["from"] == n["node_id"] and e["edge_type"] == "conditional"]
+                if len(out) < 2:
+                    return True, f"判断节点「{n['label']}」条件分支不足两条"
+        return False, ""
+    if dimension == "completeness":
+        if len(nodes) < 5:
+            return True, f"步骤数偏少（{len(nodes)} 个）"
+        return False, ""
+    if dimension == "structural_diversity":
+        types = {n["node_type"] for n in nodes}
+        if not ({"decision", "parallel_split"} & types):
+            return True, "线性流程，无分支或并行结构"
+        return False, ""
+    if dimension == "extractability":
+        low_conf = [n for n in nodes if n.get("confidence", 1.0) < 0.7]
+        if low_conf:
+            return True, f"{len(low_conf)} 个节点抽取置信度偏低"
+        return False, ""
+    return False, ""
+
+
+@router.get("/trend")
+def get_trend(source_type: str = "expert_collected") -> dict:
+    """PRD 13.5: readiness score trend across published versions."""
+    versions = [v for v in db.list_dataset_versions(source_type) if not v.get("archived")]
+    versions.sort(key=lambda v: v["version_number"])
+    points = [
+        {
+            "version_number": v["version_number"], "created_at": v["created_at"],
+            "overall": v["readiness"]["overall"],
+            "dimensions": {k: d["score"] for k, d in v["readiness"]["dimensions"].items()},
+        }
+        for v in versions
+    ]
+    return {"source_type": source_type, "points": points}
