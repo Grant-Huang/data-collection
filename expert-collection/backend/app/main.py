@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import admin, datasets, expert_workflows, experiments, settings
+from .routers import admin, annotations, datasets, expert_workflows, experiments, settings
 
 app = FastAPI(title="Expert Workflow Collection API", version="0.1.0")
 
@@ -22,6 +22,7 @@ app.add_middleware(
 
 app.include_router(expert_workflows.router)
 app.include_router(datasets.router)
+app.include_router(annotations.router)
 app.include_router(experiments.router)
 app.include_router(admin.router)
 app.include_router(settings.router)

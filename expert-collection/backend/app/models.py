@@ -76,6 +76,11 @@ class NextQuestion(BaseModel):
     question: str
     # None means no chips: this is a recall-type question (PRD section 18).
     chips: Optional[list[str]] = None
+    # "prefill" (default/omitted, existing behavior): clicking a chip fills the whole draft
+    # box, single choice. "multi_select": chips toggle on/off, expert confirms the combined
+    # selection before it goes into the draft box (IMPLEMENTATION_PLAN.md section 9.1,
+    # Case Context B-group). Never auto-sends either way -- PRD section 18 still applies.
+    chip_mode: Optional[Literal["prefill", "multi_select"]] = None
 
 
 class ValidationIssue(BaseModel):
@@ -99,6 +104,24 @@ class WorkflowSummary(BaseModel):
     updated_at: str
 
 
+class CaseContext(BaseModel):
+    """Scenario (A-group) + Case Context (B-group) -- IMPLEMENTATION_PLAN.md section 9.1.
+    All fields optional/empty-default because this fills in gradually turn by turn; a
+    workflow record mid-collection legitimately has a partially-filled CaseContext.
+    """
+    scenario_trigger: Optional[str] = None
+    scenario_goal: Optional[str] = None
+    scenario_success: Optional[str] = None
+    known_info: Optional[str] = None
+    unknown_info: Optional[str] = None
+    constraints: Optional[str] = None
+    available_resources: Optional[str] = None
+    # A-group: which fields the expert answered in "brief" vs "detailed" mode.
+    detail_level: dict[str, str] = Field(default_factory=dict)
+    # B-group: which fields the expert skipped by picking the "无" chip.
+    skipped_fields: list[str] = Field(default_factory=list)
+
+
 class WorkflowRecord(BaseModel):
     id: str
     name: str
@@ -109,6 +132,7 @@ class WorkflowRecord(BaseModel):
     unresolved: list[NextQuestion]
     completion: Completion
     validation: list[ValidationIssue] = Field(default_factory=list)
+    case_context: Optional[CaseContext] = None
     created_at: str
     updated_at: str
 
@@ -173,6 +197,96 @@ class ImportConfirmRequest(BaseModel):
     name: Optional[str] = None
     actor_role: Optional[str] = None
     import_records_without_errors: bool = False
+
+
+# --- Duplicate check (IMPLEMENTATION_PLAN.md section 10) ---
+# Standalone from precheck/import so it can be called on its own -- e.g. to inspect a file's
+# relationship to the existing corpus before deciding whether to fix and re-upload it.
+
+DuplicateKind = Literal["duplicate", "microflow_reuse_candidate", "content_match_structure_diff"]
+
+
+class DuplicateCheckRequest(BaseModel):
+    payload: dict  # same {dataset_meta, records[]} shape as import
+
+
+class DuplicateMatch(BaseModel):
+    record_id: str
+    matched_record_id: str
+    matched_version_number: Optional[int] = None  # None for a within-batch match
+    text_similarity: float
+    structure_similarity: float
+    kind: DuplicateKind
+
+
+class DuplicateCheckResult(BaseModel):
+    source_type: SourceType
+    total_records: int
+    # "duplicate" = same scenario AND same structure, definitionally a repeat.
+    # "microflow_reuse_candidate" = different scenario, similar structure -- likely the same
+    # reusable micro-workflow recurring, not a data-quality problem.
+    duplicates: list[DuplicateMatch]
+    reuse_candidates: list[DuplicateMatch]
+    other_matches: list[DuplicateMatch]  # content_match_structure_diff, rare edge case
+
+
+# --- Prior annotation (Phase 7 sub-phase B, IMPLEMENTATION_PLAN.md section 9.2) ---
+# "Public/LLM-derived Prior -> Expert-annotated Prior" from the design draft. Single-annotator
+# chain by decision -- no Cohen's kappa / Krippendorff's alpha here (design draft decision 3).
+
+PriorStatus = Literal["raw", "expert_annotated"]
+PriorVerdict = Literal["accepted", "needs_revision", "rejected"]
+# Per-node judgement string: "keep" / "delete" / "merge_into:<other_node_id>".
+NodeVerdicts = dict[str, str]
+
+
+class CreateAnnotationRequest(BaseModel):
+    verdict: PriorVerdict
+    node_verdicts: NodeVerdicts = Field(default_factory=dict)
+    note: Optional[str] = None
+    actor_role: Optional[str] = None
+
+
+class PriorAnnotation(BaseModel):
+    annotation_id: str
+    version_id: str
+    record_id: str
+    based_on_annotation_id: Optional[str] = None
+    verdict: PriorVerdict
+    node_verdicts: NodeVerdicts = Field(default_factory=dict)
+    note: Optional[str] = None
+    actor_role: Optional[str] = None
+    annotated_at: str
+
+
+class PriorRecordDetail(BaseModel):
+    record_id: str
+    name: str
+    # Loosely typed, not `Graph`: public_extracted records (this model's only use case) are
+    # treated as raw dicts everywhere else in the codebase too (import_pipeline.py,
+    # datasets.py's _records_for_export) because imported data can carry a graph_type the
+    # strict internal Graph model doesn't accept (e.g. the sample data's "directed_graph"
+    # vs. the model's "dag") -- graph_validator.py already validates structure without
+    # requiring that literal match, so re-imposing it here would reject data the rest of
+    # the import pipeline already accepted.
+    graph: dict
+    prior_status: PriorStatus
+    annotations: list[PriorAnnotation] = Field(default_factory=list)  # oldest first
+
+
+class PriorRecordSummary(BaseModel):
+    record_id: str
+    name: str
+    node_count: int
+    prior_status: PriorStatus
+    latest_verdict: Optional[PriorVerdict] = None
+
+
+class AnnotationSummary(BaseModel):
+    version_id: str
+    total_records: int
+    annotated_records: int
+    verdict_counts: dict[str, int]
 
 
 # --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---

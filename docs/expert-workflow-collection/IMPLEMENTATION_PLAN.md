@@ -152,3 +152,67 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 真实 LLM 接入（人名脱敏、Guide Service 等）：跟 Phase 1-4 一样，等有可达的 L/C 推理服务再替换对应 Mock 模块，接口已经按"这次调用要接收什么、返回什么"设计好
 
 **假设 7（新增）**：近重复检测的两个阈值本轮从 Settings 读取，但公共集导入界面本身没有做管理员权限门禁（延续假设 5 的"暴露在前端里、权限校验留到真实登录系统接入时一并做"）。
+
+## 9. Phase 7：Scenario/Case Context 采集 + Prior 标注流程
+
+对应 `docs/expert-workflow-collection/design/case_context_and_prior_annotation_draft.md` 定稿后的两处扩展。文末"决策记录"表的 4 个决定在本轮直接实现，不再重复推导；这里只记录落成代码时的具体取舍。按草稿建议的顺序拆成两个独立子阶段，分别提交：
+
+### 9.1 子阶段 A — Scenario / Case Context 采集（改动面小，先做）
+
+- `guide_service.py`：在现有 `opening → trigger_detail` 之间插入 7 个新 stage：`scenario_trigger` / `scenario_goal` / `scenario_success`（A组，直接复用现有"chip 只回填输入框"机制——两个 chip 文案本身就是"简单说：" / "详细说：提示语——"的答案模板前缀，专家在其后接自己的话；guide_service 靠前缀识别 `detail_level`，不需要新的前端交互）；`context_known` / `context_unknown` / `context_constraints` / `context_resources`（B组，每个问题拆成"选择"+"澄清"两个 stage，选择 stage 用多选 chip、命中非"无"的 chip 才进入澄清 stage，"无"直接跳到下一题）。C组的"为什么这样做"归因追问（PRD 里原设计的一部分）本轮**不做**，作为已知缺口记录在 9.3——它要求把现有 `main_path`/`branch_check` 等每个 stage 都拆成两段，改动面明显大于 A/B 两组，留到下一轮单独评估。
+- `models.py`：新增 `CaseContext` 模型（`scenario_trigger/goal/success`、`known_info`/`unknown_info`/`constraints`/`available_resources`、`detail_level: dict`、`skipped_fields: list`），`WorkflowRecord` 新增 `case_context: Optional[CaseContext]`。
+- `NextQuestion` 新增 `chip_mode: Optional[Literal["prefill", "multi_select"]]`，默认 `None`（等价于现有行为，所有旧 stage 不用改）；B组四个 stage 的选择环节设为 `"multi_select"`。
+- `routers/expert_workflows.py`：`post_turn` 里把 `new_state["pending"].get("case_context")` 同步写回 `record["case_context"]`；`end_condition` stage 把 pending 清空成 `{}` 时要保留 `case_context`（原代码会连带清掉，是一个真实需要修的点，不是新增行为）。
+- 前端 `ChatPanel.tsx`：新增 `chip_mode === "multi_select"` 的渲染分支——chip 变成可切换选中状态的按钮组 + 一个"确认选择"按钮，点击后把选中项拼成字符串回填草稿框（沿用"永不自动发送"的规则，不新增例外）；`chip_mode` 为空或 `"prefill"` 时行为完全不变。
+- 前端 `SessionPage.tsx`：`active.graph.nodes.length === 0` 时右栏显示"背景信息收集中"占位态而不是空 DAG——这个条件本身就和"A/B 组阶段"重合，不需要额外按 stage 名判断。
+- `quality.py`：不改动评分公式本身（草稿 1.7 已经说这是要不要计入总分的产品决策，本轮不擅自决定），只在 `completeness` 维度的 `sub_indicators` 里新增一个诊断字段 `case_context_fill_rate`（七个字段里非跳过的比例，跨数据集版本的平均值），先展示不影响分数。
+
+### 9.2 子阶段 B — Prior 标注（链式单人标注，改动面大，后做）
+
+- `models.py`：新增 `prior_status: Literal["raw", "expert_annotated"]`（只在 API 响应里按 9.2 的方式动态算出，不写回不可变的 `dataset_version` 数据）、`PriorVerdict = Literal["accepted", "needs_revision", "rejected"]`、`CreateAnnotationRequest`、`PriorAnnotation`（含 `based_on_annotation_id`，草稿 2.4 的链式设计）、`PriorRecordSummary`、`AnnotationSummary`。
+- `db.py`：新增 `prior_annotations` 表，`id/version_id/record_id/based_on_annotation_id/data/annotated_at`；`save_annotation`/`list_annotations(version_id, record_id)`/`latest_annotation(version_id, record_id)`/`list_annotations_for_version(version_id)`。标注按 `(version_id, record_id)` 定位，不去改 `dataset_versions` 表里已发布版本的不可变数据——这样"标注"和"版本不可变"两条规则不冲突。
+- 新增 `routers/annotations.py`：
+  - `GET /api/datasets/versions/{version_id}/records`：列出该版本所有记录 + 动态算出的 `prior_status`/`latest_verdict`/`node_count`，供标注列表用
+  - `GET /api/datasets/versions/{version_id}/records/{record_id}`：单条记录详情（图 + 标注历史链），标注面板预填链上最新判定用
+  - `POST /api/datasets/versions/{version_id}/records/{record_id}/annotations`：提交新标注，`based_on_annotation_id` 自动指向该 (version_id, record_id) 当前链上最新一条
+  - `GET /api/datasets/versions/{version_id}/annotation-summary`：标注覆盖率 + 判定分布，供 Dashboard 用
+- 只对 `source_type == "public_extracted"` 的版本开放（草稿 2.1：LLM 整合工作流本轮只走导入，和其他导入数据用同一套，不需要区分）；对 `expert_collected` 版本调用这组接口直接 404，不悄悄放行。
+- 前端新增 `PriorAnnotationPanel.tsx`：复用只读 `DagView`，三个大按钮（采纳/需要修改/丢弃）默认预选链上最新判定；选"需要修改"才展开逐节点 `保留/删除/合并进上一个节点` chip。
+- `DashboardPage.tsx` 公共集分支：记录列表旁加状态标签 + "去标注"按钮，新增"标注覆盖率"统计卡片，读取 `annotation-summary`。
+- `client.ts`/`types.ts`：新增对应的请求函数和类型。
+
+### 9.3 本轮仍不做，继续记录为已知缺口
+
+- C组"为什么这样做"的节点级归因追问（见 9.1）：需要把现有主流程每个 stage 拆成两段，工作量和现有 FSM 的 stage 总数成正比，留到下一轮单独排期。
+- B组 `context_known`/`context_unknown`/`context_resources` 三个问题的具体 chip 文案（草稿"下一步细化项"提到需要贴合真实业务场景再定）：本轮先用草稿里给的合理默认值实现机制，文案后续可直接改 `guide_service.py` 里的常量表，不涉及结构改动。
+- 标注一致性（Cohen's κ / Krippendorff's α）：按决策 3，本轮不做，`based_on_annotation_id` 的链式设计已经为以后升级成多人独立标注留了口子（草稿 2.4 结尾）。
+- `case_context_fill_rate` 是否要真正计入 Dataset Readiness Score 总分：本轮只展示不计分，计不计分是产品决策，留给下一轮。
+
+## 10. 跨版本近重复检测（严格把关，已实现）
+
+在实际导入两批公共集数据时发现并当场修复的产品缺口，不是本轮 Phase 7 设计里预见到的，单独记一节。原先只是记为已知缺口，后来按用户明确要求（"每次导入新数据的时候，都要做好严格把关"）当场实现，本节记录最终实现和过程中的一次真实调参。
+
+**发现过程**：导入第一批 20 条公共集（`manufacturing_workflows_consolidated_v2.json`）生成 v1 之后，再导入第二批 40 条，系统的预检报告对这两批之间的重复完全没有反应——因为 `import_pipeline.precheck` 的近重复检测（12.2.2）原来只在**当前这一次上传的 payload 内部**两两比较，从来不和数据库里已经导入过的历史 `dataset_version` 比。手工用 `import_pipeline._jaccard`/`_record_structure_sets` 把两批原始记录做了一次跨批比较，找到 78 组结构近重复，预检报告里一条都没出现，证实这是真问题。
+
+**实现**（`import_pipeline.py` + `routers/datasets.py`）：
+- `precheck()` 新增 `existing_records` 参数：调用方（`routers/datasets.py`）负责从数据库取出**同一 `source_type` 下所有未归档版本**的记录（复用现成的 `_records_for_export`），`import_pipeline.py` 本身不碰数据库，保持纯函数、方便单测
+- `record_id` 唯一性检查（原第 6 步）从"只查本批"扩展为"本批 + 历史"：任何 record_id 已经出现在历史已发布版本里，直接算错误（`record_id_already_exists`），阻断该条导入
+- 新增独立的**查重接口** `POST /api/datasets/duplicate-check`：不依赖导入流程，单独传 `{dataset_meta, records[]}` 就能拿到分类结果，用来在决定要不要修数据、要不要导入之前先看一眼这批数据和已有数据的关系；内部复用和 `precheck` 完全同一套分类逻辑（`import_pipeline.compare_cross_version`），保证这里看到的结果和真正导入时会被拦下的结果一致，不是另一套口径
+
+**分类逻辑——两级判定，按场景是否重复 + 结构是否重复两个维度分开定义（这是根据反馈明确要求的判定方式，不是延续上一版"文本命中就阻断、结构命中就警告"的裁剪版本）**：
+- **整体重复**（`duplicate`）：文本相似度**和**结构相似度**同时**达到阈值——做的事情（场景）重复，做的工作流（结构）也重复，判定为真正的重复数据，默认阻断导入
+- **疑似微工作流复用**（`microflow_reuse_candidate`）：文本相似度**没**达到阈值，但结构相似度达到阈值——做的事情不一样，中间的处理结构却很像，判定为疑似复用了同一个可复用的 micro-workflow 模板（呼应实验设计文档 §4.4："同一个 micro-workflow 故意在多个场景里重复出现"），只警告、不阻断，交给 Prior 标注环节人工复核
+- 极少数"文本相似但结构不同"的组合单独归为 `content_match_structure_diff`，同样只警告，不强并入前两类
+
+这个两级判定同时应用在批内比较（`_find_near_duplicates`）和跨版本比较（`_find_cross_version_duplicates`）上，口径统一——批内如果真的整体重复（同一批文件里不小心塞了两条一样的数据）也会被阻断，不再像之前那样"批内一律只警告"。
+
+**已验证（在干净的 v1 基线上重新走了一遍完整闭环，不是接着之前测试残留的脏状态继续测）**：
+1. 清空测试库，只留最初那 20 条真实数据作为 v1
+2. 对修好的 40 条数据调用 `/duplicate-check`：`duplicates: 0`、`reuse_candidates: 348`、`other_matches: 0`——因为这 40 条从未导入过，和 v1 的重叠纯粹是结构模板共享，符合预期
+3. 走完整 `precheck`：40/40 可导入，0 个阻断错误，1052 条警告全部是 `microflow_reuse_candidate`（704 批内 + 348 跨版本）
+4. 确认导入为 v2，40 条全部成功
+5. 对完全相同的文件再跑一次 `/duplicate-check`：这次正确识别出 **40 个 `duplicate`**（文本相似度 1.0 且结构相似度 1.0 的自我匹配），证明真正的重复不会被放过
+
+**仍未做（下一轮）**：
+- 跨批结构命中要不要在 Prior 标注环节里显式呈现"这条和历史某条结构相似"供专家参考，目前只是预检报告里的一条警告文字，标注面板本身还没读取这个信号
+- 计算量会随历史数据量增长而变大（每次导入都要和全部历史记录比较一遍），目前 40 vs 20+8+32 的规模完全没问题，等数据量大到有性能问题时再考虑索引/分桶优化，现在不提前做
