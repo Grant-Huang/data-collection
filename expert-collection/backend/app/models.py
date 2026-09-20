@@ -199,6 +199,37 @@ class ImportConfirmRequest(BaseModel):
     import_records_without_errors: bool = False
 
 
+# --- Duplicate check (IMPLEMENTATION_PLAN.md section 10) ---
+# Standalone from precheck/import so it can be called on its own -- e.g. to inspect a file's
+# relationship to the existing corpus before deciding whether to fix and re-upload it.
+
+DuplicateKind = Literal["duplicate", "microflow_reuse_candidate", "content_match_structure_diff"]
+
+
+class DuplicateCheckRequest(BaseModel):
+    payload: dict  # same {dataset_meta, records[]} shape as import
+
+
+class DuplicateMatch(BaseModel):
+    record_id: str
+    matched_record_id: str
+    matched_version_number: Optional[int] = None  # None for a within-batch match
+    text_similarity: float
+    structure_similarity: float
+    kind: DuplicateKind
+
+
+class DuplicateCheckResult(BaseModel):
+    source_type: SourceType
+    total_records: int
+    # "duplicate" = same scenario AND same structure, definitionally a repeat.
+    # "microflow_reuse_candidate" = different scenario, similar structure -- likely the same
+    # reusable micro-workflow recurring, not a data-quality problem.
+    duplicates: list[DuplicateMatch]
+    reuse_candidates: list[DuplicateMatch]
+    other_matches: list[DuplicateMatch]  # content_match_structure_diff, rare edge case
+
+
 # --- Prior annotation (Phase 7 sub-phase B, IMPLEMENTATION_PLAN.md section 9.2) ---
 # "Public/LLM-derived Prior -> Expert-annotated Prior" from the design draft. Single-annotator
 # chain by decision -- no Cohen's kappa / Krippendorff's alpha here (design draft decision 3).

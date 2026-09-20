@@ -79,92 +79,157 @@ def _record_structure_sets(record: dict) -> tuple[set[str], set[str]]:
     return node_types, edge_types
 
 
-def _find_near_duplicates(records: list[dict], text_threshold: float, structure_threshold: float) -> list[dict]:
-    warnings: list[dict] = []
-    text_cache = [(_record_text_shingles(r)) for r in records]
+# --- Duplicate / micro-workflow-reuse classification -----------------------------------
+# Two-tier policy (per explicit product direction, not something the previous pure
+# OR-threshold version got right on its own):
+#
+# 1. "整体重复" (whole-record duplicate): the SCENARIO is repeated *and* the WORKFLOW
+#    (graph structure) is repeated -- text_sim AND struct_sim both clear their thresholds.
+#    This is genuinely the same data landing twice and is treated as a blocking error.
+# 2. "部分相似" (partial similarity / possible micro-workflow reuse): the scenario is
+#    NOT the same (text_sim below threshold) but the structure is similar anyway --
+#    struct_sim alone clears its threshold. This is the exact shape of legitimate
+#    cross-scenario micro-workflow reuse (experimental design §4.4: the same operational
+#    capability recurring across different end-to-end cases) and must not be treated as a
+#    data-quality defect. Reported as a distinct, named signal (not blocking) so it can be
+#    told apart from an actual duplicate rather than collapsed into one generic "near
+#    duplicate" warning.
+# A third, rarer combination -- text similar but structure different -- doesn't fit either
+# story cleanly (same scenario described, different process) and is reported separately
+# rather than silently merged into one of the two above.
+#
+# Both classifications remain a coarse, node/edge-*type-set* approximation (documented
+# elsewhere in this module as a stand-in for real Graph Edit Distance), not exact subgraph
+# matching -- "micro-workflow reuse candidate" here means "shares a DAG skeleton", not "we
+# identified which specific reusable sub-workflow was reused." That finer-grained analysis
+# belongs to the discovery pipeline (companion CWD experimental design), not import gating.
+
+DUPLICATE = "duplicate"
+MICROFLOW_REUSE_CANDIDATE = "microflow_reuse_candidate"
+CONTENT_MATCH_STRUCTURE_DIFF = "content_match_structure_diff"
+
+
+def _classify_pair(text_sim: float, struct_sim: float, text_threshold: float, structure_threshold: float) -> str | None:
+    text_hit = text_sim >= text_threshold
+    struct_hit = struct_sim >= structure_threshold
+    if text_hit and struct_hit:
+        return DUPLICATE
+    if struct_hit:
+        return MICROFLOW_REUSE_CANDIDATE
+    if text_hit:
+        return CONTENT_MATCH_STRUCTURE_DIFF
+    return None
+
+
+def _structure_similarity(a: tuple[set, set], b: tuple[set, set]) -> float:
+    node_sim = _jaccard(a[0], b[0])
+    edge_sim = _jaccard(a[1], b[1])
+    return (node_sim + edge_sim) / 2
+
+
+def _compare_within_batch(records: list[dict], text_threshold: float, structure_threshold: float) -> list[dict]:
+    """Raw comparison results (no issue-level wrapping) for every pair within one upload
+    batch. Reused by both precheck() (wraps these into _err/_warn issues) and could be
+    reused directly by callers that just want the classification, same as
+    compare_cross_version.
+    """
+    text_cache = [_record_text_shingles(r) for r in records]
     struct_cache = [_record_structure_sets(r) for r in records]
+    matches: list[dict] = []
     for i in range(len(records)):
         for j in range(i + 1, len(records)):
             text_sim = _jaccard(text_cache[i], text_cache[j])
-            node_sim = _jaccard(struct_cache[i][0], struct_cache[j][0])
-            edge_sim = _jaccard(struct_cache[i][1], struct_cache[j][1])
-            struct_sim = (node_sim + edge_sim) / 2
-            rid_i, rid_j = records[i].get("record_id", f"#{i}"), records[j].get("record_id", f"#{j}")
-            if text_sim >= text_threshold:
-                warnings.append(_warn(
-                    "near_duplicate_text",
-                    f"记录 {rid_i} 与 {rid_j} 的文本相似度 {round(text_sim, 2)}，疑似近重复流程",
-                ))
-            if struct_sim >= structure_threshold:
-                warnings.append(_warn(
-                    "near_duplicate_structure",
-                    f"记录 {rid_i} 与 {rid_j} 的结构相似度（节点/边类型集合近似值）{round(struct_sim, 2)}，疑似同模板改写",
-                ))
-    return warnings
+            struct_sim = _structure_similarity(struct_cache[i], struct_cache[j])
+            kind = _classify_pair(text_sim, struct_sim, text_threshold, structure_threshold)
+            if kind is None:
+                continue
+            matches.append({
+                "record_id": records[j].get("record_id", f"#{j}"),
+                "matched_record_id": records[i].get("record_id", f"#{i}"),
+                "matched_version_number": None,
+                "text_similarity": round(text_sim, 3),
+                "structure_similarity": round(struct_sim, 3),
+                "kind": kind,
+            })
+    return matches
 
 
-def _find_cross_version_duplicates(
+def compare_cross_version(
     records: list[dict], existing_records: list[dict], text_threshold: float, structure_threshold: float,
 ) -> list[dict]:
-    """Strict gatekeeping against everything already published under the same source_type
-    (IMPLEMENTATION_PLAN.md section 10) -- every import compares against the full existing
-    corpus, not just whichever batch happened to be uploaded together in the same file.
+    """Public (no leading underscore -- used directly by routers/datasets.py's standalone
+    /duplicate-check endpoint, not just internally by precheck) raw comparison of `records`
+    against everything already published under the same source_type
+    (IMPLEMENTATION_PLAN.md section 10: gatekeeping against the full existing corpus, not
+    just the current upload batch). Returns one entry per (new record, existing record)
+    pair that clears either threshold, classified via _classify_pair.
 
-    Deliberately different severities for text vs. structure, and both different from
-    _find_near_duplicates' within-batch warnings:
-
-    - Text similarity across versions is a precise, low-false-positive signal of genuine
-      re-import (the same underlying content landing under a new record_id) -- this blocks
-      import by default (error), through the same import_records_without_errors override
-      every other precheck error already uses.
-    - Structure-only similarity across versions is NOT blocked the same way. Verified against
-      a real cross-version import: treating it as blocking made 0/40 new records importable,
-      because the vast majority of hits were different scenarios (different industries,
-      different text) that happen to share the same DAG skeleton -- exactly the kind of
-      cross-scenario micro-workflow reuse the experimental design (§4.4) treats as an
-      intentional, expected property of this data, not noise to reject. So a structure-only
-      cross-version hit is reported as a warning (visible, not silently dropped) unless the
-      same pair *also* clears the text threshold, in which case it's folded into the text
-      error above rather than reported twice.
-
-    `existing_records` entries are expected to carry a `_version_number` key (attached by the
-    caller) purely for the message text; this function does not otherwise care where they
-    came from, and does not touch the database itself.
+    `existing_records` entries are expected to carry a `_version_number` key (attached by
+    the caller) purely so the output can say which published version the match is against;
+    this function does not otherwise care where they came from and never touches the
+    database itself.
     """
     if not existing_records:
         return []
-    issues: list[dict] = []
+    matches: list[dict] = []
     new_text = [_record_text_shingles(r) for r in records]
     new_struct = [_record_structure_sets(r) for r in records]
     exist_text = [_record_text_shingles(r) for r in existing_records]
     exist_struct = [_record_structure_sets(r) for r in existing_records]
     for i, new_r in enumerate(records):
-        rid = new_r.get("record_id")
         for j, ex_r in enumerate(existing_records):
             text_sim = _jaccard(new_text[i], exist_text[j])
-            node_sim = _jaccard(new_struct[i][0], exist_struct[j][0])
-            edge_sim = _jaccard(new_struct[i][1], exist_struct[j][1])
-            struct_sim = (node_sim + edge_sim) / 2
-            ex_version = ex_r.get("_version_number", "?")
-            ex_rid = ex_r.get("record_id")
-            if text_sim >= text_threshold:
-                issues.append(_err(
-                    "cross_version_near_duplicate_text",
-                    f"记录 {rid} 与已发布 v{ex_version} 版本中的 {ex_rid} 文本相似度 {round(text_sim, 2)}，"
-                    f"疑似跨版本重复（严格把关：默认阻断导入，确认是合理的相似场景可勾选跳过错误继续导入）",
-                    rid,
-                ))
-            elif struct_sim >= structure_threshold:
-                # Structure-only overlap across versions is reported but not blocking --
-                # see the docstring: verified against real data that treating this as an
-                # error rejects legitimate cross-scenario template reuse wholesale.
-                issues.append(_warn(
-                    "cross_version_near_duplicate_structure",
-                    f"记录 {rid} 与已发布 v{ex_version} 版本中的 {ex_rid} 结构相似度 {round(struct_sim, 2)}，"
-                    f"结构相似但文本不同，未阻断导入，如需人工复核可在标注环节确认",
-                    rid,
-                ))
-    return issues
+            struct_sim = _structure_similarity(new_struct[i], exist_struct[j])
+            kind = _classify_pair(text_sim, struct_sim, text_threshold, structure_threshold)
+            if kind is None:
+                continue
+            matches.append({
+                "record_id": new_r.get("record_id"),
+                "matched_record_id": ex_r.get("record_id"),
+                "matched_version_number": ex_r.get("_version_number"),
+                "text_similarity": round(text_sim, 3),
+                "structure_similarity": round(struct_sim, 3),
+                "kind": kind,
+            })
+    return matches
+
+
+_KIND_LABELS = {
+    DUPLICATE: "整体重复",
+    MICROFLOW_REUSE_CANDIDATE: "疑似微工作流复用",
+    CONTENT_MATCH_STRUCTURE_DIFF: "内容相近但结构不同",
+}
+
+
+def _match_to_issue(m: dict, scope: str) -> dict:
+    """scope: "batch" (within this upload) or "version" (against an already-published
+    version) -- only affects the message text, not the classification.
+    """
+    label = _KIND_LABELS[m["kind"]]
+    where = f"已发布 v{m['matched_version_number']} 版本中的 {m['matched_record_id']}" if scope == "version" else f"同批次记录 {m['matched_record_id']}"
+    detail = f"文本相似度 {m['text_similarity']}，结构相似度 {m['structure_similarity']}"
+    if m["kind"] == DUPLICATE:
+        return _err(
+            f"{scope}_duplicate",
+            f"记录 {m['record_id']} 与{where}{label}（{detail}），判定为重复，默认阻断导入（确认属于合理的相似场景可勾选跳过错误继续导入）",
+            m["record_id"],
+        )
+    return _warn(
+        f"{scope}_{m['kind']}",
+        f"记录 {m['record_id']} 与{where}{label}（{detail}），不阻断导入，如需人工复核可在 Prior 标注环节确认",
+        m["record_id"],
+    )
+
+
+def _find_near_duplicates(records: list[dict], text_threshold: float, structure_threshold: float) -> list[dict]:
+    return [_match_to_issue(m, "batch") for m in _compare_within_batch(records, text_threshold, structure_threshold)]
+
+
+def _find_cross_version_duplicates(
+    records: list[dict], existing_records: list[dict], text_threshold: float, structure_threshold: float,
+) -> list[dict]:
+    matches = compare_cross_version(records, existing_records, text_threshold, structure_threshold)
+    return [_match_to_issue(m, "version") for m in matches]
 
 
 def precheck(

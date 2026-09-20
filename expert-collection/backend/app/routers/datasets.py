@@ -12,7 +12,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import anonymize, audit, db, explain, import_pipeline, quality, settings as settings_module
-from ..models import DatasetVersionSummary, ImportConfirmRequest, PublishDatasetRequest
+from ..models import (
+    DatasetVersionSummary,
+    DuplicateCheckRequest,
+    DuplicateCheckResult,
+    DuplicateMatch,
+    ImportConfirmRequest,
+    PublishDatasetRequest,
+)
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -153,6 +160,34 @@ def _existing_records_for_gatekeeping(source_type: str) -> list[dict]:
         for r in _records_for_export(v):
             out.append({**r, "_version_number": v["version_number"]})
     return out
+
+
+@router.post("/duplicate-check", response_model=DuplicateCheckResult)
+def duplicate_check(req: DuplicateCheckRequest) -> DuplicateCheckResult:
+    """Standalone查重接口 (IMPLEMENTATION_PLAN.md section 10): classifies every record in
+    `payload` against the full existing corpus of the same source_type, independent of
+    precheck/import -- for inspecting a file's relationship to already-published data
+    (e.g. before deciding whether to fix and re-upload it) without going through the whole
+    ten-step precheck. Uses the exact same classification import/confirm relies on
+    internally, so results here are consistent with what a subsequent import would block.
+    """
+    source_type = (req.payload.get("dataset_meta") or {}).get("source_type")
+    records = req.payload.get("records")
+    if not source_type or records is None:
+        raise HTTPException(status_code=400, detail="上传内容需要包含 dataset_meta.source_type 和 records[]")
+
+    text_threshold, structure_threshold = _thresholds()
+    existing = _existing_records_for_gatekeeping(source_type)
+    matches = import_pipeline.compare_cross_version(records, existing, text_threshold, structure_threshold)
+
+    duplicates = [DuplicateMatch(**m) for m in matches if m["kind"] == "duplicate"]
+    reuse_candidates = [DuplicateMatch(**m) for m in matches if m["kind"] == "microflow_reuse_candidate"]
+    other = [DuplicateMatch(**m) for m in matches if m["kind"] == "content_match_structure_diff"]
+
+    return DuplicateCheckResult(
+        source_type=source_type, total_records=len(records),
+        duplicates=duplicates, reuse_candidates=reuse_candidates, other_matches=other,
+    )
 
 
 @router.post("/import/precheck")
