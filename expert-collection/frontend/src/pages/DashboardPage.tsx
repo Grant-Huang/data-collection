@@ -3,12 +3,13 @@
 // deferred (Dataset Slice-style industry/scenario cross-tabs, dual-source trend overlay).
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
-import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS } from "../api/types";
-import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
+import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, VERDICT_LABELS } from "../api/types";
+import type { AnnotationSummary, DatasetVersionSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { ImportPanel } from "../components/ImportPanel";
 import { TrendChart } from "../components/TrendChart";
+import { PriorAnnotationPanel } from "../components/PriorAnnotationPanel";
 
 type Tab = "quality" | "completeness" | "leakage" | "trend";
 
@@ -32,6 +33,9 @@ export function DashboardPage({ role }: { role: Role }) {
   const [tab, setTab] = useState<Tab>("quality");
   const [publishing, setPublishing] = useState(false);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [priorRecords, setPriorRecords] = useState<PriorRecordSummary[]>([]);
+  const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
+  const [annotatingRecordId, setAnnotatingRecordId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async (st: SourceType) => {
@@ -44,6 +48,19 @@ export function DashboardPage({ role }: { role: Role }) {
       setVersions(vs);
       setDraftCount(pool.count);
       setTrend(trendRes.points);
+
+      const latestId = vs[0]?.id;
+      if (st === "public_extracted" && latestId) {
+        const [records, summary] = await Promise.all([
+          api.listPriorRecords(latestId),
+          api.getAnnotationSummary(latestId),
+        ]);
+        setPriorRecords(records);
+        setAnnotationSummary(summary);
+      } else {
+        setPriorRecords([]);
+        setAnnotationSummary(null);
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -109,6 +126,55 @@ export function DashboardPage({ role }: { role: Role }) {
         {sourceType === "public_extracted" && (
           <div style={{ marginBottom: 16 }}>
             <ImportPanel role={role} onImported={() => refresh(sourceType)} />
+          </div>
+        )}
+
+        {sourceType === "public_extracted" && priorRecords.length > 0 && (
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）</div>
+              {annotationSummary && (
+                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
+                  标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
+                  {annotationSummary.annotated_records > 0 && (
+                    <span>
+                      {" "}
+                      （{(["accepted", "needs_revision", "rejected"] as const)
+                        .filter((v) => annotationSummary.verdict_counts[v])
+                        .map((v) => `${VERDICT_LABELS[v]} ${annotationSummary.verdict_counts[v]}`)
+                        .join("，")}
+                      ）
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div>
+              {priorRecords.map((r) => (
+                <div key={r.record_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5" }}>
+                  <div style={{ fontSize: 12.5 }}>
+                    {r.name} <span style={{ color: "#94a3b8" }}>（{r.node_count} 节点）</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span
+                      style={{
+                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                        background: r.prior_status === "expert_annotated" ? "#eafaea" : "#f1f5f9",
+                        color: r.prior_status === "expert_annotated" ? "#0ca30c" : "#667085",
+                      }}
+                    >
+                      {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
+                    </span>
+                    <button
+                      onClick={() => setAnnotatingRecordId(r.record_id)}
+                      style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 11.5, cursor: "pointer" }}
+                    >
+                      去标注
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -242,6 +308,16 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         )}
       </div>
+
+      {annotatingRecordId && latest && (
+        <PriorAnnotationPanel
+          versionId={latest.id}
+          recordId={annotatingRecordId}
+          role={role}
+          onClose={() => setAnnotatingRecordId(null)}
+          onSaved={() => refresh(sourceType)}
+        />
+      )}
     </div>
   );
 }

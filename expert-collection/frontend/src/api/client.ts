@@ -1,10 +1,15 @@
 import type {
+  AnnotationSummary,
   AuditLogEntry,
   ComparisonResult,
   CreateExperimentRequest,
   DatasetVersionSummary,
   ExperimentDetail,
   ExperimentSummary,
+  NodeVerdicts,
+  PriorRecordDetail,
+  PriorRecordSummary,
+  PriorVerdict,
   Settings,
   SourceType,
   TurnResponse,
@@ -80,6 +85,24 @@ export const api = {
     ),
   getTrend: (sourceType: SourceType) =>
     req<{ source_type: SourceType; points: TrendPoint[] }>("GET", `/api/datasets/trend?source_type=${sourceType}`),
+
+  listPriorRecords: (versionId: string) =>
+    req<PriorRecordSummary[]>("GET", `/api/datasets/versions/${versionId}/records`),
+  getPriorRecord: (versionId: string, recordId: string) =>
+    req<PriorRecordDetail>("GET", `/api/datasets/versions/${versionId}/records/${recordId}`),
+  submitAnnotation: (
+    versionId: string,
+    recordId: string,
+    verdict: PriorVerdict,
+    nodeVerdicts: NodeVerdicts,
+    note: string | null,
+    actorRole?: string,
+  ) =>
+    req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/annotations`, {
+      verdict, node_verdicts: nodeVerdicts, note, actor_role: actorRole,
+    }),
+  getAnnotationSummary: (versionId: string) =>
+    req<AnnotationSummary>("GET", `/api/datasets/versions/${versionId}/annotation-summary`),
 };
 
 export interface ImportPrecheckReport {

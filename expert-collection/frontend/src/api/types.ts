@@ -179,6 +179,54 @@ export interface DatasetVersionSummary {
   archived: boolean;
 }
 
+// --- Prior annotation (IMPLEMENTATION_PLAN.md section 9.2) ---
+// "Public/LLM-derived Prior" -> "Expert-annotated Prior". Single-annotator chain, no
+// multi-rater agreement (design draft decision 3) -- see PriorAnnotation.based_on_annotation_id.
+
+export type PriorStatus = "raw" | "expert_annotated";
+export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
+// node_id -> "keep" | "delete" | "merge_into:<other_node_id>"
+export type NodeVerdicts = Record<string, string>;
+
+export interface PriorAnnotation {
+  annotation_id: string;
+  version_id: string;
+  record_id: string;
+  based_on_annotation_id: string | null;
+  verdict: PriorVerdict;
+  node_verdicts: NodeVerdicts;
+  note: string | null;
+  actor_role: string | null;
+  annotated_at: string;
+}
+
+export interface PriorRecordDetail {
+  record_id: string;
+  name: string;
+  graph: Graph;
+  prior_status: PriorStatus;
+  annotations: PriorAnnotation[]; // oldest first
+}
+
+export interface PriorRecordSummary {
+  record_id: string;
+  name: string;
+  node_count: number;
+  prior_status: PriorStatus;
+  latest_verdict: PriorVerdict | null;
+}
+
+export interface AnnotationSummary {
+  version_id: string;
+  total_records: number;
+  annotated_records: number;
+  verdict_counts: Partial<Record<PriorVerdict, number>>;
+}
+
+export const VERDICT_LABELS: Record<PriorVerdict, string> = {
+  accepted: "采纳", needs_revision: "需要修改", rejected: "丢弃",
+};
+
 // --- Experiment Center (PRD 14) ---
 
 export type ExperimentMethod = "consensus_dfg" | "pm4py_inductive" | "pm4py_heuristics" | "llm_extractor";
