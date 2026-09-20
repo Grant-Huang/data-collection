@@ -17,6 +17,17 @@ Honesty about what this mock does and doesn't do, since it matters for how it's 
   mock does not attempt). It always advances one fixed stage at a time.
 
 Follow-up priorities referenced below (P0-P7) are PRD section 9.
+
+Scenario / Case Context (IMPLEMENTATION_PLAN.md section 9.1, design/case_context_and_prior_
+annotation_draft.md): before the original opening->trigger_detail flow, this module now asks
+three "Scenario" questions (A-group: trigger/goal/success) and four "Case Context" questions
+(B-group: known/unknown/constraints/resources). Per that draft's decision 1, the A-group's
+"simple/detailed" mode chips are literally answer templates ("简单说："/"详细说：...——") the
+expert types after -- no new frontend round trip needed, detail_level is read off which
+prefix the submitted text starts with. Per decision 2, the B-group is multi-select chips
+followed by one merged follow-up question when anything other than "无" is picked; "无" skips
+straight to the next question. Node-level "why did you do that" rationale (the original
+draft's C-group) is NOT implemented this round -- see IMPLEMENTATION_PLAN.md section 9.3.
 """
 from __future__ import annotations
 
@@ -31,6 +42,138 @@ NODE_TYPE_LABELS = {
     "merge": "汇合",
     "approval": "审批",
 }
+
+# --- Scenario (A-group) -----------------------------------------------------------------
+
+SCENARIO_CHIPS = {
+    "scenario_trigger": ["简单说：", "详细说：时间、影响范围、怎么发现的——"],
+    "scenario_goal": ["简单说：", "详细说：想达成什么、有什么顾虑——"],
+    "scenario_success": ["简单说：", "详细说：设备/订单/人员分别是什么状态——"],
+}
+
+# stage -> (question that leads into it, chips to show)
+SCENARIO_TRANSITIONS = {
+    "scenario_trigger": ("当时最主要的目标是什么？", "scenario_goal"),
+    "scenario_goal": ("如果这件事处理成功，应该是什么状态？", "scenario_success"),
+}
+
+
+def _detail_level(text: str) -> str:
+    return "detailed" if text.strip().startswith("详细说") else "brief"
+
+
+def _case_context_set(pending: dict, field: str, value: str) -> dict:
+    cc = dict(pending.get("case_context", {}))
+    cc[field] = value
+    return {**pending, "case_context": cc}
+
+
+def _case_context_set_detail(pending: dict, field: str, level: str) -> dict:
+    cc = dict(pending.get("case_context", {}))
+    levels = dict(cc.get("detail_level", {}))
+    levels[field] = level
+    cc["detail_level"] = levels
+    return {**pending, "case_context": cc}
+
+
+def _case_context_mark_skipped(pending: dict, field: str) -> dict:
+    cc = dict(pending.get("case_context", {}))
+    skipped = list(cc.get("skipped_fields", []))
+    if field not in skipped:
+        skipped.append(field)
+    cc["skipped_fields"] = skipped
+    cc.setdefault(field, "")
+    return {**pending, "case_context": cc}
+
+
+# --- Case Context (B-group) -------------------------------------------------------------
+
+B_GROUP_CONFIG: dict[str, dict] = {
+    "context_known": {
+        "field": "known_info",
+        "chips": ["设备/系统状态", "订单/生产计划信息", "过往类似案例", "他人反馈/汇报", "无"],
+        "followups": {},
+        "default_followup": "具体是什么信息？大概是什么时候、通过什么方式知道的？",
+        "next_question": "哪些信息是不知道的？",
+        "next_stage": "context_unknown",
+    },
+    "context_unknown": {
+        "field": "unknown_info",
+        "chips": ["故障/问题的根本原因", "影响范围有多大", "预计恢复/解决时间", "其他人的处理进展", "无"],
+        "followups": {},
+        "default_followup": "这些不确定，当时对你的判断或决策有什么影响？",
+        "next_question": "当时有哪些限制？（时间、安全、物料、跨部门协调等方面）",
+        "next_stage": "context_constraints",
+    },
+    "context_constraints": {
+        "field": "constraints",
+        "chips": ["时间紧", "安全风险", "缺备件/物料", "需要跨部门协调", "无"],
+        "followups": {
+            "时间紧": "当时给的时间窗口大概多久？",
+            "安全风险": "具体是什么风险？",
+            "缺备件/物料": "具体缺什么，大概什么时候能到？",
+            "需要跨部门协调": "需要协调哪些部门？",
+        },
+        "default_followup": "具体是什么限制？",
+        "next_question": "有哪些人或设备/资源可以帮忙、可用或不可用？",
+        "next_stage": "context_resources",
+    },
+    "context_resources": {
+        "field": "available_resources",
+        "chips": ["同班组同事", "设备/工艺工程师", "其他产线产能", "上级授权", "无"],
+        "followups": {},
+        "default_followup": "具体是谁/是什么？当时状态如何（在场、可调用，还是暂时不可用）？",
+        "next_question": None,
+        "next_stage": "trigger_detail",  # last B-group question feeds into the original flow
+    },
+}
+
+
+def _multiselect(text: str) -> list[str]:
+    # Split only on the separators the frontend joins selections with ("、") plus the
+    # obvious ASCII/full-width comma fallbacks for when the expert hand-edits the draft --
+    # NOT on "/" or whitespace, since several chip labels contain "/" themselves
+    # (e.g. "设备/系统状态", "缺备件/物料") and splitting on it breaks those apart.
+    parts = re.split(r"[、,，]+", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _b_group_advance(cfg: dict, pending: dict, ops: list[dict]) -> tuple[str, list[dict], dict, dict]:
+    if cfg["next_stage"] == "trigger_detail":
+        reply = "背景了解得差不多了，我们开始梳理你当时具体是怎么做的。当时是谁最先发现的？发现后第一件事做什么？"
+        nq = {"target": "trigger_discovery", "priority": "P0", "question": reply, "chips": None}
+        new_state = {"stage": "trigger_detail", "cursor": None, "pending": pending}
+        return reply, ops, nq, new_state
+    next_cfg = B_GROUP_CONFIG[cfg["next_stage"]]
+    reply = cfg["next_question"]
+    nq = {"target": "case_context_discovery", "priority": "P1", "question": reply,
+          "chips": next_cfg["chips"], "chip_mode": "multi_select"}
+    new_state = {"stage": cfg["next_stage"], "cursor": None, "pending": pending}
+    return reply, ops, nq, new_state
+
+
+def _handle_b_group_select(stage: str, text: str, pending: dict, ops: list[dict]) -> tuple[str, list[dict], dict, dict]:
+    cfg = B_GROUP_CONFIG[stage]
+    selected = _multiselect(text)
+    if not selected or selected == ["无"]:
+        pending = _case_context_mark_skipped(pending, cfg["field"])
+        return _b_group_advance(cfg, pending, ops)
+    pending = {**pending, "_b_selected": selected}
+    followups = [cfg["followups"][s] for s in selected if s in cfg["followups"]]
+    question = "；".join(followups) if followups else cfg["default_followup"]
+    nq = {"target": "case_context_discovery", "priority": "P1", "question": question, "chips": None}
+    new_state = {"stage": f"{stage}_clarify", "cursor": None, "pending": pending}
+    return question, ops, nq, new_state
+
+
+def _handle_b_group_clarify(stage: str, text: str, pending: dict, ops: list[dict]) -> tuple[str, list[dict], dict, dict]:
+    base_stage = stage[: -len("_clarify")]
+    cfg = B_GROUP_CONFIG[base_stage]
+    selected = pending.get("_b_selected", [])
+    combined = f"{'、'.join(selected)}：{text}" if selected else text
+    pending = _case_context_set(pending, cfg["field"], combined)
+    pending = {k: v for k, v in pending.items() if k != "_b_selected"}
+    return _b_group_advance(cfg, pending, ops)
 
 
 def initial_state() -> dict[str, Any]:
@@ -73,10 +216,38 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
     text = text.strip()
 
     if stage == "opening":
-        reply = f"好，我先把它理解成一段「{text[:24]}」相关的经历。当时是谁最先发现的？发现后第一件事做什么？"
-        nq = {"target": "trigger_discovery", "priority": "P0", "question": reply, "chips": None}
-        new_state = {"stage": "trigger_detail", "cursor": None, "pending": {"scenario": text}}
+        reply = f"好，我先把它理解成一段「{text[:24]}」相关的经历。当时具体发生了什么？为什么需要处理这件事？"
+        nq = {"target": "scenario_discovery", "priority": "P0", "question": reply,
+              "chips": SCENARIO_CHIPS["scenario_trigger"]}
+        new_state = {"stage": "scenario_trigger", "cursor": None, "pending": {"category": text}}
         return reply, ops, nq, new_state
+
+    if stage in SCENARIO_TRANSITIONS:
+        level = _detail_level(text)
+        pending = _case_context_set(pending, stage, text)
+        pending = _case_context_set_detail(pending, stage, level)
+        question, next_stage = SCENARIO_TRANSITIONS[stage]
+        nq = {"target": "scenario_discovery", "priority": "P0", "question": question,
+              "chips": SCENARIO_CHIPS[next_stage]}
+        new_state = {"stage": next_stage, "cursor": None, "pending": pending}
+        return question, ops, nq, new_state
+
+    if stage == "scenario_success":
+        level = _detail_level(text)
+        pending = _case_context_set(pending, "scenario_success", text)
+        pending = _case_context_set_detail(pending, "scenario_success", level)
+        first_cfg = B_GROUP_CONFIG["context_known"]
+        reply = "了解背景之后，再确认几个细节。当时你知道哪些信息？"
+        nq = {"target": "case_context_discovery", "priority": "P1", "question": reply,
+              "chips": first_cfg["chips"], "chip_mode": "multi_select"}
+        new_state = {"stage": "context_known", "cursor": None, "pending": pending}
+        return reply, ops, nq, new_state
+
+    if stage in B_GROUP_CONFIG:
+        return _handle_b_group_select(stage, text, pending, ops)
+
+    if stage.endswith("_clarify") and stage[: -len("_clarify")] in B_GROUP_CONFIG:
+        return _handle_b_group_clarify(stage, text, pending, ops)
 
     if stage == "trigger_detail":
         start_id, first_id = _nid(), _nid()
@@ -314,7 +485,9 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
                                              "edge_type": "normal", "confidence": 0.7, "expert_confirmed": False}},
             ]
         reply = "整理得差不多了。我已经把这张流程图画出来了，麻烦你在右边看一下有没有地方不对。"
-        new_state = {"stage": "review", "cursor": None, "pending": {}}
+        # Reset pending to drop stage-scratch state (branch tails etc.) but keep case_context --
+        # it was collected before any of that scratch state existed and has nothing to do with it.
+        new_state = {"stage": "review", "cursor": None, "pending": {"case_context": pending.get("case_context", {})}}
         return reply, ops, None, new_state
 
     # stage == "review" or unknown: nothing more to structurally extract

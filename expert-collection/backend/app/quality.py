@@ -95,12 +95,39 @@ def _dim(score: float, sub: dict[str, Any], scope_note: str) -> dict:
     return {"score": round(max(0.0, min(100.0, score)), 1), "band": _band(score), "sub_indicators": sub, "scope_note": scope_note}
 
 
-def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE) -> dict:
+CASE_CONTEXT_FIELDS = [
+    "scenario_trigger", "scenario_goal", "scenario_success",
+    "known_info", "unknown_info", "constraints", "available_resources",
+]
+
+
+def _case_context_fill_rate(case_contexts: list[dict | None]) -> float | None:
+    """Diagnostic only (IMPLEMENTATION_PLAN.md section 9.1) -- fraction of the 7 Scenario/
+    Case Context fields actually filled in (not skipped via the "无" chip), averaged across
+    workflows that have a case_context at all. Not folded into any dimension score yet --
+    that's a product decision left open in the design draft, not something to decide here.
+    Returns None when no workflow in this set has case_context (e.g. public_extracted
+    imports, which don't go through the conversational collection flow at all).
+    """
+    rates = []
+    for cc in case_contexts:
+        if not cc:
+            continue
+        skipped = set(cc.get("skipped_fields", []))
+        filled = sum(1 for f in CASE_CONTEXT_FIELDS if f not in skipped and (cc.get(f) or "").strip())
+        rates.append(filled / len(CASE_CONTEXT_FIELDS))
+    return round(sum(rates) / len(rates), 3) if rates else None
+
+
+def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE, case_contexts: list[dict | None] | None = None) -> dict:
     """graphs: list of Graph dicts (nodes/edges) for every workflow in the dataset version.
 
     min_sample_size defaults to the PRD 13.5.1 value but callers pass the live value from
     Settings (17.4) so a threshold change actually takes effect on the next publish, per
     IMPLEMENTATION_PLAN.md section 7.
+
+    case_contexts: parallel list to `graphs` (same order/length), each entry the workflow's
+    CaseContext dict or None. Optional and diagnostic-only -- see _case_context_fill_rate.
     """
     n = len(graphs)
     dims: dict[str, dict] = {}
@@ -145,7 +172,8 @@ def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE
     dims["completeness"] = _dim(
         completeness_score,
         {"avg_steps": round(avg_steps, 1), "pct_5plus_steps": round(pct_5plus, 1),
-         "pct_with_role_info": round(pct_with_roles, 1), "pct_with_decision_node": round(pct_with_decision, 1)},
+         "pct_with_role_info": round(pct_with_roles, 1), "pct_with_decision_node": round(pct_with_decision, 1),
+         "case_context_fill_rate": _case_context_fill_rate(case_contexts or [None] * n)},
         SCORING_STANDARDS["completeness"],
     )
 

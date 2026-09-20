@@ -62,6 +62,24 @@ export interface NextQuestion {
   priority: string;
   question: string;
   chips: string[] | null;
+  // "prefill" (or omitted): clicking a chip fills the whole draft box, single choice --
+  // this is also how the Scenario A-group's "简单说/详细说" mode chips work (the chip text
+  // IS the answer template, the expert types after it -- no separate mode round trip).
+  // "multi_select": chips toggle on/off, expert confirms the combined selection before it
+  // goes into the draft box (Case Context B-group). Never auto-sends either way.
+  chip_mode?: "prefill" | "multi_select" | null;
+}
+
+export interface CaseContext {
+  scenario_trigger: string | null;
+  scenario_goal: string | null;
+  scenario_success: string | null;
+  known_info: string | null;
+  unknown_info: string | null;
+  constraints: string | null;
+  available_resources: string | null;
+  detail_level: Record<string, string>;
+  skipped_fields: string[];
 }
 
 export interface ValidationIssue {
@@ -95,6 +113,7 @@ export interface WorkflowRecord {
   unresolved: NextQuestion[];
   completion: Completion;
   validation: ValidationIssue[];
+  case_context: CaseContext | null;
   created_at: string;
   updated_at: string;
 }

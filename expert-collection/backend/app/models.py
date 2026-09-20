@@ -76,6 +76,11 @@ class NextQuestion(BaseModel):
     question: str
     # None means no chips: this is a recall-type question (PRD section 18).
     chips: Optional[list[str]] = None
+    # "prefill" (default/omitted, existing behavior): clicking a chip fills the whole draft
+    # box, single choice. "multi_select": chips toggle on/off, expert confirms the combined
+    # selection before it goes into the draft box (IMPLEMENTATION_PLAN.md section 9.1,
+    # Case Context B-group). Never auto-sends either way -- PRD section 18 still applies.
+    chip_mode: Optional[Literal["prefill", "multi_select"]] = None
 
 
 class ValidationIssue(BaseModel):
@@ -99,6 +104,24 @@ class WorkflowSummary(BaseModel):
     updated_at: str
 
 
+class CaseContext(BaseModel):
+    """Scenario (A-group) + Case Context (B-group) -- IMPLEMENTATION_PLAN.md section 9.1.
+    All fields optional/empty-default because this fills in gradually turn by turn; a
+    workflow record mid-collection legitimately has a partially-filled CaseContext.
+    """
+    scenario_trigger: Optional[str] = None
+    scenario_goal: Optional[str] = None
+    scenario_success: Optional[str] = None
+    known_info: Optional[str] = None
+    unknown_info: Optional[str] = None
+    constraints: Optional[str] = None
+    available_resources: Optional[str] = None
+    # A-group: which fields the expert answered in "brief" vs "detailed" mode.
+    detail_level: dict[str, str] = Field(default_factory=dict)
+    # B-group: which fields the expert skipped by picking the "无" chip.
+    skipped_fields: list[str] = Field(default_factory=list)
+
+
 class WorkflowRecord(BaseModel):
     id: str
     name: str
@@ -109,6 +132,7 @@ class WorkflowRecord(BaseModel):
     unresolved: list[NextQuestion]
     completion: Completion
     validation: list[ValidationIssue] = Field(default_factory=list)
+    case_context: Optional[CaseContext] = None
     created_at: str
     updated_at: str
 

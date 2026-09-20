@@ -35,7 +35,10 @@ def _completion_score(record: dict) -> float:
     """
     stage = record["stage"]
     order = [
-        "opening", "trigger_detail", "main_path", "branch_check", "branch_condition_a",
+        "opening", "scenario_trigger", "scenario_goal", "scenario_success",
+        "context_known", "context_known_clarify", "context_unknown", "context_unknown_clarify",
+        "context_constraints", "context_constraints_clarify", "context_resources", "context_resources_clarify",
+        "trigger_detail", "main_path", "branch_check", "branch_condition_a",
         "branch_condition_b", "merge_check", "parallel_check", "parallel_branch_a",
         "parallel_branch_b", "approval_check", "approval_who", "retry_check",
         "retry_target", "end_condition", "review",
@@ -64,6 +67,7 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "unresolved": [next_question] if next_question else [],
         "completion": {"score": 0.0, "ready_for_confirmation": False},
         "validation": graph_validator.validate(graph),
+        "case_context": None,
         "created_at": now,
         "updated_at": now,
         "_guide_state": state,
@@ -112,6 +116,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     record["graph"] = graph_ops.apply_ops(record["graph"], ops)
     record["_guide_state"] = new_state
     record["stage"] = new_state["stage"]
+    record["case_context"] = new_state.get("pending", {}).get("case_context")
 
     assistant_turn_id = uuid.uuid4().hex[:8]
     record["turns"].append({"turn_id": assistant_turn_id, "role": "assistant", "text": assistant_reply})

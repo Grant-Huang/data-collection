@@ -82,7 +82,15 @@ export function SessionPage() {
       />
       <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined }}>
         <div style={{ width: right.width, height: "100%" }}>
-          {active && <DagView graph={active.graph} />}
+          {active && active.graph.nodes.length === 0 ? (
+            // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come
+            // before any graph node exists -- show that this is expected, not a stuck app.
+            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12.5, textAlign: "center", padding: 24 }}>
+              背景信息收集中，还没开始画图……
+            </div>
+          ) : (
+            active && <DagView graph={active.graph} />
+          )}
         </div>
       </div>
 

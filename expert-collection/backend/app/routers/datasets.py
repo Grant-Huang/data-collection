@@ -72,8 +72,9 @@ def publish_dataset(req: PublishDatasetRequest) -> DatasetVersionSummary:
         raise HTTPException(status_code=400, detail="草稿池为空，没有可发布的新记录")
 
     graphs = [w["graph"] for w in pool]
+    case_contexts = [w.get("case_context") for w in pool]
     min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
-    readiness = quality.compute_readiness(graphs, min_sample_size=min_sample_size)
+    readiness = quality.compute_readiness(graphs, min_sample_size=min_sample_size, case_contexts=case_contexts)
     explanations = explain.explain_all(readiness, pool)
 
     existing = db.list_dataset_versions(req.source_type)
@@ -208,6 +209,7 @@ def _records_for_export(version: dict) -> list[dict]:
             "scenario": {"scenario_name": w["name"]},
             "graph": w["graph"],
             "provenance": {"source_type": "expert_collected"},
+            "case_context": w.get("case_context"),
         })
     return out
 
