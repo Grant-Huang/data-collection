@@ -137,11 +137,31 @@ def _thresholds() -> tuple[float, float]:
     return qp["near_dup_text_threshold"], qp["near_dup_structure_threshold"] or 0.7
 
 
+def _existing_records_for_gatekeeping(source_type: str) -> list[dict]:
+    """Every record already published under `source_type`, across all still-active (not
+    archived) dataset_versions -- the cross-version comparison corpus for import_pipeline's
+    strict gatekeeping (IMPLEMENTATION_PLAN.md section 10). Archived versions are excluded:
+    they were intentionally retired, so gatekeeping against still-active data only.
+    Reuses _records_for_export so expert_collected and public_extracted are normalized the
+    same way this module already normalizes them for every other cross-cutting use (export,
+    drill-down).
+    """
+    out: list[dict] = []
+    for v in db.list_dataset_versions(source_type):
+        if v.get("archived"):
+            continue
+        for r in _records_for_export(v):
+            out.append({**r, "_version_number": v["version_number"]})
+    return out
+
+
 @router.post("/import/precheck")
 def import_precheck(payload: dict) -> dict:
     text_threshold, structure_threshold = _thresholds()
+    source_type = (payload.get("dataset_meta") or {}).get("source_type")
+    existing = _existing_records_for_gatekeeping(source_type) if source_type else []
     try:
-        return import_pipeline.precheck(payload, text_threshold, structure_threshold)
+        return import_pipeline.precheck(payload, text_threshold, structure_threshold, existing_records=existing)
     except (KeyError, TypeError) as e:
         raise HTTPException(status_code=400, detail=f"上传内容不是预期的 {{dataset_meta, records[]}} 结构：{e}")
 
@@ -149,7 +169,9 @@ def import_precheck(payload: dict) -> dict:
 @router.post("/import/confirm", response_model=DatasetVersionSummary)
 def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
     text_threshold, structure_threshold = _thresholds()
-    report = import_pipeline.precheck(req.payload, text_threshold, structure_threshold)
+    source_type = (req.payload.get("dataset_meta") or {}).get("source_type")
+    existing = _existing_records_for_gatekeeping(source_type) if source_type else []
+    report = import_pipeline.precheck(req.payload, text_threshold, structure_threshold, existing_records=existing)
     if report["error_count"] > 0 and not req.import_records_without_errors:
         raise HTTPException(status_code=422, detail={"message": "预检有阻断错误，未确认跳过错误记录", "report": report})
 
