@@ -25,3 +25,4 @@ expert-collection/backend/data/
 ## expert-collection frontend (Node)
 expert-collection/frontend/node_modules/
 expert-collection/frontend/dist/
+expert-collection/frontend/tsconfig.tsbuildinfo
