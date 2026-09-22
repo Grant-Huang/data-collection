@@ -311,7 +311,21 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 原来六处调用点各自的 `_needs_parallel_clarify` + `_add_step_nodes` 双重调用，统一收敛成 `_understand_step()` 只调一次 + `_apply_understanding()` 三路分发（`ambiguous`→追问，`parallel`→直接建 split/join 结构，其余→串行链）——**这里测试时抓到一个真实 bug**：一开始的实现只处理了"ambiguous"和"其他都当串行"两种情况，遗漏了大模型可以直接、自信地判定"parallel"（不需要追问）这条路径——用 regex 版本测不出这个 bug，因为 regex 永远只会给出"ambiguous"或"serial"，从来不会自信地直接说"parallel"；是用一个自建的 stub 场景（模型固定返回 `relationship: "parallel"`，且 clauses 内容跟输入原文完全无关，专门设计用来证明真的是 LLM 路径在起作用而不是 regex 兜底）测出来的：串行链被误建了，没有生成该有的 `parallel_split`/`parallel_join` 结构。加了 `_apply_understanding()` 统一三路分发后修复
 - **已验证**：真实 HTTP 端到端跑通四条路径——① 未配置任何 LLM 时行为跟换模型之前完全一致（回归测试）；② LLM 自信判定 parallel，直接生成 split/branches/join，不问澄清问题；③ LLM 判定 ambiguous，走跟之前 PR #11 一样的"先后做/同时做"追问流程，但 clauses 内容来自 LLM 输出而不是 regex 提取；④ LLM 调用失败（5xx）时正确退回 regex 路径，行为跟未配置时一致，不崩溃不挂起
 
-**还没做（下一步）**：(b) 验收2 要求的"至少3个regex处理不了但真模型能处理"的真实语义变体测试——这个要接到真实模型才能测，自建 stub 只能测"插拔链路对不对"，测不出真实语言理解能力；(c) 更正/回退能力整个还没动；(d) 延迟/temperature生效的量化验收还没做。
+**(c) 已实现**（更正/回退能力，设计讨论定下来的完整方案）：
+- `graph_ops.py`：`remove_node`/`remove_edge` 本来就已经存在（早期就是按"LLM 修改与人工修改共用一套变更协议"设计的），这次只补了一个真实 bug——`remove_node` 之前没有把节点从 `start_node_ids`/`end_node_ids` 里摘掉，回退掉"开始"节点所在的那一轮时会留下悬空引用
+- `guide_service.handle_turn(state, text, turn_id=None)`：新增 `turn_id` 参数，处理完一轮后统一给这一轮产出的所有 `add_node`/`add_edge` 打上 `source_turn_ids: [turn_id]`（原来的内层函数改名 `_dispatch_turn`，逻辑不变，只是外面套了一层打标签）
+- `_understand_step_and_check_correction(text)`：跟 `_understand_step` 平行的另一个 LLM 调用，多问模型一件事——"这句话是不是在更正/撤回之前的内容"，同一次调用返回，不额外增加一次往返；规则兜底路径永远返回 `is_correction: False`（跟这个能力存在之前的行为完全一样，符合决策：这本质是语义判断，关键词表不可靠，交给真模型）
+- 六个步骤创建 stage 全部接入：检测到 `is_correction` 时不建节点，转去问"要回退重做吗？"（`_start_correction_confirm`），"不是" 会用 `skip_correction_check=True` 重新走一遍原文字对应的原 stage（避免同一句话被反复判成更正、死循环）；"是" 转到一个 guide_service 自己没法处理的 stage（`awaiting_turn_selection_setup`）——因为候选轮次列表需要完整的图和对话历史，guide_service 这个模块设计上就不碰这些，只管对话逻辑
+- `routers/expert_workflows.py` 新增：`_describe_turn`（按图里这一轮实际生成的节点内容描述"这一轮做了什么"，并行结构自动合并成一项，不会把并行分支内部的某个节点单独列成候选——因为这一整个并行结构本来就是同一轮原子生成的，"这一轮"天然就是主干线上的合法检查点）、`_correction_candidates`（最近5轮，过滤掉内部机制性的几个 stage，不会让专家看到"「是，回退重做」"这种没意义的选项）、`_rollback_to_turn`（按轮次在 `_turn_state_log` 里的位置找到截止点，把这个位置及之后所有轮次产生的节点/边一次性摘掉，状态和对话记录都截断回去，取出原来问的那个问题重新问一遍）
+- `post_turn` 里两处特殊接入：guide_service 返回 `awaiting_turn_selection_setup` 时，router 把候选列表填进 `chips` 里、状态推进到 `awaiting_turn_selection`；下一轮专家选中某个选项时，`awaiting_turn_selection` 这个 stage 完全由 router 自己处理，压根不经过 `guide_service.handle_turn`（这一轮不需要理解自然语言，只是把选中的候选映射回具体轮次执行回退）
+
+**已验证**：真实 HTTP 端到端跑通完整链路（用一个能识别"我说错了"关键词、模拟"这轮是不是更正"判断的自建 stub 场景）——① 在 `branch_condition_b` 说"我说错了"被正确识别成更正，问出确认问题，这一轮本身不建任何节点；② 点"是，回退重做"后，候选列表正确列出最近5轮，每一项描述都对：并行/复合轮次合并成一项、`decision`/`parallel_split` 这类结构节点不出现在描述文字里、没建过节点的轮次正确回退成显示专家原话；③ 选中一个候选后，该轮次及之后所有节点/边被正确移除（含悬空的"开始"节点边界情形），FSM 状态正确回退，之前问过的原始问题被重新问出来，专家能正常继续把内容说一遍，图从回退点起正确重新生长；④ 点"不是，这是新的一步"能正确恢复原状态、重新处理原文字，不会死循环重复问"是不是更正"；⑤ 构造了一个包含"不对"但明显不是更正的句子（"这个判断标准不对称，需要两边都测"），确认没有被误判成更正，正常建节点、不弹确认问题；⑥ 常规回归（未配置 LLM）行为不变，且确认 `source_turn_ids` 现在真的被赋值了（不再是 `[]`）。
+
+**(d) 还没做**：延迟/`temperature` 生效的量化验收——这个需要接真实模型才能测出有意义的数字，自建 stub 服务器本地环回延迟接近 0，测不出真实场景下的 P95。
+
+**(b) 还差**：验收2 要求的"至少3个 regex 处理不了但真模型能处理"的真实语义变体测试——这个要接到真实模型才能测，自建 stub 只能测"插拔链路对不对"，测不出真实语言理解能力。
+
+至此，§15.1-①(a)(b)(c) 三个子项的插拔链路和降级逻辑全部经过真实 HTTP 端到端验证；(b)(d) 各剩一项必须接真实模型才能验的测试，等你接入真实 endpoint 后一起补上。下一步按排定顺序推进 §15.2-①②（实验解读）。
 
 ### §15.2-①② 实验结果解读 + 多实验对比解读（`explain.py`，C_flagship，合并做）
 

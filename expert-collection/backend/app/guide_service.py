@@ -238,12 +238,35 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(k in text for k in keywords)
 
 
-def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
+def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None
+                 ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
     """Returns (assistant_reply, graph_ops, next_question_or_None, new_state).
 
     next_question is None only on the final ("review") turn -- the caller treats that as
     "nothing left to ask right now", matching PRD 3.5's move from "keep asking" to "final
     confirmation" once completion is high enough.
+
+    `turn_id` (IMPLEMENTATION_PLAN.md section 14, §15.1-①(c)) is stamped onto every
+    `add_node`/`add_edge` op's `source_turn_ids` this call produces, so a later turn can be
+    traced back to and undone -- see the "correction/rollback" stages below. Callers that
+    don't pass one (or don't need undo) get the previous behavior (`source_turn_ids: []`).
+    """
+    reply, ops, nq, new_state = _dispatch_turn(state, text)
+    if turn_id:
+        for op in ops:
+            if op.get("op") == "add_node":
+                op["node"]["source_turn_ids"] = [turn_id]
+            elif op.get("op") == "add_edge":
+                op["edge"]["source_turn_ids"] = [turn_id]
+    return reply, ops, nq, new_state
+
+
+def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool = False
+                    ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
+    """The actual FSM dispatch, previously named `handle_turn`. `skip_correction_check` is
+    used only when re-processing an expert's original text after they declined the "was this
+    a correction?" prompt (see the "correction_confirm" stage) -- without it, re-running the
+    exact same text through the exact same stage could flag it as a correction again and loop.
     """
     stage = state["stage"]
     cursor = state["cursor"]
@@ -288,18 +311,40 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
     if stage == "compound_parallel_clarify":
         return _resolve_parallel_clarify(text, pending, ops)
 
+    if stage == "correction_confirm":
+        correction = pending["_correction"]
+        if _contains_any(text, ["不是"]):
+            restored_state = {"stage": correction["original_stage"], "cursor": correction["original_cursor"],
+                               "pending": correction["original_pending"]}
+            return _dispatch_turn(restored_state, correction["original_text"], skip_correction_check=True)
+        # "是，回退重做" (or anything else -- this file's existing convention is to only
+        # special-case the explicit negative answer, same as parallel_check/approval_check).
+        # The actual candidate turn list needs the full graph + turn transcript, which this
+        # module doesn't have access to -- routers/expert_workflows.py fills `chips` in and
+        # advances the stage to "awaiting_turn_selection" right after this call returns.
+        reply = "好，要回退到哪一步？（列出最近几轮，选中之后我会把这一步和它之后的内容都撤销，然后请你重新说一遍）"
+        nq = {"target": "correction_turn_pick", "priority": "P0", "question": reply, "chips": None}
+        new_state = {"stage": "awaiting_turn_selection_setup", "cursor": cursor, "pending": pending}
+        return reply, ops, nq, new_state
+
     if stage == "trigger_detail":
+        understanding = (_understand_step(text) if skip_correction_check
+                          else _understand_step_and_check_correction(text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         start_id = _nid()
         ops += [
             {"op": "add_node", "node": {"node_id": start_id, "node_type": "start", "label": "开始",
                                          "source_turn_ids": [], "confidence": 0.9, "expert_confirmed": False}},
             {"op": "set_start", "node_id": start_id},
         ]
-        understanding = _understand_step(text)
         return _apply_understanding("trigger_detail", start_id, understanding, pending, ops, confidence=0.9)
 
     if stage == "main_path":
-        understanding = _understand_step(text)
+        understanding = (_understand_step(text) if skip_correction_check
+                          else _understand_step_and_check_correction(text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         return _apply_understanding("main_path", cursor, understanding, pending, ops)
 
     if stage == "branch_check":
@@ -326,14 +371,20 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
     if stage == "branch_condition_a":
         condition, rest = _split_condition(text)
         step_text = rest or text
-        understanding = _understand_step(step_text)
+        understanding = (_understand_step(step_text) if skip_correction_check
+                          else _understand_step_and_check_correction(step_text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         return _apply_understanding("branch_condition_a", cursor, understanding, pending, ops,
                                      edge_type="conditional", condition=condition, confidence=0.8)
 
     if stage == "branch_condition_b":
         condition, rest = _split_condition(text)
         step_text = rest or text
-        understanding = _understand_step(step_text)
+        understanding = (_understand_step(step_text) if skip_correction_check
+                          else _understand_step_and_check_correction(step_text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         return _apply_understanding("branch_condition_b", cursor, understanding, pending, ops,
                                      edge_type="conditional", condition=condition, confidence=0.8)
 
@@ -380,12 +431,18 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return reply, ops, nq, new_state
 
     if stage == "parallel_branch_a":
-        understanding = _understand_step(text)
+        understanding = (_understand_step(text) if skip_correction_check
+                          else _understand_step_and_check_correction(text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         return _apply_understanding("parallel_branch_a", cursor, understanding, pending, ops,
                                      edge_type="parallel", confidence=0.8)
 
     if stage == "parallel_branch_b":
-        understanding = _understand_step(text)
+        understanding = (_understand_step(text) if skip_correction_check
+                          else _understand_step_and_check_correction(text))
+        if not skip_correction_check and understanding.get("is_correction"):
+            return _start_correction_confirm(stage, cursor, pending, text)
         return _apply_understanding("parallel_branch_b", cursor, understanding, pending, ops,
                                      edge_type="parallel", confidence=0.8)
 
@@ -592,6 +649,85 @@ def _understand_step(text: str) -> dict:
     clauses = _extract_step_clauses(text)
     relationship = "ambiguous" if _needs_parallel_clarify(text) else "serial"
     return {"clauses": clauses, "relationship": relationship}
+
+
+_CORRECTION_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的解析模块。除了把专家这句话解析成步骤描述之外，你还要判断一件事：专家这句话主要是在更正/撤回自己刚才说过的内容（比如"我说错了""不对，应该是""刚才说错了"这类），还是在正常回答当前问题、描述新的一步。
+
+只输出一个 JSON object，字段：
+- "is_correction"：boolean。true 表示这句话主要是在更正/撤回之前的内容。只有整体意思确实是在更正时才填 true——文字里出现"不对"这类词，但整体还是在正常描述业务事实（比如"这个判断标准不对称"），要填 false，不能只看字面关键词。
+- "clauses"：字符串数组，规则跟 _understand_step 一样（提炼、去掉背景交代和时序填充词）。is_correction 为 true 时，这里放这句话里能看出来的、专家想要更正成的新描述，取不到就放一个整体概括。
+- "relationship"："serial"/"parallel"/"ambiguous"，规则同上，clauses 长度 1 时固定 "serial"。
+
+只输出 JSON，不要有任何其他文字。"""
+
+
+def _llm_understand_step_and_correction(text: str, slot_config: dict) -> dict | None:
+    try:
+        parsed = llm_client.chat_completion_json(slot_config, [
+            {"role": "system", "content": _CORRECTION_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ])
+    except llm_client.LLMError:
+        return None
+
+    is_correction = parsed.get("is_correction")
+    if not isinstance(is_correction, bool):
+        return None
+
+    clauses = parsed.get("clauses")
+    if (not isinstance(clauses, list) or not clauses
+            or not all(isinstance(c, str) and c.strip() for c in clauses)):
+        return None
+    clauses = [c.strip()[:60] for c in clauses]
+
+    relationship = parsed.get("relationship") if len(clauses) >= 2 else "serial"
+    if relationship not in ("serial", "parallel", "ambiguous"):
+        return None
+
+    return {"clauses": clauses, "relationship": relationship, "is_correction": is_correction}
+
+
+def _understand_step_and_check_correction(text: str) -> dict:
+    """Same contract as `_understand_step`, plus an `is_correction` flag -- whether this turn
+    reads like the expert retracting/correcting something they just said rather than
+    describing the next step. Reliably telling those apart needs real semantic judgment a
+    keyword list cannot do safely (IMPLEMENTATION_PLAN.md section 13's known-gap decision:
+    a closed keyword list both false-positives on ordinary text and false-negatives on
+    unlisted phrasings) -- so the rule-based fallback always reports `is_correction: False`,
+    identical to this module's behavior before this capability existed. Only call this from
+    the six step-creating stages when `skip_correction_check` is False; a caller re-processing
+    text after the expert already declined the "was this a correction?" prompt should call
+    `_understand_step` instead, to avoid asking the same question twice on the same text.
+    """
+    slot_config = app_settings.resolve_slot_for_call(app_settings.get_effective_settings(), "guide_service")
+    if slot_config.get("enabled") and slot_config.get("endpoint") and slot_config.get("model_name"):
+        result = _llm_understand_step_and_correction(text, slot_config)
+        if result is not None:
+            return result
+    clauses = _extract_step_clauses(text)
+    relationship = "ambiguous" if _needs_parallel_clarify(text) else "serial"
+    return {"clauses": clauses, "relationship": relationship, "is_correction": False}
+
+
+def _start_correction_confirm(stage: str, cursor: str | None, pending: dict, text: str
+                               ) -> tuple[str, list[dict], dict, dict]:
+    """The model flagged this turn as a correction of something the expert already said.
+    Rather than trust that judgment silently -- a false positive here would mean silently
+    discarding graph content the expert didn't actually want removed -- ask first, the same
+    "never auto-execute a destructive read of the expert's intent" rule this file already
+    applies to chip answers. Declining (see the "correction_confirm" stage above) resumes
+    normal processing of the exact same text at the exact same stage, as if this check had
+    never fired.
+    """
+    correction = {"original_stage": stage, "original_cursor": cursor,
+                  "original_pending": {k: v for k, v in pending.items() if k != "_correction"},
+                  "original_text": text}
+    reply = "检测到你好像是想修改之前说过的内容，要回退重做吗？"
+    nq = {"target": "correction_confirm", "priority": "P0", "question": reply,
+          "chips": ["是，回退重做", "不是，这是新的一步"]}
+    new_state = {"stage": "correction_confirm", "cursor": cursor,
+                  "pending": {**pending, "_correction": correction}}
+    return reply, [], nq, new_state
 
 
 def _build_step_chain(ops: list[dict], from_id: str, clauses: list[str], edge_type: str = "normal",
