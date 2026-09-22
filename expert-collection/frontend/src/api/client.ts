@@ -48,6 +48,11 @@ export const api = {
     req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType, actor_role: actorRole }),
   archiveDatasetVersion: (versionId: string) =>
     req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/archive`),
+  markDatasetVersionGold: (versionId: string, isGold: boolean, actorRole?: string) =>
+    req<DatasetVersionSummary>(
+      "POST",
+      `/api/datasets/versions/${versionId}/mark-gold?is_gold=${isGold}&actor_role=${encodeURIComponent(actorRole ?? "unknown")}`,
+    ),
   listDatasetVersions: (sourceType: SourceType, includeArchived = false) =>
     req<DatasetVersionSummary[]>(
       "GET",

@@ -177,6 +177,7 @@ export interface DatasetVersionSummary {
   created_at: string;
   readiness: DatasetReadiness;
   archived: boolean;
+  is_gold: boolean;
 }
 
 // --- Prior annotation (IMPLEMENTATION_PLAN.md section 9.2) ---

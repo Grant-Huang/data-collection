@@ -93,6 +93,16 @@ export function DashboardPage({ role }: { role: Role }) {
     }
   }
 
+  async function handleToggleGold(versionId: string, nextIsGold: boolean) {
+    setError(null);
+    try {
+      await api.markDatasetVersionGold(versionId, nextIsGold, role);
+      await refresh(sourceType);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   const latest = versions[0] ?? null;
   const readiness = latest?.readiness ?? null;
 
@@ -215,7 +225,22 @@ export function DashboardPage({ role }: { role: Role }) {
         ) : (
           <>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 11.5, color: "#94a3b8" }}>导出当前版本（v{latest.version_number}）：</div>
+              <div style={{ fontSize: 11.5, color: "#94a3b8", display: "flex", alignItems: "center", gap: 8 }}>
+                导出当前版本（v{latest.version_number}）：
+                {latest.is_gold && (
+                  <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "2px 10px", background: "#fff7e6", color: "#b45309" }}>
+                    ★ Gold 版本
+                  </span>
+                )}
+                {role === "admin" && (
+                  <button
+                    onClick={() => handleToggleGold(latest.id, !latest.is_gold)}
+                    style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "2px 10px", fontSize: 11, cursor: "pointer" }}
+                  >
+                    {latest.is_gold ? "取消 Gold 标记" : "标记为 Gold 版本"}
+                  </button>
+                )}
+              </div>
               <div style={{ display: "flex", gap: 8 }}>
                 {EXPORT_FORMATS.map((f) => (
                   <a

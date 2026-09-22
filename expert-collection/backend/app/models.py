@@ -184,6 +184,7 @@ class DatasetVersionSummary(BaseModel):
     created_at: str
     readiness: DatasetReadiness
     archived: bool = False
+    is_gold: bool = False
 
 
 class PublishDatasetRequest(BaseModel):

@@ -63,6 +63,7 @@ def _to_summary(version: dict) -> DatasetVersionSummary:
         created_at=version["created_at"],
         readiness={**readiness, "dimensions": dims_with_explanations},
         archived=version.get("archived", False),
+        is_gold=version.get("is_gold", False),
     )
 
 
@@ -119,6 +120,24 @@ def archive_version(version_id: str, actor_role: str = "unknown") -> DatasetVers
     version["archived"] = True
 
     audit.log(actor_role, "dataset_archive", {"dataset_version_id": version_id})
+
+    return _to_summary(version)
+
+
+@router.post("/versions/{version_id}/mark-gold", response_model=DatasetVersionSummary)
+def mark_gold_version(version_id: str, is_gold: bool = True, actor_role: str = "unknown") -> DatasetVersionSummary:
+    """PRD 16.1/16.2: admin-only in principle (no backend permission enforcement yet -- same
+    honest gap as every other admin action in this codebase, see assumption 1/5/7; the
+    frontend hides this control for non-admin roles, the audit log records who actually did it).
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    db.set_dataset_version_gold(version_id, is_gold)
+    version["is_gold"] = is_gold
+
+    audit.log(actor_role, "dataset_mark_gold" if is_gold else "dataset_unmark_gold",
+              {"dataset_version_id": version_id})
 
     return _to_summary(version)
 

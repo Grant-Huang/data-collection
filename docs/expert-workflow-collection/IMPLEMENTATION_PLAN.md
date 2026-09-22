@@ -390,6 +390,18 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 这项不是"换模型"能解决的，是产品设计缺口：谁来定义标准答案、多专家标注 UI 怎么呈现分歧、一致性系数（Cohen's κ）怎么算怎么用
 - 验收：这一项"完成"的标志是**先有一份定稿的产品设计文档**，不是直接写代码——排在纯 LLM 替换工作（§15.1/§15.2）之后
 
+**设计已定稿（用户确认四个关键决策）**：PRD 里"Gold"其实是两层不同粒度的概念，拆成两个子项分别交付：
+
+**C-1：数据集版本级 Gold 标记（PRD §16.1，小，已实现）**
+- `dataset_versions` 的 JSON 数据里新增 `is_gold: bool`（不新增 SQL 列，跟大多数版本级标记一样只存在 `data` 里），`db.set_dataset_version_gold()` 读写
+- 新增 `POST /api/datasets/versions/{id}/mark-gold?is_gold=true|false`，管理员操作，写审计日志（`dataset_mark_gold`/`dataset_unmark_gold`）——沿用现有"后端不做权限强制、前端隐藏非管理员入口、审计记录真实操作人"的诚实惯例（跟归档功能同一个模式，assumption 1/5/7 的老问题，不重新讨论）
+- 前端 `DashboardPage.tsx`：当前版本旁边显示"★ Gold 版本"徽章，管理员角色能看到"标记为 Gold 版本"/"取消 Gold 标记"按钮
+- **已验证**：真实调用 mark-gold/unmark-gold，确认 `is_gold` 正确持久化、列表接口正确返回、审计日志正确记录操作人和动作；`tsc -b` 通过
+
+**C-2：记录级双人独立标注 + 仲裁 + Cohen's κ（大，进行中）**——用户确认的四个决策：① `expert_collected` 和 `public_extracted` 都需要 Gold；② `expert_collected` 要独立第二人复核，不是自我确认；③ 第一版先做整图级别判定，升级现有 Prior 标注链为双人独立，不做字段级（Boundary/Role/Edge/Condition 分别标注）；④ 分歧时第三人仲裁。
+
+**现实约束（提前说明，不是实现时才发现）**：产品目前没有真实账号系统（assumption 1），"双人独立"没法在系统层面验证"这两次真的是两个不同的人"。解决办法：标注时新增必填的"标注人姓名"文本框（诚实的轻量身份代理，跟现有 `actor_role` 同一个档次），第二次独立标注/仲裁时校验姓名跟之前的不同，挡不住存心作弊但挡得住无意识重复点击。
+
 ### §14 实验中心其余方法
 
 - `pm4py_inductive`/`pm4py_heuristics`（集成开源库，跟 LLM 无关）：验收是真实跑通、产出真实指标，不是空跑占位
