@@ -20,7 +20,21 @@ Honesty about what this mock does and doesn't do, since it matters for how it's 
   about that one action, not the whole compound sentence and not a fabricated summary of it.
 - It cannot handle expert input arriving out of the expected order (PRD 3.2's "if the expert
   volunteers later information early, extract it immediately" is a real-LLM capability this
-  mock does not attempt). It always advances one fixed stage at a time.
+  mock does not attempt). It always advances one fixed stage at a time -- including when the
+  expert is actually correcting something they just said ("哦，我说错了，..."): this mock has
+  no way to tell "that's a retraction of the last node(s)" from "that's the next step", so a
+  correction still gets recorded forward as a new step, with whatever preamble the expert used
+  to flag it as a correction left in. Genuinely detecting and undoing a correction needs real
+  language understanding (KNOWN GAP -- see IMPLEMENTATION_PLAN.md section 13 -- deliberately
+  left for the real L model rather than approximated with keyword matching here, since
+  "was this a correction" is exactly the kind of judgment call a closed keyword list gets
+  wrong often enough to do more harm than the bug it's meant to fix).
+- One thing this mock *does* ask about rather than silently guess: when a compound sentence
+  splits on "并"/"并且"/"同时" specifically (as opposed to "然后"/"、", which read
+  unambiguously as sequential), whether the two actions were done one after another or at the
+  same time is genuinely ambiguous from the words alone -- so `_needs_parallel_clarify` routes
+  through a "先后做/同时做" clarifying question (reusing the same chips PRD 18 already defines
+  for this fork elsewhere) instead of defaulting to either shape.
 
 Follow-up priorities referenced below (P0-P7) are PRD section 9.
 
@@ -255,6 +269,9 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
     if stage.endswith("_clarify") and stage[: -len("_clarify")] in B_GROUP_CONFIG:
         return _handle_b_group_clarify(stage, text, pending, ops)
 
+    if stage == "compound_parallel_clarify":
+        return _resolve_parallel_clarify(text, pending, ops)
+
     if stage == "trigger_detail":
         start_id = _nid()
         ops += [
@@ -262,19 +279,17 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
                                          "source_turn_ids": [], "confidence": 0.9, "expert_confirmed": False}},
             {"op": "set_start", "node_id": start_id},
         ]
+        if _needs_parallel_clarify(text):
+            return _start_parallel_clarify("trigger_detail", start_id, _extract_step_clauses(text),
+                                            pending, ops, confidence=0.9)
         tail_id = _add_step_nodes(ops, start_id, text, confidence=0.9)
-        reply = "明白，我先记下这一步。然后呢？下一步是谁做什么？"
-        nq = {"target": "main_path_discovery", "priority": "P0", "question": reply, "chips": None}
-        new_state = {"stage": "main_path", "cursor": tail_id, "pending": pending}
-        return reply, ops, nq, new_state
+        return _continue_after_step("trigger_detail", tail_id, pending, ops)
 
     if stage == "main_path":
+        if _needs_parallel_clarify(text):
+            return _start_parallel_clarify("main_path", cursor, _extract_step_clauses(text), pending, ops)
         tail_id = _add_step_nodes(ops, cursor, text)
-        reply = "这里是不是只有一种处理方式，还是不同情况下会走不同方向？"
-        nq = {"target": "branch_discovery", "priority": "P1", "question": reply,
-              "chips": ["只有一种处理方式", "会走不同方向", "不确定，再想想"]}
-        new_state = {"stage": "branch_check", "cursor": tail_id, "pending": pending}
-        return reply, ops, nq, new_state
+        return _continue_after_step("main_path", tail_id, pending, ops)
 
     if stage == "branch_check":
         if _contains_any(text, ["不同方向", "分支", "看情况"]):
@@ -299,24 +314,23 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
 
     if stage == "branch_condition_a":
         condition, rest = _split_condition(text)
-        tail_id = _add_step_nodes(ops, cursor, rest or text, edge_type="conditional",
+        step_text = rest or text
+        if _needs_parallel_clarify(step_text):
+            return _start_parallel_clarify("branch_condition_a", cursor, _extract_step_clauses(step_text),
+                                            pending, ops, edge_type="conditional", condition=condition, confidence=0.8)
+        tail_id = _add_step_nodes(ops, cursor, step_text, edge_type="conditional",
                                    condition=condition, confidence=0.8)
-        reply = "另一种情况呢？条件是什么，接下来做什么？"
-        nq = {"target": "branch_condition_b", "priority": "P1", "question": reply, "chips": None}
-        new_state = {"stage": "branch_condition_b", "cursor": cursor,
-                      "pending": {**pending, "branch_a_tail": tail_id}}
-        return reply, ops, nq, new_state
+        return _continue_after_step("branch_condition_a", tail_id, pending, ops, entry_id=cursor)
 
     if stage == "branch_condition_b":
         condition, rest = _split_condition(text)
-        tail_id = _add_step_nodes(ops, cursor, rest or text, edge_type="conditional",
+        step_text = rest or text
+        if _needs_parallel_clarify(step_text):
+            return _start_parallel_clarify("branch_condition_b", cursor, _extract_step_clauses(step_text),
+                                            pending, ops, edge_type="conditional", condition=condition, confidence=0.8)
+        tail_id = _add_step_nodes(ops, cursor, step_text, edge_type="conditional",
                                    condition=condition, confidence=0.8)
-        reply = "这两条路径处理完之后，是各自继续，还是要汇总后再进入同一步？"
-        nq = {"target": "parallel_merge_discovery", "priority": "P3", "question": reply,
-              "chips": ["各自继续", "汇总后再决定", "不确定，再想想"]}
-        new_state = {"stage": "merge_check", "cursor": None,
-                      "pending": {**pending, "branch_a_tail": pending.get("branch_a_tail"), "branch_b_tail": tail_id}}
-        return reply, ops, nq, new_state
+        return _continue_after_step("branch_condition_b", tail_id, pending, ops)
 
     if stage == "merge_check":
         a_tail, b_tail = pending.get("branch_a_tail"), pending.get("branch_b_tail")
@@ -361,30 +375,18 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return reply, ops, nq, new_state
 
     if stage == "parallel_branch_a":
+        if _needs_parallel_clarify(text):
+            return _start_parallel_clarify("parallel_branch_a", cursor, _extract_step_clauses(text),
+                                            pending, ops, edge_type="parallel", confidence=0.8)
         tail_id = _add_step_nodes(ops, cursor, text, edge_type="parallel", confidence=0.8)
-        reply = "第二项并行的工作呢？"
-        nq = {"target": "parallel_merge_discovery", "priority": "P2", "question": reply, "chips": None}
-        new_state = {"stage": "parallel_branch_b", "cursor": cursor,
-                      "pending": {**pending, "par_a_tail": tail_id}}
-        return reply, ops, nq, new_state
+        return _continue_after_step("parallel_branch_a", tail_id, pending, ops, entry_id=cursor)
 
     if stage == "parallel_branch_b":
-        a_tail = pending.get("par_a_tail")
+        if _needs_parallel_clarify(text):
+            return _start_parallel_clarify("parallel_branch_b", cursor, _extract_step_clauses(text),
+                                            pending, ops, edge_type="parallel", confidence=0.8)
         tail_id = _add_step_nodes(ops, cursor, text, edge_type="parallel", confidence=0.8)
-        join_id = _nid()
-        ops += [
-            {"op": "add_node", "node": {"node_id": join_id, "node_type": "parallel_join", "label": "并行汇合",
-                                         "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": a_tail, "to": join_id,
-                                         "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": tail_id, "to": join_id,
-                                         "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
-        ]
-        reply = "两边完成之后，是直接继续，还是需要谁确认一下才能往下走？"
-        nq = {"target": "actor_system_discovery", "priority": "P4", "question": reply,
-              "chips": ["直接继续", "需要确认", "不确定，再想想"]}
-        new_state = {"stage": "approval_check", "cursor": join_id, "pending": pending}
-        return reply, ops, nq, new_state
+        return _continue_after_step("parallel_branch_b", tail_id, pending, ops)
 
     if stage == "approval_check":
         if _contains_any(text, ["需要确认", "需要"]):
@@ -517,16 +519,36 @@ def _extract_step_clauses(text: str, max_steps: int = 2) -> list[str]:
     return result or [text.strip()[:40]]
 
 
-def _add_step_nodes(ops: list[dict], from_id: str, text: str, edge_type: str = "normal",
-                     condition: str | None = None, confidence: float = 0.85) -> str:
-    """Create one activity node per clause extracted from `text` (see
-    _extract_step_clauses -- usually 1, occasionally 2), chained in sequence and
-    linked from `from_id`. The first edge carries `edge_type`/`condition` (e.g. a
-    branch's conditional edge); any edge added between split clauses is a plain
-    "normal" edge, since both clauses still happened on the same path. Returns the
-    id of the last node created, i.e. the new cursor.
+# Coordinating connectors genuinely ambiguous between "one after another" and "at the same
+# time" -- unlike "然后" (clearly sequential) or "、" (a plain enumeration, treated as
+# sequential same as before). Only a split on one of these gets an extra clarifying question
+# (see _needs_parallel_clarify) instead of silently defaulting to sequential.
+_AMBIGUOUS_CONNECTOR_RE = re.compile(r"并且|并|同时")
+
+
+def _needs_parallel_clarify(text: str) -> bool:
+    """True when `_extract_step_clauses` would split `text` into exactly two clauses AND
+    the connector responsible for that split is one of the ambiguous ones above. "记录系统
+    并通知班组长" could honestly mean either "do A then B" or "do A and B at the same time"
+    -- this mock has no semantic understanding to tell which, so rather than silently
+    guessing sequential (which is all it used to do), it asks the same 先后做/同时做
+    question PRD 18 already uses elsewhere for exactly this fork.
     """
-    clauses = _extract_step_clauses(text)
+    if len(_extract_step_clauses(text)) != 2:
+        return False
+    cleaned = _DISCOVERY_PREFIX_RE.sub("", text.strip())
+    m = _STEP_SPLIT_RE.search(cleaned)
+    return bool(m and _AMBIGUOUS_CONNECTOR_RE.search(m.group(0)))
+
+
+def _build_step_chain(ops: list[dict], from_id: str, clauses: list[str], edge_type: str = "normal",
+                       condition: str | None = None, confidence: float = 0.85) -> str:
+    """Create one activity node per clause (already extracted -- see _extract_step_clauses),
+    chained in sequence and linked from `from_id`. The first edge carries `edge_type`/
+    `condition` (e.g. a branch's conditional edge); any edge added between clauses is a plain
+    "normal" edge, since sequential clauses still happened on the same path. Returns the id
+    of the last node created, i.e. the new cursor.
+    """
     prev_id = from_id
     tail_id = from_id
     for i, clause in enumerate(clauses):
@@ -543,6 +565,148 @@ def _add_step_nodes(ops: list[dict], from_id: str, text: str, edge_type: str = "
         prev_id = node_id
         tail_id = node_id
     return tail_id
+
+
+def _add_step_nodes(ops: list[dict], from_id: str, text: str, edge_type: str = "normal",
+                     condition: str | None = None, confidence: float = 0.85) -> str:
+    """`_build_step_chain` over the clauses freshly extracted from `text`. Only call this
+    once the caller has already checked `_needs_parallel_clarify(text)` is False -- an
+    ambiguous "并"/"同时" split should go through the clarifying question instead (see the
+    "compound_parallel_clarify" stage), not be silently chained as sequential here.
+    """
+    return _build_step_chain(ops, from_id, _extract_step_clauses(text), edge_type, condition, confidence)
+
+
+def _build_parallel_branches(ops: list[dict], from_id: str, clauses: list[str], edge_type: str = "normal",
+                              condition: str | None = None, confidence: float = 0.85) -> str:
+    """Build a parallel_split -> one activity node per clause (each linked by a `parallel`
+    edge) -> parallel_join structure, for when the expert has confirmed a compound "并/同时"
+    sentence really was two things done at the same time. Returns the parallel_join node id,
+    i.e. the new cursor (both branches are already merged back into one path by the time the
+    caller continues).
+    """
+    split_id = _nid()
+    ops.append({"op": "add_node", "node": {"node_id": split_id, "node_type": "parallel_split",
+                                            "label": "并行拆分", "source_turn_ids": [],
+                                            "confidence": confidence, "expert_confirmed": False}})
+    entry_edge = {"edge_id": _nid(), "from": from_id, "to": split_id, "edge_type": edge_type,
+                  "confidence": confidence, "expert_confirmed": False}
+    if condition:
+        entry_edge["condition"] = condition
+    ops.append({"op": "add_edge", "edge": entry_edge})
+
+    branch_tails = []
+    for clause in clauses:
+        node_id = _nid()
+        ops.append({"op": "add_node", "node": {"node_id": node_id, "node_type": "activity",
+                                                 "label": clause, "source_turn_ids": [],
+                                                 "confidence": confidence, "expert_confirmed": False}})
+        ops.append({"op": "add_edge", "edge": {"edge_id": _nid(), "from": split_id, "to": node_id,
+                                                "edge_type": "parallel", "confidence": confidence,
+                                                "expert_confirmed": False}})
+        branch_tails.append(node_id)
+
+    join_id = _nid()
+    ops.append({"op": "add_node", "node": {"node_id": join_id, "node_type": "parallel_join",
+                                            "label": "并行汇合", "source_turn_ids": [],
+                                            "confidence": confidence, "expert_confirmed": False}})
+    for t in branch_tails:
+        ops.append({"op": "add_edge", "edge": {"edge_id": _nid(), "from": t, "to": join_id,
+                                                "edge_type": "parallel", "confidence": confidence,
+                                                "expert_confirmed": False}})
+    return join_id
+
+
+def _continue_after_step(resume: str, tail_id: str, pending: dict, ops: list[dict],
+                          entry_id: str | None = None) -> tuple[str, list[dict], dict, dict]:
+    """What happens after a step's node(s) have been placed on the graph -- the exact same
+    logic whether the nodes went straight in (no serial/parallel ambiguity) or only after the
+    expert answered the 先后做/同时做 clarifying question (see "compound_parallel_clarify").
+    Sharing this one place means the two paths can never quietly drift apart. `entry_id` is
+    the cursor value some resume points restore instead of `tail_id` (branch_condition_a and
+    parallel_branch_a both keep working from the decision/split node, not the tail of what
+    they just recorded, since the *next* turn's answer is a sibling branch off that same
+    node, not a continuation of this one).
+    """
+    if resume == "trigger_detail":
+        reply = "明白，我先记下这一步。然后呢？下一步是谁做什么？"
+        nq = {"target": "main_path_discovery", "priority": "P0", "question": reply, "chips": None}
+        new_state = {"stage": "main_path", "cursor": tail_id, "pending": pending}
+        return reply, ops, nq, new_state
+    if resume == "main_path":
+        reply = "这里是不是只有一种处理方式，还是不同情况下会走不同方向？"
+        nq = {"target": "branch_discovery", "priority": "P1", "question": reply,
+              "chips": ["只有一种处理方式", "会走不同方向", "不确定，再想想"]}
+        new_state = {"stage": "branch_check", "cursor": tail_id, "pending": pending}
+        return reply, ops, nq, new_state
+    if resume == "branch_condition_a":
+        reply = "另一种情况呢？条件是什么，接下来做什么？"
+        nq = {"target": "branch_condition_b", "priority": "P1", "question": reply, "chips": None}
+        new_state = {"stage": "branch_condition_b", "cursor": entry_id,
+                      "pending": {**pending, "branch_a_tail": tail_id}}
+        return reply, ops, nq, new_state
+    if resume == "branch_condition_b":
+        reply = "这两条路径处理完之后，是各自继续，还是要汇总后再进入同一步？"
+        nq = {"target": "parallel_merge_discovery", "priority": "P3", "question": reply,
+              "chips": ["各自继续", "汇总后再决定", "不确定，再想想"]}
+        new_state = {"stage": "merge_check", "cursor": None,
+                      "pending": {**pending, "branch_b_tail": tail_id}}
+        return reply, ops, nq, new_state
+    if resume == "parallel_branch_a":
+        reply = "第二项并行的工作呢？"
+        nq = {"target": "parallel_merge_discovery", "priority": "P2", "question": reply, "chips": None}
+        new_state = {"stage": "parallel_branch_b", "cursor": entry_id,
+                      "pending": {**pending, "par_a_tail": tail_id}}
+        return reply, ops, nq, new_state
+    # resume == "parallel_branch_b"
+    a_tail = pending.get("par_a_tail")
+    join_id = _nid()
+    ops += [
+        {"op": "add_node", "node": {"node_id": join_id, "node_type": "parallel_join", "label": "并行汇合",
+                                     "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
+        {"op": "add_edge", "edge": {"edge_id": _nid(), "from": a_tail, "to": join_id,
+                                     "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
+        {"op": "add_edge", "edge": {"edge_id": _nid(), "from": tail_id, "to": join_id,
+                                     "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
+    ]
+    reply = "两边完成之后，是直接继续，还是需要谁确认一下才能往下走？"
+    nq = {"target": "actor_system_discovery", "priority": "P4", "question": reply,
+          "chips": ["直接继续", "需要确认", "不确定，再想想"]}
+    new_state = {"stage": "approval_check", "cursor": join_id, "pending": pending}
+    return reply, ops, nq, new_state
+
+
+def _start_parallel_clarify(resume: str, from_id: str, clauses: list[str], pending: dict, ops: list[dict],
+                             edge_type: str = "normal", condition: str | None = None,
+                             confidence: float = 0.85) -> tuple[str, list[dict], dict, dict]:
+    """Defer step-node creation and ask the expert to disambiguate "先后做" vs "同时做" for a
+    compound sentence split on an ambiguous connector (并/并且/同时). The clauses -- already
+    extracted from the expert's actual words -- are stashed in `pending`, not re-derived from
+    whatever chip text the expert taps next. `ops` is whatever the caller already queued
+    before deciding to defer (e.g. trigger_detail's start node) and must still ship this turn.
+    """
+    compound = {"resume": resume, "from_id": from_id, "clauses": clauses, "edge_type": edge_type,
+                "condition": condition, "confidence": confidence}
+    reply = f"这里面「{clauses[0]}」和「{clauses[1]}」，是先后做，还是同时做？"
+    nq = {"target": "parallel_merge_discovery", "priority": "P2", "question": reply,
+          "chips": ["先后做", "同时做", "不确定，再想想"]}
+    new_state = {"stage": "compound_parallel_clarify", "cursor": None,
+                  "pending": {**pending, "_compound": compound}}
+    return reply, ops, nq, new_state
+
+
+def _resolve_parallel_clarify(text: str, pending: dict, ops: list[dict]) -> tuple[str, list[dict], dict, dict]:
+    compound = pending["_compound"]
+    pending = {k: v for k, v in pending.items() if k != "_compound"}
+    clauses = compound["clauses"]
+    edge_type, condition, confidence = compound["edge_type"], compound["condition"], compound["confidence"]
+    if _contains_any(text, ["同时"]):
+        tail_id = _build_parallel_branches(ops, compound["from_id"], clauses, edge_type, condition, confidence)
+    else:
+        # "先后做" or "不确定，再想想": same honest fallback used elsewhere in this file when a
+        # tri-state chip answer doesn't clearly say "parallel" -- default to sequential.
+        tail_id = _build_step_chain(ops, compound["from_id"], clauses, edge_type, condition, confidence)
+    return _continue_after_step(compound["resume"], tail_id, pending, ops, entry_id=compound["from_id"])
 
 
 def _split_condition(text: str) -> tuple[str, str]:
