@@ -238,7 +238,8 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(k in text for k in keywords)
 
 
-def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None
+def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
+                 skip_correction_check: bool = False
                  ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
     """Returns (assistant_reply, graph_ops, next_question_or_None, new_state).
 
@@ -250,8 +251,13 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None
     `add_node`/`add_edge` op's `source_turn_ids` this call produces, so a later turn can be
     traced back to and undone -- see the "correction/rollback" stages below. Callers that
     don't pass one (or don't need undo) get the previous behavior (`source_turn_ids: []`).
+
+    `skip_correction_check` is for routers/expert_workflows.py to set when it's re-processing
+    an expert's original text after they picked "不是，这是新的一步" from the turn picker (see
+    "awaiting_turn_selection" there) -- without it, re-running the exact same text through the
+    exact same stage could flag it as a correction again and loop.
     """
-    reply, ops, nq, new_state = _dispatch_turn(state, text)
+    reply, ops, nq, new_state = _dispatch_turn(state, text, skip_correction_check=skip_correction_check)
     if turn_id:
         for op in ops:
             if op.get("op") == "add_node":
@@ -264,9 +270,10 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None
 def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool = False
                     ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
     """The actual FSM dispatch, previously named `handle_turn`. `skip_correction_check` is
-    used only when re-processing an expert's original text after they declined the "was this
-    a correction?" prompt (see the "correction_confirm" stage) -- without it, re-running the
-    exact same text through the exact same stage could flag it as a correction again and loop.
+    used only when re-processing an expert's original text after the expert picked "不是，
+    这是新的一步" from the correction turn picker (see routers/expert_workflows.py's handling
+    of the "awaiting_turn_selection" stage) -- without it, re-running the exact same text
+    through the exact same stage could flag it as a correction again and loop.
     """
     stage = state["stage"]
     cursor = state["cursor"]
@@ -311,27 +318,11 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
     if stage == "compound_parallel_clarify":
         return _resolve_parallel_clarify(text, pending, ops)
 
-    if stage == "correction_confirm":
-        correction = pending["_correction"]
-        if _contains_any(text, ["不是"]):
-            restored_state = {"stage": correction["original_stage"], "cursor": correction["original_cursor"],
-                               "pending": correction["original_pending"]}
-            return _dispatch_turn(restored_state, correction["original_text"], skip_correction_check=True)
-        # "是，回退重做" (or anything else -- this file's existing convention is to only
-        # special-case the explicit negative answer, same as parallel_check/approval_check).
-        # The actual candidate turn list needs the full graph + turn transcript, which this
-        # module doesn't have access to -- routers/expert_workflows.py fills `chips` in and
-        # advances the stage to "awaiting_turn_selection" right after this call returns.
-        reply = "好，要回退到哪一步？（列出最近几轮，选中之后我会把这一步和它之后的内容都撤销，然后请你重新说一遍）"
-        nq = {"target": "correction_turn_pick", "priority": "P0", "question": reply, "chips": None}
-        new_state = {"stage": "awaiting_turn_selection_setup", "cursor": cursor, "pending": pending}
-        return reply, ops, nq, new_state
-
     if stage == "trigger_detail":
         understanding = (_understand_step(text) if skip_correction_check
                           else _understand_step_and_check_correction(text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         start_id = _nid()
         ops += [
             {"op": "add_node", "node": {"node_id": start_id, "node_type": "start", "label": "开始",
@@ -344,7 +335,7 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
         understanding = (_understand_step(text) if skip_correction_check
                           else _understand_step_and_check_correction(text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         return _apply_understanding("main_path", cursor, understanding, pending, ops)
 
     if stage == "branch_check":
@@ -374,7 +365,7 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
         understanding = (_understand_step(step_text) if skip_correction_check
                           else _understand_step_and_check_correction(step_text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         return _apply_understanding("branch_condition_a", cursor, understanding, pending, ops,
                                      edge_type="conditional", condition=condition, confidence=0.8)
 
@@ -384,7 +375,7 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
         understanding = (_understand_step(step_text) if skip_correction_check
                           else _understand_step_and_check_correction(step_text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         return _apply_understanding("branch_condition_b", cursor, understanding, pending, ops,
                                      edge_type="conditional", condition=condition, confidence=0.8)
 
@@ -434,7 +425,7 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
         understanding = (_understand_step(text) if skip_correction_check
                           else _understand_step_and_check_correction(text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         return _apply_understanding("parallel_branch_a", cursor, understanding, pending, ops,
                                      edge_type="parallel", confidence=0.8)
 
@@ -442,7 +433,7 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
         understanding = (_understand_step(text) if skip_correction_check
                           else _understand_step_and_check_correction(text))
         if not skip_correction_check and understanding.get("is_correction"):
-            return _start_correction_confirm(stage, cursor, pending, text)
+            return _start_correction_pick(stage, cursor, pending, text)
         return _apply_understanding("parallel_branch_b", cursor, understanding, pending, ops,
                                      edge_type="parallel", confidence=0.8)
 
@@ -709,23 +700,30 @@ def _understand_step_and_check_correction(text: str) -> dict:
     return {"clauses": clauses, "relationship": relationship, "is_correction": False}
 
 
-def _start_correction_confirm(stage: str, cursor: str | None, pending: dict, text: str
-                               ) -> tuple[str, list[dict], dict, dict]:
+def _start_correction_pick(stage: str, cursor: str | None, pending: dict, text: str
+                            ) -> tuple[str, list[dict], dict, dict]:
     """The model flagged this turn as a correction of something the expert already said.
     Rather than trust that judgment silently -- a false positive here would mean silently
     discarding graph content the expert didn't actually want removed -- ask first, the same
     "never auto-execute a destructive read of the expert's intent" rule this file already
-    applies to chip answers. Declining (see the "correction_confirm" stage above) resumes
-    normal processing of the exact same text at the exact same stage, as if this check had
-    never fired.
+    applies to chip answers.
+
+    This asks in one step, not two: the confirm question ("was this a correction?") and the
+    turn picker are the same question, since "no, this isn't a correction" is just one more
+    option in the same chip list alongside the candidate turns to roll back to -- no reason to
+    make the expert click through a separate yes/no first. routers/expert_workflows.py builds
+    the actual candidate list (this module has no graph/turn-history access) and appends that
+    "not a correction" option to it right after this call returns, advancing the stage from
+    "awaiting_turn_selection_setup" to "awaiting_turn_selection". Picking "not a correction"
+    resumes normal processing of the exact same text at the exact same stage, as if this check
+    had never fired (see routers/expert_workflows.py's handling of that stage).
     """
     correction = {"original_stage": stage, "original_cursor": cursor,
                   "original_pending": {k: v for k, v in pending.items() if k != "_correction"},
                   "original_text": text}
-    reply = "检测到你好像是想修改之前说过的内容，要回退重做吗？"
-    nq = {"target": "correction_confirm", "priority": "P0", "question": reply,
-          "chips": ["是，回退重做", "不是，这是新的一步"]}
-    new_state = {"stage": "correction_confirm", "cursor": cursor,
+    reply = "检测到你好像是想修改之前说过的内容，要回退到哪一步重新做？"
+    nq = {"target": "correction_turn_pick", "priority": "P0", "question": reply, "chips": None}
+    new_state = {"stage": "awaiting_turn_selection_setup", "cursor": cursor,
                   "pending": {**pending, "_correction": correction}}
     return reply, [], nq, new_state
 

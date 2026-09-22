@@ -23,10 +23,14 @@ from ..models import (
 router = APIRouter(prefix="/api/expert-workflows", tags=["expert-workflows"])
 
 # IMPLEMENTATION_PLAN.md section 14, §15.1-①(c) -- correction/rollback. guide_service.py owns
-# detecting "is this a correction" and the yes/no confirm chip (it doesn't need graph/turn
-# history for that), but the actual "which turn do you want to roll back to" candidate list
-# and the rollback itself need the full graph + turn transcript, which only this router has.
+# detecting "is this a correction" and asking which turn to roll back to (in one combined
+# step -- "not a correction" is just one more chip option alongside the candidate turns, not
+# a separate yes/no question first), but the actual candidate list and the rollback itself
+# need the full graph + turn transcript, which only this router has.
 _MAX_CORRECTION_CANDIDATES = 5
+# The chip label for "this wasn't a correction, resume normal processing" -- appended to the
+# candidate list built below, never itself a real turn_id.
+_CORRECTION_DECLINE_LABEL = "不是，这是新的一步"
 # Stages a turn answers where its own "content" is a piece of internal correction-flow
 # machinery, not something the expert would recognize as a rollback target -- excluded from
 # the candidate list, but NOT excluded from the rollback cutoff itself (see _rollback_to_turn:
@@ -34,10 +38,7 @@ _MAX_CORRECTION_CANDIDATES = 5
 # regardless of stage, so a deferred compound_parallel_clarify answer's graph content is still
 # correctly swept up even though the turn that triggered the ambiguity is what gets offered
 # as the candidate).
-_CORRECTION_META_STAGES = {
-    "compound_parallel_clarify", "correction_confirm",
-    "awaiting_turn_selection_setup", "awaiting_turn_selection",
-}
+_CORRECTION_META_STAGES = {"compound_parallel_clarify", "awaiting_turn_selection_setup", "awaiting_turn_selection"}
 
 
 def _now() -> str:
@@ -200,25 +201,44 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
 
     if state["stage"] == "awaiting_turn_selection":
         # Router-handled entirely -- this is the one turn guide_service.handle_turn never
-        # sees, since resolving it needs the full graph + turn history (see the module-level
-        # comment above _MAX_CORRECTION_CANDIDATES).
+        # sees on the "roll back to an earlier turn" path, since resolving it needs the full
+        # graph + turn history (see the module-level comment above _MAX_CORRECTION_CANDIDATES).
+        # Picking "not a correction" does go through guide_service, though -- it's just
+        # re-processing the original text at the original stage.
         options = state.get("pending", {}).get("_correction_options", {})
-        picked_turn_id = options.get(req.text.strip())
-        ops: list[dict] = []
-        if picked_turn_id is None:
+        picked = req.text.strip()
+        if picked not in options:
             assistant_reply = "麻烦从上面列出的选项里选一个，我才知道要回退到哪一步。"
             next_question = {"target": "correction_turn_pick", "priority": "P0", "question": assistant_reply,
                               "chips": list(options.keys())}
-            new_state = state
+            new_state, ops = state, []
+            record["_guide_state"] = new_state
+            record["stage"] = new_state["stage"]
+            record["case_context"] = new_state.get("pending", {}).get("case_context")
+        elif options[picked] is None:
+            # "不是，这是新的一步" -- resume normal processing of the original text at the
+            # original stage, as if the correction check had never fired.
+            correction = state["pending"]["_correction"]
+            restored_state = {"stage": correction["original_stage"], "cursor": correction["original_cursor"],
+                               "pending": correction["original_pending"]}
+            record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": restored_state})
+            assistant_reply, ops, next_question, new_state = guide_service.handle_turn(
+                restored_state, correction["original_text"], turn_id=expert_turn_id, skip_correction_check=True,
+            )
+            record["graph"] = graph_ops.apply_ops(record["graph"], ops)
+            record["_guide_state"] = new_state
+            record["stage"] = new_state["stage"]
+            record["case_context"] = new_state.get("pending", {}).get("case_context")
         else:
-            original_question = _rollback_to_turn(record, picked_turn_id)
+            original_question = _rollback_to_turn(record, options[picked])
             assistant_reply = f"好，已经回退。{original_question}"
             new_state = record["_guide_state"]
             next_question = {"target": new_state["stage"], "priority": "P0", "question": original_question,
                               "chips": None}
-        record["_guide_state"] = new_state
-        record["stage"] = new_state["stage"]
-        record["case_context"] = new_state.get("pending", {}).get("case_context")
+            ops = []
+            record["_guide_state"] = new_state
+            record["stage"] = new_state["stage"]
+            record["case_context"] = new_state.get("pending", {}).get("case_context")
     else:
         record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": state})
         assistant_reply, ops, next_question, new_state = guide_service.handle_turn(state, req.text, turn_id=expert_turn_id)
@@ -230,10 +250,13 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         if new_state["stage"] == "awaiting_turn_selection_setup":
             # guide_service asked to defer to a turn picker but can't build the candidate list
             # itself (no graph/turn-history access) -- fill it in here before this response
-            # goes to the frontend.
+            # goes to the frontend. The "not a correction" option rides in the same chip list
+            # (see the module-level comment on _CORRECTION_DECLINE_LABEL) rather than a
+            # separate yes/no question first.
             candidates = _correction_candidates(record)
             options = {desc: tid for tid, desc in candidates}
-            next_question["chips"] = list(options.keys()) or ["（没有更早的可回退内容）"]
+            options[_CORRECTION_DECLINE_LABEL] = None
+            next_question["chips"] = list(options.keys())
             new_state = {**new_state, "stage": "awaiting_turn_selection",
                          "pending": {**new_state["pending"], "_correction_options": options}}
             record["_guide_state"] = new_state
