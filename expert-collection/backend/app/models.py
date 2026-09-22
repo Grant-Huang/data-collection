@@ -345,6 +345,7 @@ class ExperimentDetail(ExperimentSummary):
     explanation_edited: bool = False
     consensus_graph: Optional[Graph] = None
     error_analysis: list[dict] = Field(default_factory=list)
+    error_clusters: list[dict] = Field(default_factory=list)
     failure_reason: Optional[str] = None
 
 

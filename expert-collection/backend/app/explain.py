@@ -164,6 +164,54 @@ def explain_all(readiness: dict, workflows: list[dict]) -> dict[str, str]:
 AI_GENERATED_DISCLOSURE = "以上解读由 AI 根据本次实验指标自动生成，请结合下方明细数据核实。"
 
 
+_CLUSTER_SYSTEM_PROMPT = """你是制造业工作流抽取实验错误案例的归纳助手。输入是一批已经按结构类型规则初筛过的失败案例摘要（每条只有工作流名称和几个匹配度数字，没有更详细的内容）。请把这些案例归纳成 2 到 4 种典型失败模式。要求：
+- 每种模式给一个简短标签（label）和一句话描述（description），描述里只能引用输入案例的名称和数字，不能编造案例里没有的具体原因（比如不能说"因为专家漏填了某个字段"这种输入数据里根本看不出来的细节，只能基于摘要数据本身做归纳，比如"这些案例的 edge_f1 普遍明显低于 node_f1"）。
+- 每个案例必须被分到至少一个模式里，用 workflow_names 字段列出属于这个模式的案例名称，名称必须原样使用输入里给的名称，不能编造不存在的名称。
+- 案例数量很少（比如少于4条）时，可以只归纳出1-2种模式，不用凑够2种。
+
+只输出一个 JSON object，字段：
+- "clusters"：数组，每个元素是 {"label": str, "description": str, "workflow_names": [str, ...]}。
+
+只输出 JSON，不要有任何其他文字。"""
+
+
+def cluster_error_cases(error_cases: list[dict]) -> list[dict[str, Any]]:
+    """PRD 14.5.3: groups already rule-grouped failure cases (see experiments.py's `group`
+    field) into 2-4 "typical failure mode" descriptions via the `error_clustering` slot, used
+    as-is (empty list) both when there's nothing to cluster and when the slot isn't
+    configured or the call/validation fails -- callers treat an empty list as "no clustering
+    available", not an error.
+    """
+    if not error_cases:
+        return []
+    slot_config = app_settings.resolve_slot_for_call(app_settings.get_effective_settings(), "error_clustering")
+    if not (slot_config.get("enabled") and slot_config.get("endpoint") and slot_config.get("model_name")):
+        return []
+    try:
+        parsed = llm_client.chat_completion_json(slot_config, [
+            {"role": "system", "content": _CLUSTER_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(error_cases, ensure_ascii=False)},
+        ])
+    except llm_client.LLMError:
+        return []
+
+    clusters = parsed.get("clusters")
+    if not isinstance(clusters, list) or not (1 <= len(clusters) <= 4):
+        return []
+    valid_names = {c["workflow_name"] for c in error_cases}
+    result = []
+    for c in clusters:
+        if not isinstance(c, dict):
+            return []
+        label, description, names = c.get("label"), c.get("description"), c.get("workflow_names")
+        if not (isinstance(label, str) and label.strip() and isinstance(description, str) and description.strip()):
+            return []
+        if not isinstance(names, list) or not names or not all(n in valid_names for n in names):
+            return []
+        result.append({"label": label.strip(), "description": description.strip(), "workflow_names": names})
+    return result
+
+
 _EXPERIMENT_SYSTEM_PROMPT = """你是制造业工作流抽取实验结果的解读助手。根据给定的实验指标和错误案例，写一段中文解读，说明这次实验结果说明了什么、可能的原因、以及建议。要求：
 - 只能引用输入数据里出现过的数字，不能编造或推算新的数字。
 - 可以分成"现象/可能原因/建议"这样的结构，但不要用 markdown 标题语法。

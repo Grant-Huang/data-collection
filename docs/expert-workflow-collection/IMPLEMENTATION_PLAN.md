@@ -365,10 +365,18 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 **注意**：召回率 100%/8.3% 这两个数字都是跟自建 stub 或规则本身测出来的，**不是真实模型的验收数字**——用户接入真实 endpoint 后需要重跑 `scripts/measure_anonymize_recall.py`，看真实模型能打到多少，再跟用户对齐一个可接受阈值（验收1明确要求"跟用户对齐阈值"，这一步必须有真模型才能做，不能我自己定）。
 
-### §15.2-④ Error Analysis 案例聚类归纳（`error_clustering`，C_standard，从零建）
+### §15.2-④ Error Analysis 案例聚类归纳（`error_clustering`，C_standard，从零建）—— 已实现
 
 - 验收 1：输入是规则初筛后的失败案例摘要列表，输出几种典型失败模式 + 每种模式关联哪些具体 case
 - 验收 2：人工抽查归纳合理性（不出现把明显不同类的错误归成一类这种低级错误）——这项比较主观，验收标准是"通过人工抽查"，不强求量化指标
+
+**实现**：这项之前完全没有代码（连 Mock 都没有），是纯新建功能，不是"换掉一个模板"。
+- `explain.py` 新增 `cluster_error_cases(error_cases) -> list[dict]`：读 `error_clustering` slot，把 `experiments.py::run_consensus_dfg` 已经按结构类型规则分好组的失败案例（`{workflow_name, node_f1, edge_f1, structural_match, group}`）整体喂给模型，要求归纳成 1-4 种典型失败模式（PRD 建议 2-4 种，案例数很少时允许少于2种），每种模式给标签+一句话描述+关联的案例名称列表。空输入、未配置、调用失败、输出格式不对，一律返回空列表——调用方把空列表当成"这次没有聚类结果"，不是报错状态，跟这个仓库里其余 LLM 环节"失败就安静地退回一个诚实的替代状态"是同一个规矩。
+- **校验（这里防的不是数字幻觉，是编案例名字）**：这个任务的产出不是数字叙述，是"哪些案例属于哪一类"，所以幻觉的表现形式不一样——校验器检查每个 `workflow_names` 条目必须是输入案例里真实存在的名字，编一个不存在的工作流名字会让整个响应被拒绝退回空列表，不是"数字对不对"那种检查，是"引用的东西存不存在"那种检查。
+- `models.py`：`ExperimentDetail` 新增 `error_clusters: list[dict]` 字段；`routers/experiments.py` 三处收口（创建实验的初始占位、`run_consensus_dfg` 跑完之后、"重新生成解读"接口）都接上，创建时先给空列表占位，跑完之后调用 `cluster_error_cases`。
+- 前端 `ExperimentCenterPage.tsx`：Error Analysis 表格下面加一个"典型失败模式（AI 归纳）"小节，只在 `error_clusters` 非空时显示，每条展示标签/描述/涉及的工作流，底部带免责声明——这是本轮唯一动了前端的一项 LLM 接入（前面几项都是纯后端替换，接口不变），因为这项本来就没有旧的展示位置可以复用，不加前端这个功能等于做了但看不见。`tsc -b` 通过。
+
+**已验证**：直接调用 `cluster_error_cases()` 跑了5种场景——① 未配置 LLM，返回空列表；② 空输入，返回空列表；③ 自建 stub 返回结构合理的归纳（2组案例、标签/描述/关联案例名称都对），正确被采用；④ 构造一个引用了不存在的工作流名字（`wf-does-not-exist`）的 stub 响应，正确被校验器拒绝、返回空列表，没有把编造的案例关联放出去；⑤ LLM 调用失败（5xx），返回空列表。前端 TypeScript 编译通过。
 
 ### §9 Phase C — Gold Annotation 标注体系 + 多专家复核/一致性系数
 

@@ -284,6 +284,12 @@ export interface ErrorCase {
   group: string;
 }
 
+export interface ErrorCluster {
+  label: string;
+  description: string;
+  workflow_names: string[];
+}
+
 export interface ExperimentDetail extends ExperimentSummary {
   source_type: SourceType;
   input_version: InputVersion;
@@ -299,6 +305,7 @@ export interface ExperimentDetail extends ExperimentSummary {
   explanation_edited: boolean;
   consensus_graph: Graph | null;
   error_analysis: ErrorCase[];
+  error_clusters: ErrorCluster[];
   failure_reason: string | null;
 }
 
