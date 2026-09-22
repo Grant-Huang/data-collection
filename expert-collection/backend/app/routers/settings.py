@@ -1,5 +1,6 @@
 """System Settings endpoints -- PRD 17. See app/settings.py module docstring for what
-"saving a config" does and doesn't do yet (assumption 6 in IMPLEMENTATION_PLAN.md).
+"saving a config" does and doesn't do yet (assumption 6 in IMPLEMENTATION_PLAN.md), and for
+the level-first model config design (IMPLEMENTATION_PLAN.md section 11).
 """
 from __future__ import annotations
 
@@ -17,25 +18,38 @@ def get_settings() -> dict:
 
 @router.put("")
 def update_settings(patch: dict) -> dict:
+    current = settings_module.get_effective_settings()
+
     # API key fields: an empty string in the patch means "leave unchanged" (never overwrite
     # a real key with a blank just because the form round-tripped a masked value).
-    current = settings_module.get_effective_settings()
-    llm_patch = patch.get("llm_configs", {})
-    for slot, cfg in llm_patch.items():
+    level_patch = patch.get("llm_levels", {})
+    for level, cfg in level_patch.items():
+        if level not in current["llm_levels"]:
+            raise HTTPException(status_code=400, detail=f"未知的模型级别: {level}")
         if isinstance(cfg, dict) and cfg.get("api_key") == "":
             cfg.pop("api_key")
-        if isinstance(cfg, dict) and slot not in current["llm_configs"]:
-            raise HTTPException(status_code=400, detail=f"未知的 LLM 配置项: {slot}")
+
+    slot_patch = patch.get("llm_slots", {})
+    for slot, cfg in slot_patch.items():
+        if slot not in current["llm_slots"]:
+            raise HTTPException(status_code=400, detail=f"未知的环节: {slot}")
+        if isinstance(cfg, dict) and "level" in cfg and cfg["level"] not in current["llm_levels"]:
+            raise HTTPException(status_code=400, detail=f"未知的模型级别: {cfg['level']}")
+
     merged = settings_module.save_settings(patch)
     return settings_module.mask_for_display(merged)
 
 
-@router.post("/llm/{slot}/test-connection")
-def test_connection(slot: str) -> dict:
+@router.post("/llm-levels/{level}/test-connection")
+def test_connection(level: str) -> dict:
+    """Tests a *level*'s connection, not a slot's -- since every slot pointing at this level
+    shares the exact same endpoint/model/key now, there is nothing slot-specific left to
+    test (that per-slot redundancy is exactly what the level-first refactor removed).
+    """
     settings = settings_module.get_effective_settings()
-    if slot not in settings["llm_configs"]:
-        raise HTTPException(status_code=404, detail="未知的配置项")
-    cfg = settings["llm_configs"][slot]
+    if level not in settings["llm_levels"]:
+        raise HTTPException(status_code=404, detail="未知的模型级别")
+    cfg = settings["llm_levels"][level]
     if not cfg.get("model_name") and not cfg.get("endpoint"):
         return {"ok": False, "message": "尚未填写服务地址或模型名称，请先完善配置再测试。"}
     # Honest limitation (IMPLEMENTATION_PLAN.md assumption 6): this sandbox has no reachable

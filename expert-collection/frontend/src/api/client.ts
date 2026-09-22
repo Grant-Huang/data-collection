@@ -67,8 +67,8 @@ export const api = {
 
   getSettings: () => req<Settings>("GET", "/api/settings"),
   updateSettings: (patch: Record<string, unknown>) => req<Settings>("PUT", "/api/settings", patch),
-  testConnection: (slot: string) =>
-    req<{ ok: boolean; message: string }>("POST", `/api/settings/llm/${slot}/test-connection`),
+  testConnection: (level: string) =>
+    req<{ ok: boolean; message: string }>("POST", `/api/settings/llm-levels/${level}/test-connection`),
 
   getAuditLog: () => req<AuditLogEntry[]>("GET", "/api/admin/audit-log"),
 

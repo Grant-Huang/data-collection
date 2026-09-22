@@ -216,3 +216,17 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 **仍未做（下一轮）**：
 - 跨批结构命中要不要在 Prior 标注环节里显式呈现"这条和历史某条结构相似"供专家参考，目前只是预检报告里的一条警告文字，标注面板本身还没读取这个信号
 - 计算量会随历史数据量增长而变大（每次导入都要和全部历史记录比较一遍），目前 40 vs 20+8+32 的规模完全没问题，等数据量大到有性能问题时再考虑索引/分桶优化，现在不提前做
+
+## 11. 模型配置改为"级别优先"，环节只引用级别
+
+按反馈修的产品缺陷："现在的模式重复配置没必要"——原来 `Settings.llm_configs` 是 8 个环节（专家采集会话引导/移动端语音口述整理/……）各自一份完整配置（`category` + `endpoint` + `model_name` + `temperature` + `api_key`），即使多个环节实际用的是同一个模型级别（比如都是 `C_standard`），端点/模型名/API Key 也要在每个环节的表单里分别填一遍、改的时候要记得同步改好几处。
+
+**改法**：拆成两层。
+- `llm_levels`（新增，3 个级别：`L`/`C_standard`/`C_flagship`，每个只配一次）：`endpoint`/`model_name`/`api_key`——这才是真正意义上"重复"的部分，同一个级别只有一份连接信息
+- `llm_slots`（原 `llm_configs` 改名）：每个环节只保留 `level`（引用哪个级别）+ `enabled` + `temperature`——`temperature` 特意留在环节这一层没有并进级别，因为同一个级别下不同任务想要不同的采样温度是合理的调优需求（比如 `guide_service` 用 0.1、`mobile_speech_polish` 用 0.2，都是 `L` 级别），这不是"重复配置"，是任务级别的真实差异，不能一并砍掉
+
+新增 `settings.resolve_slot(settings, slot)` 帮助函数：把某个环节引用的级别信息和它自己的 `enabled`/`temperature` 合并成一份完整视图，真正要调用模型的代码只需要调这一个函数，不用自己去做级别查找和合并。
+
+`POST /api/settings/llm/{slot}/test-connection` 改成 `POST /api/settings/llm-levels/{level}/test-connection`——测试连接本来就是在测"这个连接通不通"，既然多个环节共享同一个级别的连接，按环节测是没有意义的重复测试，按级别测一次就够了。
+
+**已验证**：真实 HTTP 调用——只给 `C_standard` 级别填一次连接信息，把 `error_clustering` 和 `dashboard_explain` 两个环节都指向它，两个环节各自读到的仍然是它们自己的 `enabled`/`temperature`，但连接信息（`endpoint`/`model_name`/`api_key_set`）自动一致，不需要分别填两遍；`resolve_slot()` 正确合并出两个环节各自完整的等效视图；给一个环节传不存在的 `level` 值会被 400 拒绝；`tsc -b` 通过；headless Chromium 截图确认页面正确分成"模型级别配置"（3 张卡片）和"环节引用级别"（8 行，每行只有级别下拉 + temperature + 启用勾选 + 保存，不再有端点/模型名/Key 输入框）两个区块。
