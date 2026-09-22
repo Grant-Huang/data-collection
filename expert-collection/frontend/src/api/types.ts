@@ -318,17 +318,25 @@ export interface ComparisonResult {
 
 // --- Settings (PRD 17) ---
 
-export interface LlmSlotConfig {
-  category: string;
+// Level-first model config (IMPLEMENTATION_PLAN.md section 11): each level (L/C_standard/
+// C_flagship) carries the connection details exactly once; a slot only references which
+// level it uses plus what's genuinely per-task (enabled, temperature) -- no more retyping
+// the same endpoint/model/key into every slot that happens to use the same connection.
+export interface LlmLevelConfig {
   endpoint?: string;
   model_name?: string;
-  temperature?: number;
-  enabled?: boolean;
   api_key_set: boolean;
 }
 
+export interface LlmSlotConfig {
+  level: string;
+  enabled?: boolean;
+  temperature?: number;
+}
+
 export interface Settings {
-  llm_configs: Record<string, LlmSlotConfig>;
+  llm_levels: Record<string, LlmLevelConfig>;
+  llm_slots: Record<string, LlmSlotConfig>;
   voice: { workspace_id: string; realtime_model: string };
   quality_params: {
     min_sample_size: number;
@@ -351,6 +359,10 @@ export const LLM_SLOT_LABELS: Record<string, string> = {
   experiment_explain: "实验结果文字解读", experiment_compare_explain: "多实验对比解读",
   error_clustering: "Error Analysis 案例聚类归纳", anonymize_name: "导出匿名化人名脱敏",
   role_normalize: "角色归一化", dashboard_explain: "Dashboard 评分项解释生成",
+};
+
+export const LLM_LEVEL_LABELS: Record<string, string> = {
+  L: "L（本地 7B）", C_standard: "C-标准档", C_flagship: "C-旗舰档",
 };
 
 // --- Admin (PRD 16) ---
