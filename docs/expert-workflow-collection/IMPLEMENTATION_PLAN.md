@@ -398,9 +398,29 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 前端 `DashboardPage.tsx`：当前版本旁边显示"★ Gold 版本"徽章，管理员角色能看到"标记为 Gold 版本"/"取消 Gold 标记"按钮
 - **已验证**：真实调用 mark-gold/unmark-gold，确认 `is_gold` 正确持久化、列表接口正确返回、审计日志正确记录操作人和动作；`tsc -b` 通过
 
-**C-2：记录级双人独立标注 + 仲裁 + Cohen's κ（大，进行中）**——用户确认的四个决策：① `expert_collected` 和 `public_extracted` 都需要 Gold；② `expert_collected` 要独立第二人复核，不是自我确认；③ 第一版先做整图级别判定，升级现有 Prior 标注链为双人独立，不做字段级（Boundary/Role/Edge/Condition 分别标注）；④ 分歧时第三人仲裁。
+**C-2：记录级双人独立标注 + 仲裁 + Cohen's κ（大，已实现）**——用户确认的四个决策：① `expert_collected` 和 `public_extracted` 都需要 Gold；② `expert_collected` 要独立第二人复核，不是自我确认；③ 第一版先做整图级别判定，升级现有 Prior 标注链为双人独立，不做字段级（Boundary/Role/Edge/Condition 分别标注）；④ 分歧时第三人仲裁。
 
 **现实约束（提前说明，不是实现时才发现）**：产品目前没有真实账号系统（assumption 1），"双人独立"没法在系统层面验证"这两次真的是两个不同的人"。解决办法：标注时新增必填的"标注人姓名"文本框（诚实的轻量身份代理，跟现有 `actor_role` 同一个档次），第二次独立标注/仲裁时校验姓名跟之前的不同，挡不住存心作弊但挡得住无意识重复点击。
+
+**数据模型**：`models.py` 新增 `GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "gold"]`、`AnnotationRole = Literal["independent", "arbitration"]`；`PriorAnnotation` 新增必填 `annotator_name` 和 `role_in_process`（默认 `independent`）；`PriorRecordDetail`/`PriorRecordSummary` 新增 `gold_status`；`AnnotationSummary` 新增 `gold_counts`（各状态计数）和 `agreement_kappa`。
+
+**Gold 状态判定**（`app/gold_annotation.py::compute_gold_status`，`annotations.py` 和 `datasets.py` 共用同一份逻辑，不允许两处算出不一样的结果）：只看第一、第二次独立标注（第三次独立标注不是这个设计的一部分——分歧永远走仲裁，不是"投票"）——0/1 次独立标注 → `not_gold`/`pending_second_review`；两次独立标注一致 → `accepted` 记为 `gold`，其余记为 `not_gold`；两次独立标注不一致 → `disputed_pending_arbitration`；一旦出现仲裁记录（`role_in_process="arbitration"`），仲裁结果就是终态，覆盖之前的状态。
+
+**独立性/仲裁校验**（`routers/annotations.py::create_annotation`）：已完成仲裁的记录拒绝任何新标注（流程已终结）；已有两次一致独立标注的记录拒绝新标注（Gold 已定，无需仲裁）；已有两次分歧独立标注时，新提交自动记为仲裁，但仲裁人姓名不能跟前两次独立标注人中任意一个相同；只有一次独立标注时，第二次标注人姓名必须跟第一次不同。
+
+**Cohen's κ**（`app/gold_annotation.py::cohens_kappa`）：标准两评分者公式 `(po - pe) / (1 - pe)`，输入是所有已有两次独立标注的记录的 `(第一次判定, 第二次判定)` 对；`pe >= 1.0` 的退化情况（比如样本量为 1 且两次判定完全不同导致边际概率为 0）显式处理，避免除零。
+
+**实时计算的 `annotation_readiness` 维度**（唯一一个不在发布时冻结快照的 Dataset Readiness Score 维度，因为标注活动发生在版本发布之后）：`quality.py::compute_annotation_readiness`，公式是 50% Gold 覆盖率 + 30% 双人标注覆盖率 + 20% Cohen's κ（负值按 0 计，因为 κ 为负不代表"更差"只代表"比随机一致还差"，跟这个维度想衡量的"覆盖是否足够"不是一回事）；`routers/datasets.py::_live_annotation_readiness` 在 `_to_summary()` 里实时覆盖这一维度、并在全部 10 个维度都有分数时重新算总分和评级（`quality.band()`，原来的私有 `_band` 改成公开函数，因为 `datasets.py` 需要跨模块调用它）；仲裁比例只作为诊断信息展示，不计入打分（需要仲裁本身不代表质量差，只代表两个独立判断出现了分歧）。
+
+**代码复用**：`app/dataset_records.py::records_for_export()` 从 `datasets.py` 的私有函数抽出来，供 `annotations.py` 和 `datasets.py` 共用同一套"这个版本里到底有哪些记录"的逻辑（原来只有 `datasets.py` 用）。
+
+**前端**：`PriorAnnotationPanel.tsx` 新增必填的"标注人姓名"输入框；**关键行为变化**：不再像原来单链式 Prior 标注那样预填上一条标注的判定/备注/节点判定——Gold 需要真正独立的判断，预填等于让第二个标注人被第一个标注人的结论"锚定"；面板头部展示 Gold 状态徽章，以及根据当前状态动态生成的提示文案（"已有独立标注：X——这次需要换一个不同的人"/"已完成仲裁，标注流程已结束（只读）"/"尚未标注过，这次会作为第一次独立标注"）；已完成仲裁的记录整个表单只读。`DashboardPage.tsx`：Prior 标注区块的展示条件从"仅 `public_extracted`"放宽为"任意来源类型只要有已标注数据"（因为 `expert_collected` 现在也走同一套 Gold 流程），标题按来源类型区分文案，每条记录展示 `gold_status` 徽章，汇总行新增"Gold N 条 · 一致性 κ=value"。
+
+**已验证**：
+1. 真实 HTTP 联调：构造 3 条记录场景——① 一次独立标注（`pending_second_review`）；② 两次独立标注一致采纳（预期 `gold`）；③ 两次独立标注分歧（`disputed_pending_arbitration`），随后用第三个姓名提交仲裁，正确转为终态；重复提交、同名重复标注、对已仲裁记录再标注，均被正确拒绝并返回对应错误信息。
+2. 后端 `tsc -b`/前端 `tsc -b` 均通过。
+3. 真实浏览器可视化验证（headless Chromium + CDP，非单元测试层面的"看起来应该对"）：起了独立的后端（端口 8000）+ Vite 开发服务器，用 `db.py` 直接构造了一个 3 条记录的 `public_extracted` 版本（`r1` 一次独立标注、`r2` 两次分歧独立标注、`r3` 未标注），截图确认 Dashboard 正确显示三种 Gold 状态徽章（待第二人复核/分歧待仲裁/非 Gold）和汇总行（标注覆盖率 2/3・Gold 0 条・一致性 κ=0），打开标注面板确认独立性提示文案、必填姓名框、提交按钮禁用态、标注历史都渲染正确。过程中发现两个测试环境问题（均非产品 bug，已排查清楚并修正测试方式）：一是最初把 Vite 起在 5180 端口导致后端 CORS 白名单（只允许 5173）拒绝请求，改用 5173 后恢复正常；二是 `κ=0` 的结果起初看着反直觉（两次标注完全相反，直觉上 κ 应该是负数），核对公式后确认：样本量为 1 且两次判定的边际分布互补（一个全说"采纳"、一个全说"丢弃"）时，按公式算出的机会一致概率 `pe` 恰好为 0，代入公式得到 `κ=0` 是数学上正确的结果，只是小样本下这个指标本身不够有信息量，不是实现错误。
+4. 测试完成后清理：从 sqlite 里删除了 `visual-test-v1` 版本及其全部标注记录，把临时调低的 `min_sample_size` 改回 20，关闭了测试用的后端/前端/headless Chromium 进程。
 
 ### §14 实验中心其余方法
 

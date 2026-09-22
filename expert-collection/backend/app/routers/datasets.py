@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import anonymize, audit, db, explain, import_pipeline, quality, settings as settings_module
+from .. import anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
 from ..models import (
     DatasetVersionSummary,
     DuplicateCheckRequest,
@@ -47,8 +47,45 @@ def _draft_pool(source_type: str) -> list[dict]:
     ]
 
 
+def _live_annotation_readiness(version: dict) -> dict:
+    """§9 Phase C-2: annotation_readiness is the one dimension recomputed at read time
+    instead of frozen at publish -- see quality.compute_annotation_readiness's docstring.
+    """
+    records = dataset_records.records_for_export(version)
+    gold_count = double_count = arbitrated_count = 0
+    kappa_pairs: list[tuple[str, str]] = []
+    for r in records:
+        history = db.list_annotations(version["id"], r["record_id"])
+        if gold_annotation.compute_gold_status(history) == "gold":
+            gold_count += 1
+        independents = [a for a in history if a.get("role_in_process", "independent") == "independent"]
+        if len(independents) >= 2:
+            double_count += 1
+            kappa_pairs.append((independents[0]["verdict"], independents[1]["verdict"]))
+        if any(a.get("role_in_process") == "arbitration" for a in history):
+            arbitrated_count += 1
+
+    min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
+    return quality.compute_annotation_readiness(
+        total_records=len(records), gold_count=gold_count, double_annotated_count=double_count,
+        arbitrated_count=arbitrated_count, agreement_kappa=gold_annotation.cohens_kappa(kappa_pairs),
+        min_sample_size=min_sample_size,
+    )
+
+
 def _to_summary(version: dict) -> DatasetVersionSummary:
     readiness = version["readiness"]
+    dims = dict(readiness["dimensions"])
+    if version["source_type"] in ("public_extracted", "expert_collected"):
+        dims["annotation_readiness"] = _live_annotation_readiness(version)
+    scores = [dims[key]["score"] for key in quality.DIMENSION_WEIGHTS]
+    if all(s is not None for s in scores):
+        overall = round(sum(dims[key]["score"] * w for key, w in quality.DIMENSION_WEIGHTS.items()), 1)
+        band = quality.band(overall)
+    else:
+        overall, band = readiness["overall"], readiness["band"]
+    readiness = {**readiness, "overall": overall, "band": band, "dimensions": dims}
+
     dims_with_explanations = {
         key: {**dim, "explanation": version["explanations"].get(key, "")}
         for key, dim in readiness["dimensions"].items()
@@ -271,23 +308,7 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
     return _to_summary(version)
 
 
-def _records_for_export(version: dict) -> list[dict]:
-    if version["source_type"] == "public_extracted":
-        return version.get("records", [])
-    # expert_collected: reconstruct a record-shaped dict from each stored WorkflowRecord.
-    out = []
-    for wid in version["workflow_ids"]:
-        w = db.get(wid)
-        if not w:
-            continue
-        out.append({
-            "record_id": w["id"],
-            "scenario": {"scenario_name": w["name"]},
-            "graph": w["graph"],
-            "provenance": {"source_type": "expert_collected"},
-            "case_context": w.get("case_context"),
-        })
-    return out
+_records_for_export = dataset_records.records_for_export
 
 
 @router.get("/versions/{version_id}/export")

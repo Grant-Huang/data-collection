@@ -3,7 +3,7 @@
 // deferred (Dataset Slice-style industry/scenario cross-tabs, dual-source trend overlay).
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
-import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, VERDICT_LABELS } from "../api/types";
+import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, GOLD_STATUS_LABELS, VERDICT_LABELS } from "../api/types";
 import type { AnnotationSummary, DatasetVersionSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
@@ -50,7 +50,7 @@ export function DashboardPage({ role }: { role: Role }) {
       setTrend(trendRes.points);
 
       const latestId = vs[0]?.id;
-      if (st === "public_extracted" && latestId) {
+      if (latestId) {
         const [records, summary] = await Promise.all([
           api.listPriorRecords(latestId),
           api.getAnnotationSummary(latestId),
@@ -139,10 +139,12 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         )}
 
-        {sourceType === "public_extracted" && priorRecords.length > 0 && (
+        {priorRecords.length > 0 && (
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）</div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                {sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
+              </div>
               {annotationSummary && (
                 <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
                   标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
@@ -156,6 +158,8 @@ export function DashboardPage({ role }: { role: Role }) {
                       ）
                     </span>
                   )}
+                  {" ・ "}Gold {annotationSummary.gold_counts.gold ?? 0} 条
+                  {annotationSummary.agreement_kappa !== null && ` ・ 一致性 κ=${annotationSummary.agreement_kappa}`}
                 </div>
               )}
             </div>
@@ -174,6 +178,15 @@ export function DashboardPage({ role }: { role: Role }) {
                       }}
                     >
                       {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                        background: r.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
+                        color: r.gold_status === "gold" ? "#b45309" : "#667085",
+                      }}
+                    >
+                      {GOLD_STATUS_LABELS[r.gold_status]}
                     </span>
                     <button
                       onClick={() => setAnnotatingRecordId(r.record_id)}

@@ -232,11 +232,19 @@ class DuplicateCheckResult(BaseModel):
 
 
 # --- Prior annotation (Phase 7 sub-phase B, IMPLEMENTATION_PLAN.md section 9.2) ---
-# "Public/LLM-derived Prior -> Expert-annotated Prior" from the design draft. Single-annotator
-# chain by decision -- no Cohen's kappa / Krippendorff's alpha here (design draft decision 3).
+# "Public/LLM-derived Prior -> Expert-annotated Prior" from the design draft: any single
+# annotation flips this, unchanged since Phase 7 (design draft decision 3).
+#
+# --- Gold annotation (IMPLEMENTATION_PLAN.md section 9, §9 Phase C-2): a stricter status
+# layered on top, requiring two independent annotations that agree (or a third person's
+# arbitration when they don't) -- see gold_status below and _compute_gold_status in
+# routers/annotations.py. Applies to both public_extracted and expert_collected versions now
+# (decision: both need Gold, not just imports).
 
 PriorStatus = Literal["raw", "expert_annotated"]
 PriorVerdict = Literal["accepted", "needs_revision", "rejected"]
+GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "gold"]
+AnnotationRole = Literal["independent", "arbitration"]
 # Per-node judgement string: "keep" / "delete" / "merge_into:<other_node_id>".
 NodeVerdicts = dict[str, str]
 
@@ -246,6 +254,10 @@ class CreateAnnotationRequest(BaseModel):
     node_verdicts: NodeVerdicts = Field(default_factory=dict)
     note: Optional[str] = None
     actor_role: Optional[str] = None
+    # Required (not just an audit nicety): without a real account system, this is the only
+    # signal routers/annotations.py has to tell two independent annotators apart -- see
+    # IMPLEMENTATION_PLAN.md section 9's note on this limitation.
+    annotator_name: str
 
 
 class PriorAnnotation(BaseModel):
@@ -257,6 +269,8 @@ class PriorAnnotation(BaseModel):
     node_verdicts: NodeVerdicts = Field(default_factory=dict)
     note: Optional[str] = None
     actor_role: Optional[str] = None
+    annotator_name: str
+    role_in_process: AnnotationRole = "independent"
     annotated_at: str
 
 
@@ -272,6 +286,7 @@ class PriorRecordDetail(BaseModel):
     # the import pipeline already accepted.
     graph: dict
     prior_status: PriorStatus
+    gold_status: GoldStatus = "not_gold"
     annotations: list[PriorAnnotation] = Field(default_factory=list)  # oldest first
 
 
@@ -281,6 +296,7 @@ class PriorRecordSummary(BaseModel):
     node_count: int
     prior_status: PriorStatus
     latest_verdict: Optional[PriorVerdict] = None
+    gold_status: GoldStatus = "not_gold"
 
 
 class AnnotationSummary(BaseModel):
@@ -288,6 +304,8 @@ class AnnotationSummary(BaseModel):
     total_records: int
     annotated_records: int
     verdict_counts: dict[str, int]
+    gold_counts: dict[str, int] = Field(default_factory=dict)
+    agreement_kappa: Optional[float] = None
 
 
 # --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---

@@ -180,12 +180,16 @@ export interface DatasetVersionSummary {
   is_gold: boolean;
 }
 
-// --- Prior annotation (IMPLEMENTATION_PLAN.md section 9.2) ---
-// "Public/LLM-derived Prior" -> "Expert-annotated Prior". Single-annotator chain, no
-// multi-rater agreement (design draft decision 3) -- see PriorAnnotation.based_on_annotation_id.
+// --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
+// "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this
+// (unchanged since Phase 7). Gold is a stricter status layered on top, requiring two
+// independent annotations that agree, or a third person's arbitration when they don't --
+// see gold_status. Applies to both public_extracted and expert_collected now.
 
 export type PriorStatus = "raw" | "expert_annotated";
 export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
+export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "gold";
+export type AnnotationRole = "independent" | "arbitration";
 // node_id -> "keep" | "delete" | "merge_into:<other_node_id>"
 export type NodeVerdicts = Record<string, string>;
 
@@ -198,6 +202,8 @@ export interface PriorAnnotation {
   node_verdicts: NodeVerdicts;
   note: string | null;
   actor_role: string | null;
+  annotator_name: string;
+  role_in_process: AnnotationRole;
   annotated_at: string;
 }
 
@@ -206,6 +212,7 @@ export interface PriorRecordDetail {
   name: string;
   graph: Graph;
   prior_status: PriorStatus;
+  gold_status: GoldStatus;
   annotations: PriorAnnotation[]; // oldest first
 }
 
@@ -215,6 +222,7 @@ export interface PriorRecordSummary {
   node_count: number;
   prior_status: PriorStatus;
   latest_verdict: PriorVerdict | null;
+  gold_status: GoldStatus;
 }
 
 export interface AnnotationSummary {
@@ -222,7 +230,16 @@ export interface AnnotationSummary {
   total_records: number;
   annotated_records: number;
   verdict_counts: Partial<Record<PriorVerdict, number>>;
+  gold_counts: Partial<Record<GoldStatus, number>>;
+  agreement_kappa: number | null;
 }
+
+export const GOLD_STATUS_LABELS: Record<GoldStatus, string> = {
+  not_gold: "非 Gold",
+  pending_second_review: "待第二人复核",
+  disputed_pending_arbitration: "分歧待仲裁",
+  gold: "★ Gold",
+};
 
 export const VERDICT_LABELS: Record<PriorVerdict, string> = {
   accepted: "采纳", needs_revision: "需要修改", rejected: "丢弃",

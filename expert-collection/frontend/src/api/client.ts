@@ -101,10 +101,11 @@ export const api = {
     verdict: PriorVerdict,
     nodeVerdicts: NodeVerdicts,
     note: string | null,
+    annotatorName: string,
     actorRole?: string,
   ) =>
     req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/annotations`, {
-      verdict, node_verdicts: nodeVerdicts, note, actor_role: actorRole,
+      verdict, node_verdicts: nodeVerdicts, note, annotator_name: annotatorName, actor_role: actorRole,
     }),
   getAnnotationSummary: (versionId: string) =>
     req<AnnotationSummary>("GET", `/api/datasets/versions/${versionId}/annotation-summary`),
