@@ -303,6 +303,16 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 延迟：这是高频关键路径调用（每轮对话都要调），需要跟用户对齐一个可接受的延迟目标（比如 P95 < 3 秒），验收时要实测
 - `temperature` 真正生效：设置页早就能配 `temperature`，但之前 Mock 版本没有真正的模型调用可传，现在要验证 slot 配置的 `temperature` 真的传进了请求体，不是摆设
 
+**(a)(b) 已实现**（(c)(d) 还没做）：
+- 新增 `app/llm_client.py`：`chat_completion()`/`chat_completion_json()`，OpenAI 兼容 `/chat/completions`，`urllib.request` 实现（不引入新依赖）。失败一律抛 `LLMError(kind, message)`，`kind` 取 `not_configured`/`timeout`/`http_error`/`bad_response` 四种之一，调用方据此决定怎么降级，永远不裸抛、不返回假成功。
+- `settings.py` 新增 `resolve_slot_for_call()`：跟已有的 `resolve_slot()`（给 API 响应用，`api_key` 脱敏成 `api_key_set` 布尔）区分开，这个给真实调用用，返回明文 `api_key`——两个函数分工清楚，脱敏这件事不会因为以后忘记而泄漏。
+- 用一个自建的 stub OpenAI 兼容服务器（`urllib.request`/`http.server` 写的，仅用于测试，没有提交进仓库）跑通验收 2 要求的四种场景（正常响应、超时、5xx、响应体不是合法 JSON），另外追加测试了"响应体是合法 JSON 但缺 `content` 字段"、`chat_completion_json()` 在模型返回非 JSON 内容时正确拒绝——全部按预期抛出对应 `kind` 的 `LLMError`，全部通过
+- `guide_service.py` 新增 `_understand_step(text)`：`guide_service` slot 启用且配置了 `endpoint`/`model_name` 时走真实 LLM 调用（`_llm_understand_step`，prompt 约束模型只能从专家原话里提炼、不能编造，且遇到"并/同时"这类连接词依然要老实说"ambiguous"而不是自己瞎猜——这是产品决策，不是 Mock 能力限制，换了真模型也要守住），任何失败（未配置/网络错误/超时/输出解析失败/字段缺失）都会退回原来的 regex 实现（`_extract_step_clauses`/`_needs_parallel_clarify`），不抛错到专家面前
+- 原来六处调用点各自的 `_needs_parallel_clarify` + `_add_step_nodes` 双重调用，统一收敛成 `_understand_step()` 只调一次 + `_apply_understanding()` 三路分发（`ambiguous`→追问，`parallel`→直接建 split/join 结构，其余→串行链）——**这里测试时抓到一个真实 bug**：一开始的实现只处理了"ambiguous"和"其他都当串行"两种情况，遗漏了大模型可以直接、自信地判定"parallel"（不需要追问）这条路径——用 regex 版本测不出这个 bug，因为 regex 永远只会给出"ambiguous"或"serial"，从来不会自信地直接说"parallel"；是用一个自建的 stub 场景（模型固定返回 `relationship: "parallel"`，且 clauses 内容跟输入原文完全无关，专门设计用来证明真的是 LLM 路径在起作用而不是 regex 兜底）测出来的：串行链被误建了，没有生成该有的 `parallel_split`/`parallel_join` 结构。加了 `_apply_understanding()` 统一三路分发后修复
+- **已验证**：真实 HTTP 端到端跑通四条路径——① 未配置任何 LLM 时行为跟换模型之前完全一致（回归测试）；② LLM 自信判定 parallel，直接生成 split/branches/join，不问澄清问题；③ LLM 判定 ambiguous，走跟之前 PR #11 一样的"先后做/同时做"追问流程，但 clauses 内容来自 LLM 输出而不是 regex 提取；④ LLM 调用失败（5xx）时正确退回 regex 路径，行为跟未配置时一致，不崩溃不挂起
+
+**还没做（下一步）**：(b) 验收2 要求的"至少3个regex处理不了但真模型能处理"的真实语义变体测试——这个要接到真实模型才能测，自建 stub 只能测"插拔链路对不对"，测不出真实语言理解能力；(c) 更正/回退能力整个还没动；(d) 延迟/temperature生效的量化验收还没做。
+
 ### §15.2-①② 实验结果解读 + 多实验对比解读（`explain.py`，C_flagship，合并做）
 
 - 验收 1：复用 (a) 的 LLM 客户端，输入是 `quality.py`/`experiments.py` 算出的真实指标（不是编的）
