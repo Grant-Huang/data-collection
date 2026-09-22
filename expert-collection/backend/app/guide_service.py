@@ -7,11 +7,17 @@ Honesty about what this mock does and doesn't do, since it matters for how it's 
 - Structural decisions (branch / parallel / merge / approval / retry) are read off the small
   fixed set of quick-reply chips from PRD section 18 -- pattern-matching the handful of chip
   strings is completely fine because the answer space really is that closed set.
-- Content (node labels, roles) is taken verbatim from whatever the expert typed, with no NLU
-  at all. It does not summarize, infer, or fill in anything the expert didn't say -- which
-  happens to be the same "don't silently fabricate" rule the real model is required to follow
-  (PRD 3.2), just satisfied here by construction rather than by a trained model actually
-  understanding the text.
+- Content (node labels, roles) is built only from words the expert actually typed, with no
+  NLU, summarization or paraphrase. It does not infer or fill in anything the expert didn't
+  say -- which happens to be the same "don't silently fabricate" rule the real model is
+  required to follow (PRD 3.2), just satisfied here by construction rather than by a trained
+  model actually understanding the text. Within that constraint, one piece of free text can
+  still describe more than one step ("先记录系统，然后通知班组长") or mix in scene-setting
+  that isn't a step at all ("是质检员发现的，..."). `_extract_step_clauses` below draws the
+  line at a fixed, closed set of coordinating connectors and a fixed "who discovered this"
+  prefix pattern -- the same kind of pattern-matching-over-a-closed-set already used for chip
+  parsing, not general sentence understanding -- so each resulting node label is the clause
+  about that one action, not the whole compound sentence and not a fabricated summary of it.
 - It cannot handle expert input arriving out of the expected order (PRD 3.2's "if the expert
   volunteers later information early, extract it immediately" is a real-LLM capability this
   mock does not attempt). It always advances one fixed stage at a time.
@@ -250,33 +256,24 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return _handle_b_group_clarify(stage, text, pending, ops)
 
     if stage == "trigger_detail":
-        start_id, first_id = _nid(), _nid()
+        start_id = _nid()
         ops += [
             {"op": "add_node", "node": {"node_id": start_id, "node_type": "start", "label": "开始",
                                          "source_turn_ids": [], "confidence": 0.9, "expert_confirmed": False}},
             {"op": "set_start", "node_id": start_id},
-            {"op": "add_node", "node": {"node_id": first_id, "node_type": "activity", "label": text[:40],
-                                         "source_turn_ids": [], "confidence": 0.9, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": start_id, "to": first_id,
-                                         "edge_type": "normal", "confidence": 0.9, "expert_confirmed": False}},
         ]
+        tail_id = _add_step_nodes(ops, start_id, text, confidence=0.9)
         reply = "明白，我先记下这一步。然后呢？下一步是谁做什么？"
         nq = {"target": "main_path_discovery", "priority": "P0", "question": reply, "chips": None}
-        new_state = {"stage": "main_path", "cursor": first_id, "pending": pending}
+        new_state = {"stage": "main_path", "cursor": tail_id, "pending": pending}
         return reply, ops, nq, new_state
 
     if stage == "main_path":
-        step_id = _nid()
-        ops += [
-            {"op": "add_node", "node": {"node_id": step_id, "node_type": "activity", "label": text[:40],
-                                         "source_turn_ids": [], "confidence": 0.85, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": cursor, "to": step_id,
-                                         "edge_type": "normal", "confidence": 0.85, "expert_confirmed": False}},
-        ]
+        tail_id = _add_step_nodes(ops, cursor, text)
         reply = "这里是不是只有一种处理方式，还是不同情况下会走不同方向？"
         nq = {"target": "branch_discovery", "priority": "P1", "question": reply,
               "chips": ["只有一种处理方式", "会走不同方向", "不确定，再想想"]}
-        new_state = {"stage": "branch_check", "cursor": step_id, "pending": pending}
+        new_state = {"stage": "branch_check", "cursor": tail_id, "pending": pending}
         return reply, ops, nq, new_state
 
     if stage == "branch_check":
@@ -302,14 +299,8 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
 
     if stage == "branch_condition_a":
         condition, rest = _split_condition(text)
-        tail_id = _nid()
-        ops += [
-            {"op": "add_node", "node": {"node_id": tail_id, "node_type": "activity", "label": rest or text[:40],
-                                         "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": cursor, "to": tail_id,
-                                         "edge_type": "conditional", "condition": condition,
-                                         "confidence": 0.8, "expert_confirmed": False}},
-        ]
+        tail_id = _add_step_nodes(ops, cursor, rest or text, edge_type="conditional",
+                                   condition=condition, confidence=0.8)
         reply = "另一种情况呢？条件是什么，接下来做什么？"
         nq = {"target": "branch_condition_b", "priority": "P1", "question": reply, "chips": None}
         new_state = {"stage": "branch_condition_b", "cursor": cursor,
@@ -318,14 +309,8 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
 
     if stage == "branch_condition_b":
         condition, rest = _split_condition(text)
-        tail_id = _nid()
-        ops += [
-            {"op": "add_node", "node": {"node_id": tail_id, "node_type": "activity", "label": rest or text[:40],
-                                         "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": cursor, "to": tail_id,
-                                         "edge_type": "conditional", "condition": condition,
-                                         "confidence": 0.8, "expert_confirmed": False}},
-        ]
+        tail_id = _add_step_nodes(ops, cursor, rest or text, edge_type="conditional",
+                                   condition=condition, confidence=0.8)
         reply = "这两条路径处理完之后，是各自继续，还是要汇总后再进入同一步？"
         nq = {"target": "parallel_merge_discovery", "priority": "P3", "question": reply,
               "chips": ["各自继续", "汇总后再决定", "不确定，再想想"]}
@@ -376,13 +361,7 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return reply, ops, nq, new_state
 
     if stage == "parallel_branch_a":
-        tail_id = _nid()
-        ops += [
-            {"op": "add_node", "node": {"node_id": tail_id, "node_type": "activity", "label": text[:40],
-                                         "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": cursor, "to": tail_id,
-                                         "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
-        ]
+        tail_id = _add_step_nodes(ops, cursor, text, edge_type="parallel", confidence=0.8)
         reply = "第二项并行的工作呢？"
         nq = {"target": "parallel_merge_discovery", "priority": "P2", "question": reply, "chips": None}
         new_state = {"stage": "parallel_branch_b", "cursor": cursor,
@@ -390,14 +369,10 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
         return reply, ops, nq, new_state
 
     if stage == "parallel_branch_b":
-        tail_id = _nid()
-        join_id = _nid()
         a_tail = pending.get("par_a_tail")
+        tail_id = _add_step_nodes(ops, cursor, text, edge_type="parallel", confidence=0.8)
+        join_id = _nid()
         ops += [
-            {"op": "add_node", "node": {"node_id": tail_id, "node_type": "activity", "label": text[:40],
-                                         "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
-            {"op": "add_edge", "edge": {"edge_id": _nid(), "from": cursor, "to": tail_id,
-                                         "edge_type": "parallel", "confidence": 0.8, "expert_confirmed": False}},
             {"op": "add_node", "node": {"node_id": join_id, "node_type": "parallel_join", "label": "并行汇合",
                                          "source_turn_ids": [], "confidence": 0.8, "expert_confirmed": False}},
             {"op": "add_edge", "edge": {"edge_id": _nid(), "from": a_tail, "to": join_id,
@@ -493,6 +468,81 @@ def handle_turn(state: dict[str, Any], text: str) -> tuple[str, list[dict], dict
     # stage == "review" or unknown: nothing more to structurally extract
     reply = "已经在最终确认阶段了——有需要修改的地方，直接说，我来改图；没问题的话可以点「确认并提交」。"
     return reply, ops, None, state
+
+
+_DISCOVERY_PREFIX_RE = re.compile(
+    r"^(是)?[^，,。]{0,20}(发现的|发现|反馈的|反馈|报告的|报告|上报的|上报)[，,、]\s*"
+)
+
+_STEP_FILLER_PREFIX_RE = re.compile(
+    r"^(第一时间就|第一时间|立即就|立即|马上就|马上|随即就|随即|随后就|随后|接着就|接着|然后就|然后|先|再)\s*"
+)
+
+# Fixed, closed set of coordinating connectors this mock treats as "these join two
+# actions", same spirit as the fixed chip vocabulary used elsewhere (PRD section 18).
+_STEP_SPLIT_RE = re.compile(r"[，,]?\s*(?:并且|并|同时|然后)\s*|、")
+
+
+def _extract_step_clauses(text: str, max_steps: int = 2) -> list[str]:
+    """Best-effort split of one piece of expert free text into 1-2 short step
+    descriptions -- honestly within the Honest Mock limits described in the module
+    docstring:
+    - This is NOT summarization or paraphrase. Every word in the output still comes
+      from the expert's own text. Two things are removed, both mechanically: (a) an
+      optional leading "who discovered this / how it was noticed" clause, which
+      belongs to scenario_trigger / case_context (already asked for separately) and
+      is not itself a step; (b) leading timing filler words ("第一时间就", "随后",
+      ...) trimmed off the front of each resulting clause so the label reads as an
+      action ("记录系统") rather than a raw sentence fragment ("第一时间就记录系统").
+    - The split point is a fixed small set of coordinating connectors ("并"/"同时"/
+      "、"), not general clause parsing -- if the expert's phrasing doesn't use one
+      of these, this function makes no attempt to guess a boundary and returns the
+      text as a single clause, same as the old verbatim behaviour.
+    - Capped at `max_steps` clauses: anything past the (max_steps-1)th connector is
+      folded back into the last clause rather than silently dropped, since real
+      free text can list three or more actions and this mock's node-per-message
+      model needs a bound somewhere.
+    """
+    cleaned = _DISCOVERY_PREFIX_RE.sub("", text.strip())
+    parts = [p.strip() for p in _STEP_SPLIT_RE.split(cleaned) if p and p.strip()]
+    if not parts:
+        parts = [cleaned]
+    if len(parts) > max_steps:
+        parts = parts[: max_steps - 1] + ["、".join(parts[max_steps - 1:])]
+    result = []
+    for p in parts:
+        p = _STEP_FILLER_PREFIX_RE.sub("", p).strip("，, ").strip()
+        if p:
+            result.append(p[:40])
+    return result or [text.strip()[:40]]
+
+
+def _add_step_nodes(ops: list[dict], from_id: str, text: str, edge_type: str = "normal",
+                     condition: str | None = None, confidence: float = 0.85) -> str:
+    """Create one activity node per clause extracted from `text` (see
+    _extract_step_clauses -- usually 1, occasionally 2), chained in sequence and
+    linked from `from_id`. The first edge carries `edge_type`/`condition` (e.g. a
+    branch's conditional edge); any edge added between split clauses is a plain
+    "normal" edge, since both clauses still happened on the same path. Returns the
+    id of the last node created, i.e. the new cursor.
+    """
+    clauses = _extract_step_clauses(text)
+    prev_id = from_id
+    tail_id = from_id
+    for i, clause in enumerate(clauses):
+        node_id = _nid()
+        ops.append({"op": "add_node", "node": {"node_id": node_id, "node_type": "activity",
+                                                 "label": clause, "source_turn_ids": [],
+                                                 "confidence": confidence, "expert_confirmed": False}})
+        edge = {"edge_id": _nid(), "from": prev_id, "to": node_id,
+                "edge_type": edge_type if i == 0 else "normal",
+                "confidence": confidence, "expert_confirmed": False}
+        if i == 0 and condition:
+            edge["condition"] = condition
+        ops.append({"op": "add_edge", "edge": edge})
+        prev_id = node_id
+        tail_id = node_id
+    return tail_id
 
 
 def _split_condition(text: str) -> tuple[str, str]:
