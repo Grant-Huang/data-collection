@@ -7,7 +7,6 @@ import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS } from "../api/typ
 import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
-import { ImportPanel } from "../components/ImportPanel";
 import { TrendChart } from "../components/TrendChart";
 
 type Tab = "quality" | "completeness" | "leakage" | "trend";
@@ -21,9 +20,6 @@ const TABS: { key: Tab; label: string }[] = [
 
 const BAND_COLOR: Record<string, string> = { good: "#0ca30c", warning: "#fab219", poor: "#ec835a", insufficient_sample: "#94a3b8" };
 const BAND_LABEL: Record<string, string> = { good: "良好", warning: "待改善", poor: "较差", insufficient_sample: "样本不足" };
-const EXPORT_FORMATS: { key: string; label: string }[] = [
-  { key: "raw", label: "原始版" }, { key: "role_normalized", label: "角色归一化版" }, { key: "anonymized", label: "匿名版" },
-];
 
 export function DashboardPage({ role }: { role: Role }) {
   const [sourceType, setSourceType] = useState<SourceType>("expert_collected");
@@ -106,12 +102,6 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         </div>
 
-        {sourceType === "public_extracted" && (
-          <div style={{ marginBottom: 16 }}>
-            <ImportPanel role={role} onImported={() => refresh(sourceType)} />
-          </div>
-        )}
-
         {sourceType === "expert_collected" && (
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div style={{ fontSize: 12.5, color: "#475569" }}>
@@ -144,25 +134,10 @@ export function DashboardPage({ role }: { role: Role }) {
 
         {!latest ? (
           <div style={{ background: "#fff", border: "1px dashed #d0d5dd", borderRadius: 10, padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-            {sourceType === "expert_collected" ? "还没有发布过版本，先在专家采集页完成并确认几条会话，再回来发布。" : "还没有导入过公共集数据，请使用上方的导入面板。"}
+            {sourceType === "expert_collected" ? "还没有发布过版本，先在专家采集页完成并确认几条会话，再回来发布。" : "还没有导入过公共集数据，请前往「管理页面」的导入/导出面板导入。"}
           </div>
         ) : (
           <>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 11.5, color: "#94a3b8" }}>导出当前版本（v{latest.version_number}）：</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {EXPORT_FORMATS.map((f) => (
-                  <a
-                    key={f.key}
-                    href={api.exportVersionUrl(latest.id, f.key)}
-                    style={{ fontSize: 11.5, color: "#2a78d6", border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 10px", textDecoration: "none" }}
-                  >
-                    {f.label}
-                  </a>
-                ))}
-              </div>
-            </div>
-
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 20 }}>
               <MetricCard label="工作流数" value={latest.workflow_count} tip="当前版本包含的记录数量。" />
               <MetricCard label="步骤总数" value={latest.total_steps} tip="所有工作流的节点总数之和，衡量数据集的体量，不只是条数。" />
