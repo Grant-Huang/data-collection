@@ -41,9 +41,12 @@ def _draft_pool(source_type: str) -> list[dict]:
     if source_type != "expert_collected":
         return []
     already_published = _published_workflow_ids(source_type)
+    # Archived sessions are the expert/admin saying "set this one aside" -- keep them out of
+    # the next publish until they're unarchived.
     return [
         w for w in db.list_all()
         if w["status"] == "expert_confirmed" and w["id"] not in already_published
+        and not w.get("archived", False)
     ]
 
 

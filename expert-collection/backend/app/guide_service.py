@@ -924,3 +924,128 @@ def _split_condition(text: str) -> tuple[str, str]:
             head, _, tail = text.partition(sep)
             return head.strip(), tail.strip()
     return text.strip(), ""
+
+
+# --- Graph regeneration (左栏「...」菜单 -> 用大模型根据会话内容重新生成流程图) -------------
+#
+# Different shape from `_understand_step`: that one turns *one sentence* into clauses for the
+# FSM to place node-by-node as the conversation goes; this turns the *entire transcript* into
+# a complete replacement Graph in one call. There's no rule-based fallback for that -- a
+# regex pass has no way to approximate "read this whole conversation and produce a DAG" the
+# way it can approximate "split this one sentence on 并/同时" -- so unlike `_understand_step`,
+# any failure here (slot disabled/unconfigured, network, malformed output) raises
+# `llm_client.LLMError` instead of degrading to something else. The caller
+# (routers/expert_workflows.py::regenerate_graph) is responsible for leaving the existing
+# graph untouched when this raises, and for the "already in a published dataset -> refuse
+# before ever calling this" gate -- this function only knows how to build a graph from text,
+# not what's allowed to call it.
+
+_VALID_NODE_TYPES = {
+    "start", "activity", "decision", "parallel_split", "parallel_join",
+    "merge", "approval", "handoff", "wait", "end",
+}
+_VALID_EDGE_TYPES = {
+    "normal", "conditional", "parallel", "merge", "handoff", "approval",
+    "timeout", "exception_forward",
+}
+
+_REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程图整理模块。下面会给你一整段专家访谈的对话记录（助手的提问 + 专家的回答），请你根据专家实际说过的内容，重新整理出一张完整的流程图（DAG，有向无环图）。
+
+严格规则：
+- 只使用专家在对话里明确说过的步骤/判断/分支/并行/审批/等待/重试等信息，不要编造对话里没有出现过的节点或分支。
+- 每个节点的 label 用专家自己的措辞提炼，不要整句话不加处理地照抄，也不要过度概括丢掉关键信息。
+- 图必须是有向无环图：不允许出现环——返工/重试请通过 retry_semantics 表达语义，不要建一条指回之前节点的边。
+- 必须有且只应有你能从对话里确认的 start 和 end 节点。
+
+只输出一个 JSON object，字段：
+- "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）}
+- "edges"：数组，每个元素 {"edge_id": 短字符串（如 "e1"）, "from": 起点 node_id, "to": 终点 node_id, "edge_type": 以下之一：normal/conditional/parallel/merge/handoff/approval/timeout/exception_forward, "condition": 字符串或 null（仅 conditional 边，条件是什么）}
+- "start_node_ids"：字符串数组，start 节点的 node_id
+- "end_node_ids"：字符串数组，end 节点的 node_id
+
+只输出 JSON，不要有任何其他文字。"""
+
+
+def _coerce_regenerated_graph(parsed: dict) -> dict | None:
+    """Validates + normalizes the model's raw JSON into the same shape `graph_ops.new_graph()`
+    produces (so it can replace `record["graph"]` directly and go through the usual
+    `graph_validator.validate` afterward). Returns None on any structural problem -- the
+    caller turns that into an `LLMError("bad_response", ...)`, same spirit as
+    `_llm_understand_step`'s None-on-bad-shape contract.
+    """
+    raw_nodes = parsed.get("nodes")
+    raw_edges = parsed.get("edges")
+    if not isinstance(raw_nodes, list) or not raw_nodes or not isinstance(raw_edges, list):
+        return None
+
+    nodes: list[dict] = []
+    node_ids: set[str] = set()
+    for n in raw_nodes:
+        if not isinstance(n, dict):
+            return None
+        node_id, node_type, label = n.get("node_id"), n.get("node_type"), n.get("label")
+        if not isinstance(node_id, str) or not node_id or node_id in node_ids:
+            return None
+        if node_type not in _VALID_NODE_TYPES:
+            return None
+        if not isinstance(label, str) or not label.strip():
+            return None
+        node_ids.add(node_id)
+        actor_roles = n.get("actor_roles")
+        nodes.append({
+            "node_id": node_id, "node_type": node_type, "label": label.strip()[:120],
+            "actor_roles": [r for r in actor_roles if isinstance(r, str) and r.strip()] if isinstance(actor_roles, list) else [],
+            "decision_question": n["decision_question"] if isinstance(n.get("decision_question"), str) else None,
+            "confidence": 0.6, "expert_confirmed": False, "source_turn_ids": [],
+        })
+
+    edges: list[dict] = []
+    edge_ids: set[str] = set()
+    for e in raw_edges:
+        if not isinstance(e, dict):
+            return None
+        edge_id, from_id, to_id, edge_type = e.get("edge_id"), e.get("from"), e.get("to"), e.get("edge_type")
+        if not isinstance(edge_id, str) or not edge_id or edge_id in edge_ids:
+            return None
+        if from_id not in node_ids or to_id not in node_ids:
+            return None
+        if edge_type not in _VALID_EDGE_TYPES:
+            return None
+        edge_ids.add(edge_id)
+        edges.append({
+            "edge_id": edge_id, "from": from_id, "to": to_id, "edge_type": edge_type,
+            "condition": e["condition"] if isinstance(e.get("condition"), str) else None,
+            "confidence": 0.6, "expert_confirmed": False, "source_turn_ids": [],
+        })
+
+    start_ids = parsed.get("start_node_ids")
+    end_ids = parsed.get("end_node_ids")
+    if not isinstance(start_ids, list) or not all(isinstance(s, str) and s in node_ids for s in start_ids):
+        start_ids = [n["node_id"] for n in nodes if n["node_type"] == "start"]
+    if not isinstance(end_ids, list) or not all(isinstance(s, str) and s in node_ids for s in end_ids):
+        end_ids = [n["node_id"] for n in nodes if n["node_type"] == "end"]
+
+    return {"graph_type": "dag", "start_node_ids": start_ids, "end_node_ids": end_ids, "nodes": nodes, "edges": edges}
+
+
+def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
+    """Full transcript -> full replacement Graph, via the `graph_regenerate` LLM slot. Raises
+    `llm_client.LLMError` on any failure (not configured/disabled, network/timeout, malformed
+    or structurally invalid output) -- see the module comment above for why there's no
+    fallback path here, unlike `_understand_step`.
+    """
+    slot_config = app_settings.resolve_slot_for_call(app_settings.get_effective_settings(), "graph_regenerate")
+    if not (slot_config.get("enabled") and slot_config.get("endpoint") and slot_config.get("model_name")):
+        raise llm_client.LLMError("not_configured", "「重新生成流程图」环节未配置可达的推理服务（请到系统设置里配置）")
+
+    transcript = "\n".join(
+        f"{'专家' if t['role'] == 'expert' else '助手'}：{t['text']}" for t in turns
+    )
+    parsed = llm_client.chat_completion_json(slot_config, [
+        {"role": "system", "content": _REGENERATE_SYSTEM_PROMPT},
+        {"role": "user", "content": transcript},
+    ])
+    graph = _coerce_regenerated_graph(parsed)
+    if graph is None:
+        raise llm_client.LLMError("bad_response", f"模型输出的流程图结构不符合预期格式：{parsed!r}"[:500])
+    return graph
