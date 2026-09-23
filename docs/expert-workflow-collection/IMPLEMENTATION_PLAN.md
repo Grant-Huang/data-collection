@@ -424,8 +424,20 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 ### §14 实验中心其余方法
 
-- `pm4py_inductive`/`pm4py_heuristics`（集成开源库，跟 LLM 无关）：验收是真实跑通、产出真实指标，不是空跑占位
-- 真正的"LLM 抽取器"实验方法：这是"批量从原始文本/记录抽取 Graph"的独立流水线，跟 guide_service 的实时对话式抽取不是一回事（一个是事后批处理，一个是逐轮交互），需要单独设计输入输出协议，工作量大，本轮不展开，等排到再细化
+**`pm4py_inductive`/`pm4py_heuristics`（集成开源库，跟 LLM 无关，已实现）**：验收是真实跑通、产出真实指标，不是空跑占位——这两个方法现在真的调用 pm4py 库的 Inductive Miner / Heuristics Miner 做流程挖掘，不是套壳 `consensus_dfg` 换个名字。
+
+**设计**（`experiments.py::run_pm4py_method`）：
+- **DAG → 事件日志**：pm4py 挖掘算法要的输入是"案例+活动序列"的事件日志，不是图。新增 `_graph_to_traces(graph)`：从起点节点出发遍历图，每个节点的每条出边都单独展开成一条延续路径——判断节点的每个分支天然变成不同的 trace，并行分支也都会被走到（只是不模拟真正的并发交织，因为挖掘算法看的是"谁跟在谁后面"这个直接前驱关系，交织顺序不影响这个关系是否存在）。设了 `max_traces=6` 的上限，防止分支嵌套很深的图把事件日志炸开——这跟 `_main_path_types` 只取主路径是同一类"诚实地不完整"取舍，只是覆盖面更宽。`_build_event_log()` 把这些路径铺成 pm4py 要的 `case:concept:name`/`concept:name`/`time:timestamp` 三列（时间戳是合成的相对顺序，这个产品本来就不采集真实时长）。
+- **挖掘 + 评估**：训练集事件日志喂给 `pm4py.discover_petri_net_inductive`/`discover_petri_net_heuristics` 得到一个真实的 Petri 网模型；测试集事件日志喂给 pm4py 自带的 `fitness_token_based_replay`/`precision_token_based_replay`（标准 token-based replay 一致性检验，不是自造指标）算出模型对留出测试集的拟合度和精确度。
+- **指标映射**（复用现有 `node_f1`/`edge_f1`/`graph_structural_f1`/`structural_match_rate` 四个字段，让 Experiment Center 前端和 `compare` 接口不用为新方法改字段）：`node_f1` ← 平均 trace fitness（模型能重现测试集里发生过的事情吗）；`graph_structural_f1` ← precision（模型会不会放行测试集里从没发生过的路径）；`edge_f1` ← fitness 和 precision 的调和平均（标准 F-measure 算法，不是这个项目自己发明的指标）；`structural_match_rate` 不变，仍然是 `_majority_profile` 那套"图本身有没有分支/并行/返工"结构特征比对，因为这个检查针对的是原始图，跟挖掘出的模型无关。
+- **展示用的代表性结构**：`consensus_dfg` 是从训练集里挑一条"最像大家"的真实主路径当展示图；pm4py 方法则是对挖掘出的真实模型做一次 `play_out`（模型的随机游走展示），取其中最短的一条结果序列展示——这样展示的结构是真的从挖掘出的模型里生成的，不是重用 `consensus_dfg` 那套跟 pm4py 无关的选择逻辑。
+- **代码复用**：把 `run_consensus_dfg` 里原本内嵌的 `majority_profile` 构建、`_avg`、`structural_match` 计算抽成模块级的 `_majority_profile`/`_avg`/`_structural_match`/`_mismatch_group`，`run_consensus_dfg` 和 `run_pm4py_method` 共用，不是各写一份。
+- **依赖**：新增 `pm4py>=2.7`（`requirements.txt`），装上后带了 numpy/pandas/scipy/matplotlib 等一整条依赖链——只用了它的挖掘算法和 token-based replay 评估函数，没用可视化部分。
+- **接线**：`routers/experiments.py::_run_experiment` 按 `method` 分派到 `run_consensus_dfg` 或 `run_pm4py_method`；`IMPLEMENTED_METHODS` 加入这两项；前端 `types.ts::IMPLEMENTED_METHODS` 同步更新，创建实验表单里这两个方法不再显示"本轮未接入真实执行引擎"的警告。
+
+**已验证**：真实 HTTP 联调，不是单测——构造 6 条真实工作流记录（3 条纯线性、3 条带判断分支），发布成一个 `expert_collected` 数据集版本，通过真实 `POST /api/experiments` 分别跑 `pm4py_inductive`/`pm4py_heuristics`/`consensus_dfg`/`llm_extractor` 四个方法：前三个全部 `status: completed` 并产出合理的真实指标（两个 pm4py 方法算出 node_f1=1.0、graph_structural_f1=0.789，consensus_dfg 算出 0.929/0.667——pm4py 方法因为看到了完整分支不只是主路径，指标确实更高，符合预期方向）；`llm_extractor` 仍然诚实失败（`方法 llm_extractor 本轮未接入真实执行引擎`），没有被误伤。三个已完成实验一起跑 `/api/experiments/compare`，metric_table 正确对比出最优值。另外验证了训练集为空图（没有可用起点到终点路径）时正确抛出 `RuntimeError` 而不是崩溃或返回假指标。前端 `tsc -b` 通过。测试完成后清理了 sqlite 里的测试工作流、数据集版本和实验记录，关闭了测试后端进程。
+
+**真正的"LLM 抽取器"实验方法（`llm_extractor`，仍未实现）**：这是"批量从原始文本/记录抽取 Graph"的独立流水线，跟 guide_service 的实时对话式抽取不是一回事（一个是事后批处理，一个是逐轮交互），需要单独设计输入输出协议，工作量大，本轮不展开，等排到再细化
 
 ### §14.4 Dataset Slice
 

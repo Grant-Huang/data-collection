@@ -254,12 +254,12 @@ export type InputVersion = "raw" | "anonymized" | "role_normalized";
 
 export const METHOD_LABELS: Record<ExperimentMethod, string> = {
   consensus_dfg: "consensus_dfg（规则 baseline）",
-  pm4py_inductive: "pm4py_inductive",
-  pm4py_heuristics: "pm4py_heuristics",
+  pm4py_inductive: "pm4py_inductive（Inductive Miner）",
+  pm4py_heuristics: "pm4py_heuristics（Heuristics Miner）",
   llm_extractor: "基于 LLM 的抽取器",
 };
 
-export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg"];
+export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg", "pm4py_inductive", "pm4py_heuristics"];
 
 export interface CreateExperimentRequest {
   name: string;
