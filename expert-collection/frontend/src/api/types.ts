@@ -82,6 +82,38 @@ export interface CaseContext {
   skipped_fields: string[];
 }
 
+export type ManufacturingMode =
+  | "mass_repetitive" | "high_automation" | "high_mix_low_volume" | "eto_mto"
+  | "large_project" | "regulated_traceable" | "other";
+
+export const MANUFACTURING_MODE_LABELS: Record<ManufacturingMode, string> = {
+  mass_repetitive: "大批量重复生产",
+  high_automation: "高自动化产线",
+  high_mix_low_volume: "多品种小批量",
+  eto_mto: "按单设计/按单生产（ETO/MTO）",
+  large_project: "大型项目制造",
+  regulated_traceable: "强监管/可追溯行业",
+  other: "其他",
+};
+
+export interface ManufacturingContext {
+  manufacturing_mode: ManufacturingMode | null;
+  industry: string | null;
+  site_type: string | null;
+  process_area: string | null;
+  product_family: string | null;
+  shift_context: string | null;
+}
+
+// §14.4 Dataset Slice -- must match backend dataset_records.SLICEABLE_FIELDS.
+export const SLICEABLE_FIELDS: { field: keyof ManufacturingContext; label: string }[] = [
+  { field: "manufacturing_mode", label: "制造模式" },
+  { field: "industry", label: "行业" },
+  { field: "site_type", label: "现场类型" },
+  { field: "process_area", label: "工艺/工序范围" },
+  { field: "product_family", label: "产品族" },
+];
+
 export interface ValidationIssue {
   level: "error" | "warning";
   code: string;
@@ -114,6 +146,7 @@ export interface WorkflowRecord {
   completion: Completion;
   validation: ValidationIssue[];
   case_context: CaseContext | null;
+  manufacturing_context: ManufacturingContext | null;
   created_at: string;
   updated_at: string;
 }
@@ -177,14 +210,19 @@ export interface DatasetVersionSummary {
   created_at: string;
   readiness: DatasetReadiness;
   archived: boolean;
+  is_gold: boolean;
 }
 
-// --- Prior annotation (IMPLEMENTATION_PLAN.md section 9.2) ---
-// "Public/LLM-derived Prior" -> "Expert-annotated Prior". Single-annotator chain, no
-// multi-rater agreement (design draft decision 3) -- see PriorAnnotation.based_on_annotation_id.
+// --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
+// "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this
+// (unchanged since Phase 7). Gold is a stricter status layered on top, requiring two
+// independent annotations that agree, or a third person's arbitration when they don't --
+// see gold_status. Applies to both public_extracted and expert_collected now.
 
 export type PriorStatus = "raw" | "expert_annotated";
 export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
+export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "gold";
+export type AnnotationRole = "independent" | "arbitration";
 // node_id -> "keep" | "delete" | "merge_into:<other_node_id>"
 export type NodeVerdicts = Record<string, string>;
 
@@ -197,6 +235,8 @@ export interface PriorAnnotation {
   node_verdicts: NodeVerdicts;
   note: string | null;
   actor_role: string | null;
+  annotator_name: string;
+  role_in_process: AnnotationRole;
   annotated_at: string;
 }
 
@@ -205,6 +245,7 @@ export interface PriorRecordDetail {
   name: string;
   graph: Graph;
   prior_status: PriorStatus;
+  gold_status: GoldStatus;
   annotations: PriorAnnotation[]; // oldest first
 }
 
@@ -214,6 +255,7 @@ export interface PriorRecordSummary {
   node_count: number;
   prior_status: PriorStatus;
   latest_verdict: PriorVerdict | null;
+  gold_status: GoldStatus;
 }
 
 export interface AnnotationSummary {
@@ -221,7 +263,16 @@ export interface AnnotationSummary {
   total_records: number;
   annotated_records: number;
   verdict_counts: Partial<Record<PriorVerdict, number>>;
+  gold_counts: Partial<Record<GoldStatus, number>>;
+  agreement_kappa: number | null;
 }
+
+export const GOLD_STATUS_LABELS: Record<GoldStatus, string> = {
+  not_gold: "非 Gold",
+  pending_second_review: "待第二人复核",
+  disputed_pending_arbitration: "分歧待仲裁",
+  gold: "★ Gold",
+};
 
 export const VERDICT_LABELS: Record<PriorVerdict, string> = {
   accepted: "采纳", needs_revision: "需要修改", rejected: "丢弃",
@@ -236,12 +287,12 @@ export type InputVersion = "raw" | "anonymized" | "role_normalized";
 
 export const METHOD_LABELS: Record<ExperimentMethod, string> = {
   consensus_dfg: "consensus_dfg（规则 baseline）",
-  pm4py_inductive: "pm4py_inductive",
-  pm4py_heuristics: "pm4py_heuristics",
+  pm4py_inductive: "pm4py_inductive（Inductive Miner）",
+  pm4py_heuristics: "pm4py_heuristics（Heuristics Miner）",
   llm_extractor: "基于 LLM 的抽取器",
 };
 
-export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg"];
+export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg", "pm4py_inductive", "pm4py_heuristics"];
 
 export interface CreateExperimentRequest {
   name: string;
@@ -284,6 +335,12 @@ export interface ErrorCase {
   group: string;
 }
 
+export interface ErrorCluster {
+  label: string;
+  description: string;
+  workflow_names: string[];
+}
+
 export interface ExperimentDetail extends ExperimentSummary {
   source_type: SourceType;
   input_version: InputVersion;
@@ -299,6 +356,7 @@ export interface ExperimentDetail extends ExperimentSummary {
   explanation_edited: boolean;
   consensus_graph: Graph | null;
   error_analysis: ErrorCase[];
+  error_clusters: ErrorCluster[];
   failure_reason: string | null;
 }
 

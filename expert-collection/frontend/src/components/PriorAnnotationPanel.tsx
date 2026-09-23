@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { NodeVerdicts, PriorRecordDetail, PriorVerdict, Role } from "../api/types";
-import { VERDICT_LABELS } from "../api/types";
+import { GOLD_STATUS_LABELS, VERDICT_LABELS } from "../api/types";
 import { DagView } from "./DagView";
 
 const VERDICT_COLOR: Record<PriorVerdict, string> = {
@@ -27,6 +27,7 @@ export function PriorAnnotationPanel({
   const [verdict, setVerdict] = useState<PriorVerdict | null>(null);
   const [nodeVerdicts, setNodeVerdicts] = useState<NodeVerdicts>({});
   const [note, setNote] = useState("");
+  const [annotatorName, setAnnotatorName] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,11 +37,13 @@ export function PriorAnnotationPanel({
     api.getPriorRecord(versionId, recordId).then((d) => {
       if (cancelled) return;
       setDetail(d);
-      const latest = d.annotations[d.annotations.length - 1];
-      setVerdict(latest?.verdict ?? null);
-      setNodeVerdicts(latest?.node_verdicts ?? {});
-      setNote(latest?.note ?? "");
-      setExpanded((latest?.verdict ?? null) === "needs_revision");
+      // Gold 标注需要独立标注（不能预填上一次的判定去引导这一次的结论），已完成仲裁的记录只读展示
+      // 历史即可 -- 这里始终从空白开始，跟原来"预填链上最新判定"的单人链式标注行为不同。
+      setVerdict(null);
+      setNodeVerdicts({});
+      setNote("");
+      setAnnotatorName("");
+      setExpanded(false);
     });
     return () => {
       cancelled = true;
@@ -52,11 +55,13 @@ export function PriorAnnotationPanel({
   }
 
   async function handleSave() {
-    if (!verdict) return;
+    if (!verdict || !annotatorName.trim()) return;
     setSaving(true);
     setError(null);
     try {
-      await api.submitAnnotation(versionId, recordId, verdict, expanded ? nodeVerdicts : {}, note.trim() || null, role);
+      await api.submitAnnotation(
+        versionId, recordId, verdict, expanded ? nodeVerdicts : {}, note.trim() || null, annotatorName.trim(), role,
+      );
       onSaved();
       onClose();
     } catch (e) {
@@ -68,6 +73,10 @@ export function PriorAnnotationPanel({
 
   if (!detail) return null;
   const nodes = detail.graph.nodes;
+  const isTerminal = detail.annotations.some((a) => a.role_in_process === "arbitration");
+  const priorNames = detail.annotations
+    .filter((a) => a.role_in_process === "independent")
+    .map((a) => a.annotator_name);
 
   return (
     <>
@@ -81,9 +90,24 @@ export function PriorAnnotationPanel({
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>{detail.name}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+              {detail.name}
+              <span
+                style={{
+                  fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                  background: detail.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
+                  color: detail.gold_status === "gold" ? "#b45309" : "#667085",
+                }}
+              >
+                {GOLD_STATUS_LABELS[detail.gold_status]}
+              </span>
+            </div>
             <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2 }}>
-              {detail.prior_status === "expert_annotated" ? "已标注过，以下预选的是链上最新一次判定" : "尚未标注过"}
+              {isTerminal
+                ? "已完成仲裁，标注流程已结束（只读）"
+                : priorNames.length > 0
+                  ? `已有独立标注：${priorNames.join("、")}——这次需要换一个不同的人（Gold 需要两次真正独立的判断）`
+                  : "尚未标注过，这次会作为第一次独立标注"}
             </div>
           </div>
           <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer" }}>
@@ -145,31 +169,47 @@ export function PriorAnnotationPanel({
           </div>
         )}
 
+        {!isTerminal && (
+          <input
+            value={annotatorName}
+            onChange={(e) => setAnnotatorName(e.target.value)}
+            placeholder="标注人姓名（必填，用于识别独立标注/仲裁）"
+            style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 8, fontFamily: "inherit" }}
+          />
+        )}
+
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="备注（可选）：为什么需要修改或丢弃"
           rows={2}
+          disabled={isTerminal}
           style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 12, fontFamily: "inherit" }}
         />
 
         {error && <div style={{ color: "#991b1b", fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
-        <button
-          onClick={handleSave}
-          disabled={!verdict || saving}
-          style={{
-            width: "100%", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 600, fontSize: 13,
-            background: !verdict || saving ? "#e5e7eb" : "#0ca30c", color: !verdict || saving ? "#94a3b8" : "#fff",
-            cursor: !verdict || saving ? "default" : "pointer",
-          }}
-        >
-          {saving ? "保存中…" : "提交标注"}
-        </button>
+        {!isTerminal && (
+          <button
+            onClick={handleSave}
+            disabled={!verdict || !annotatorName.trim() || saving}
+            style={{
+              width: "100%", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 600, fontSize: 13,
+              background: !verdict || !annotatorName.trim() || saving ? "#e5e7eb" : "#0ca30c",
+              color: !verdict || !annotatorName.trim() || saving ? "#94a3b8" : "#fff",
+              cursor: !verdict || !annotatorName.trim() || saving ? "default" : "pointer",
+            }}
+          >
+            {saving ? "保存中…" : priorNames.length >= 2 ? "提交仲裁判定" : "提交标注"}
+          </button>
+        )}
 
         {detail.annotations.length > 0 && (
           <div style={{ marginTop: 16, fontSize: 11.5, color: "#94a3b8" }}>
-            标注历史（{detail.annotations.length} 次）：{detail.annotations.map((a) => VERDICT_LABELS[a.verdict]).join(" → ")}
+            标注历史（{detail.annotations.length} 次）：
+            {detail.annotations
+              .map((a) => `${VERDICT_LABELS[a.verdict]}（${a.annotator_name}${a.role_in_process === "arbitration" ? "・仲裁" : ""}）`)
+              .join(" → ")}
           </div>
         )}
       </div>

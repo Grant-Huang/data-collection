@@ -49,7 +49,12 @@ SCORING_STANDARDS = {
     "graph_completeness": "Graph Validator 零错误的工作流占比、分支条件填写完整率、并行汇合完整率、返工语义说明完整率综合计算，孤立节点比例应为 0。",
     "extractability": "节点与边的平均置信度（confidence，来自采集时的抽取置信度）越高，分数越高——置信度低通常意味着专家表述模糊或系统只能低把握抽取。",
     "authenticity": "本维度当前只统计『已经过专家确认』的比例（发布流程只收录 expert_confirmed 记录，因此通常为 100%）；岗位/经验年限等专家背景字段尚未采集，不计入。",
-    "annotation_readiness": "统计 Gold 标注覆盖率；本产品的标注体系还未实现（属于后续阶段范围），当前固定记为 0 分，代表『体系缺失』而非『数据质量差』。",
+    "annotation_readiness": (
+        "50% Gold 覆盖率（双人独立标注一致，或分歧后经第三人仲裁通过）+ 30% 双人标注覆盖率"
+        "（有两条独立标注，不论是否一致）+ 20% 标注一致性（Cohen's κ，负值按 0 计）。"
+        "已仲裁比例只展示不计分——需要仲裁不代表数据差，反而说明分歧被正确识别和解决了。"
+        "跟其余九个维度不同，这项是读取时实时算的，不是发布时定死的快照，因为标注是在版本发布之后才陆续发生的。"
+    ),
     "diversity": "岗位种类数、工作流长度的离散程度、判断节点平均分支数综合计算，种类越多、分布越分散，分数越高。",
     "structural_diversity": "Linear（无分支无并行）类型占比越低、含分支/并行/返工路径的比例越高，分数越高；80 分以上要求至少两种结构类型都有覆盖。",
     "low_leakage_risk": "统计触发描述（trigger 节点文本）完全重复的比例作为粗粒度重复信号；更精细的近重复检测（TF-IDF/MinHash 文本相似度、Graph Edit Distance 结构相似度）尚未实现，留待下一轮。",
@@ -83,7 +88,7 @@ def _trigger_label(graph: dict) -> str | None:
     return target["label"] if target else None
 
 
-def _band(score: float) -> str:
+def band(score: float) -> str:
     if score >= 80:
         return "good"
     if score >= 60:
@@ -92,7 +97,7 @@ def _band(score: float) -> str:
 
 
 def _dim(score: float, sub: dict[str, Any], scope_note: str) -> dict:
-    return {"score": round(max(0.0, min(100.0, score)), 1), "band": _band(score), "sub_indicators": sub, "scope_note": scope_note}
+    return {"score": round(max(0.0, min(100.0, score)), 1), "band": band(score), "sub_indicators": sub, "scope_note": scope_note}
 
 
 CASE_CONTEXT_FIELDS = [
@@ -206,7 +211,14 @@ def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE
     pct_confirmed = (sum(1 for node in all_nodes if node.get("expert_confirmed")) / len(all_nodes) * 100) if all_nodes else 100.0
     dims["authenticity"] = _dim(pct_confirmed, {"pct_expert_confirmed_nodes": round(pct_confirmed, 1)}, SCORING_STANDARDS["authenticity"])
 
-    # annotation readiness: no Gold annotation pipeline exists yet
+    # annotation readiness: placeholder at publish time -- the real Gold annotation pipeline
+    # (§9 Phase C-2) only produces meaningful numbers after a version is published (that's the
+    # whole point of annotating an already-published version's records), so this dimension is
+    # recomputed live at read time by compute_annotation_readiness() below, called from
+    # routers/datasets.py, and overwrites this placeholder -- unlike every other dimension
+    # here, it is NOT frozen at publish time. This value only shows if that live recompute is
+    # ever skipped for some reason (e.g. a version with a source_type annotations don't apply
+    # to), and stays an honest "no annotation data" rather than fabricating a number.
     dims["annotation_readiness"] = _dim(0.0, {"gold_coverage": 0}, SCORING_STANDARDS["annotation_readiness"])
 
     # diversity
@@ -253,4 +265,45 @@ def compute_readiness(graphs: list[dict], min_sample_size: int = MIN_SAMPLE_SIZE
     )
 
     overall = sum(dims[key]["score"] * weight for key, weight in DIMENSION_WEIGHTS.items())
-    return {"overall": round(overall, 1), "band": _band(overall), "sample_size": n, "dimensions": dims}
+    return {"overall": round(overall, 1), "band": band(overall), "sample_size": n, "dimensions": dims}
+
+
+def compute_annotation_readiness(*, total_records: int, gold_count: int, double_annotated_count: int,
+                                  arbitrated_count: int, agreement_kappa: float | None,
+                                  min_sample_size: int = MIN_SAMPLE_SIZE) -> dict:
+    """IMPLEMENTATION_PLAN.md section 9, §9 Phase C-2: unlike every other dimension in
+    compute_readiness() above, this one is computed live (called from routers/datasets.py at
+    read time, not baked into the immutable snapshot at publish) because annotation status
+    keeps changing after a version is published -- annotating an already-published version's
+    records is the entire point of the Gold annotation workflow.
+
+    Score formula (not a PRD-mandated formula -- PRD 13.3 lists the sub-indicators this
+    dimension should reflect but not how to weight them into one number, so this is a
+    documented, defensible choice, not an authoritative standard): 50% Gold coverage + 30%
+    double-annotation coverage + 20% agreement (Cohen's kappa, floored at 0 since a negative
+    kappa reading as "worse than chance" shouldn't count as a bonus). Arbitrated ratio is
+    reported as a diagnostic sub-indicator, not scored -- needing arbitration sometimes is a
+    sign the process is working as designed (real disagreements get surfaced and resolved),
+    not itself a quality defect.
+    """
+    if total_records < min_sample_size:
+        return {"score": None, "band": "insufficient_sample",
+                "sub_indicators": {"sample_size": total_records, "threshold": min_sample_size},
+                "scope_note": SCORING_STANDARDS["annotation_readiness"]}
+
+    gold_coverage = gold_count / total_records * 100
+    double_coverage = double_annotated_count / total_records * 100
+    arbitrated_ratio = (arbitrated_count / double_annotated_count * 100) if double_annotated_count else 0.0
+    kappa_component = max(0.0, agreement_kappa) * 100 if agreement_kappa is not None else 0.0
+
+    score = gold_coverage * 0.5 + double_coverage * 0.3 + kappa_component * 0.2
+    return _dim(
+        score,
+        {
+            "gold_coverage": round(gold_coverage, 1),
+            "double_annotated_coverage": round(double_coverage, 1),
+            "arbitrated_ratio": round(arbitrated_ratio, 1),
+            "agreement_kappa": agreement_kappa,
+        },
+        SCORING_STANDARDS["annotation_readiness"],
+    )

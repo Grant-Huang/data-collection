@@ -7,10 +7,13 @@ import { ChatPanel } from "../components/ChatPanel";
 import { DagView } from "../components/DagView";
 import { HistoryDrawer } from "../components/HistoryDrawer";
 import { ResizeHandle } from "../components/ResizeHandle";
+import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types";
 
 export function SessionPage() {
-  const { workflows, active, sending, creating, error, selectWorkflow, createWorkflow, sendTurn, confirmWorkflow } =
-    useWorkflowSession();
+  const {
+    workflows, active, sending, creating, error,
+    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext,
+  } = useWorkflowSession();
 
   // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
   // only used the first time, before anything is stored -- after that the saved px width wins.
@@ -47,6 +50,32 @@ export function SessionPage() {
                 完成度 {Math.round(active.completion.score * 100)}%
                 {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && "・可以确认提交了"}
                 {active.status === "expert_confirmed" && "・已确认"}
+              </div>
+              {/* §14.4 Dataset Slice -- a static classification tag, editable any time, not
+                  part of the FSM conversation (it's not scenario narrative). */}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <select
+                  key={`mode-${active.id}`}
+                  defaultValue={active.manufacturing_context?.manufacturing_mode ?? ""}
+                  onChange={(e) =>
+                    updateManufacturingContext({
+                      manufacturing_mode: (e.target.value || null) as ManufacturingMode | null,
+                    })
+                  }
+                  style={{ fontSize: 11.5, border: "1px solid #d0d5dd", borderRadius: 6, padding: "3px 6px", color: "#475569" }}
+                >
+                  <option value="">制造模式（未填写）</option>
+                  {Object.entries(MANUFACTURING_MODE_LABELS).map(([v, label]) => (
+                    <option key={v} value={v}>{label}</option>
+                  ))}
+                </select>
+                <input
+                  key={`industry-${active.id}`}
+                  defaultValue={active.manufacturing_context?.industry ?? ""}
+                  placeholder="行业（可选，如：汽车制造）"
+                  onBlur={(e) => updateManufacturingContext({ industry: e.target.value || null })}
+                  style={{ fontSize: 11.5, border: "1px solid #d0d5dd", borderRadius: 6, padding: "3px 6px", color: "#475569", width: 160 }}
+                />
               </div>
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
