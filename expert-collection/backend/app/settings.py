@@ -31,7 +31,7 @@ LEVEL_LABELS = {
 LLM_SLOTS = [
     "guide_service", "mobile_speech_polish", "experiment_explain",
     "experiment_compare_explain", "error_clustering", "anonymize_name",
-    "role_normalize", "dashboard_explain",
+    "role_normalize", "dashboard_explain", "graph_regenerate",
 ]
 
 SLOT_LABELS = {
@@ -39,6 +39,7 @@ SLOT_LABELS = {
     "experiment_explain": "实验结果文字解读", "experiment_compare_explain": "多实验对比解读",
     "error_clustering": "Error Analysis 案例聚类归纳", "anonymize_name": "导出匿名化人名脱敏",
     "role_normalize": "角色归一化", "dashboard_explain": "Dashboard 评分项解释生成",
+    "graph_regenerate": "根据会话内容重新生成流程图",
 }
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -56,6 +57,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "anonymize_name": {"level": "L", "enabled": True, "temperature": 0.0},
         "role_normalize": {"level": "L", "enabled": True, "temperature": 0.0},
         "dashboard_explain": {"level": "C_standard", "enabled": True, "temperature": 0.2},
+        # Whole-transcript -> whole-DAG in one call is a much bigger structured-output task
+        # than guide_service's one-sentence parse, so it defaults to C_standard, not L.
+        "graph_regenerate": {"level": "C_standard", "enabled": True, "temperature": 0.1},
     },
     "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime"},
     "quality_params": {

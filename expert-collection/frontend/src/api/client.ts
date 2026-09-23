@@ -11,9 +11,11 @@ import type {
   PriorRecordDetail,
   PriorRecordSummary,
   PriorVerdict,
+  RegenerateGraphCheck,
   Settings,
   SourceType,
   TurnResponse,
+  WorkflowMetaUpdate,
   WorkflowRecord,
   WorkflowSummary,
 } from "./types";
@@ -34,16 +36,23 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
-  listWorkflows: () => req<WorkflowSummary[]>("GET", "/api/expert-workflows"),
+  listWorkflows: (includeArchived = false) =>
+    req<WorkflowSummary[]>("GET", `/api/expert-workflows?include_archived=${includeArchived}`),
   createWorkflow: (name?: string) =>
     req<WorkflowRecord>("POST", "/api/expert-workflows", { name: name ?? null }),
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),
+  updateWorkflowMeta: (id: string, patch: WorkflowMetaUpdate) =>
+    req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
   postTurn: (id: string, text: string) =>
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
     req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
+  regenerateGraphCheck: (id: string) =>
+    req<RegenerateGraphCheck>("GET", `/api/expert-workflows/${id}/regenerate-check`),
+  regenerateGraph: (id: string) =>
+    req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/regenerate-graph`),
 
   getDraftPool: (sourceType: SourceType) =>
     req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),

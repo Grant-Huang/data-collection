@@ -133,6 +133,11 @@ export interface WorkflowSummary {
   status: WorkflowStatus;
   completion_score: number;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  // True once any dataset_version (including archived ones) references this workflow --
+  // drives the "重新生成流程图" menu item's disabled state without a round trip.
+  in_dataset: boolean;
 }
 
 export interface WorkflowRecord {
@@ -149,6 +154,30 @@ export interface WorkflowRecord {
   manufacturing_context: ManufacturingContext | null;
   created_at: string;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  in_dataset: boolean;
+}
+
+export interface WorkflowMetaUpdate {
+  name?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+export interface DatasetVersionRef {
+  id: string;
+  source_type: SourceType;
+  version_number: number;
+  archived: boolean;
+}
+
+export interface RegenerateGraphCheck {
+  allowed: boolean;
+  blocked_code: "in_dataset" | "conversation_in_progress" | "no_expert_turns" | null;
+  reason: string | null;
+  dataset_versions: DatasetVersionRef[];
+  will_reset_confirmation: boolean;
 }
 
 export interface TurnResponse {
@@ -417,6 +446,7 @@ export const LLM_SLOT_LABELS: Record<string, string> = {
   experiment_explain: "实验结果文字解读", experiment_compare_explain: "多实验对比解读",
   error_clustering: "Error Analysis 案例聚类归纳", anonymize_name: "导出匿名化人名脱敏",
   role_normalize: "角色归一化", dashboard_explain: "Dashboard 评分项解释生成",
+  graph_regenerate: "根据会话内容重新生成流程图",
 };
 
 export const LLM_LEVEL_LABELS: Record<string, string> = {

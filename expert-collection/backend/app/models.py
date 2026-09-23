@@ -102,6 +102,17 @@ class WorkflowSummary(BaseModel):
     status: WorkflowStatus
     completion_score: float
     updated_at: str
+    # Session-list housekeeping (left rail "..." menu). Archive, not delete: an archived
+    # session is only hidden from the default list and excluded from the dataset draft pool --
+    # its record stays in the DB, because a published expert_collected dataset_version only
+    # stores workflow_ids and reads each graph back live (dataset_records.records_for_export),
+    # so hard-deleting a workflow would silently drop records out of an already-published
+    # version.
+    pinned: bool = False
+    archived: bool = False
+    # True once any dataset_version (archived versions included) references this workflow --
+    # computed at read time from dataset_versions, never stored on the workflow itself.
+    in_dataset: bool = False
 
 
 ManufacturingMode = Literal[
@@ -169,6 +180,39 @@ class WorkflowRecord(BaseModel):
     manufacturing_context: Optional[ManufacturingContext] = None
     created_at: str
     updated_at: str
+    pinned: bool = False
+    archived: bool = False
+    in_dataset: bool = False
+
+
+class WorkflowMetaUpdateRequest(BaseModel):
+    """PATCH body for the session-list "..." menu (rename / pin / archive). Every field is
+    optional; only the ones actually sent are applied.
+    """
+    name: Optional[str] = None
+    pinned: Optional[bool] = None
+    archived: Optional[bool] = None
+
+
+class DatasetVersionRef(BaseModel):
+    id: str
+    source_type: str
+    version_number: int
+    archived: bool = False
+
+
+class RegenerateGraphCheck(BaseModel):
+    """Pre-flight answer for "用大模型根据会话内容重新生成流程图" -- the frontend asks this
+    first and shows `reason` instead of a confirm dialog when `allowed` is False.
+    """
+    allowed: bool
+    # "in_dataset" | "conversation_in_progress" | "no_expert_turns" | None when allowed
+    blocked_code: Optional[str] = None
+    reason: Optional[str] = None
+    dataset_versions: list[DatasetVersionRef] = Field(default_factory=list)
+    # Regenerating a confirmed workflow drops it back to needs_confirmation -- surfaced so the
+    # confirm dialog can warn about it up front.
+    will_reset_confirmation: bool = False
 
 
 class CreateWorkflowRequest(BaseModel):

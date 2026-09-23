@@ -9,13 +9,15 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import db, graph_ops, graph_validator, guide_service
+from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client
 from ..models import (
     Completion,
     CreateWorkflowRequest,
     ManufacturingContextUpdateRequest,
+    RegenerateGraphCheck,
     TurnRequest,
     TurnResponse,
+    WorkflowMetaUpdateRequest,
     ValidationIssue,
     WorkflowRecord,
     WorkflowSummary,
@@ -89,25 +91,38 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "case_context": None,
         "created_at": now,
         "updated_at": now,
+        "pinned": False,
+        "archived": False,
         "_guide_state": state,
     }
     db.save(record)
-    return WorkflowRecord.model_validate(_strip_internal(record))
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
 
 
-def _strip_internal(record: dict) -> dict:
-    return {k: v for k, v in record.items() if not k.startswith("_")}
+def _strip_internal(record: dict, *, in_dataset: bool) -> dict:
+    out = {k: v for k, v in record.items() if not k.startswith("_")}
+    out["in_dataset"] = in_dataset
+    return out
 
 
 @router.get("", response_model=list[WorkflowSummary])
-def list_workflows() -> list[WorkflowSummary]:
+def list_workflows(include_archived: bool = False) -> list[WorkflowSummary]:
+    """左栏会话清单。默认隐藏已归档会话（`include_archived=true` 时显示，配合前端「显示/
+    隐藏已归档」的切换）；置顶的会话排在最前面，组内仍按 `updated_at` 倒序（db.list_all
+    已经这样排好，Python 的 sort 是稳定排序，不会打乱这个次序）。
+    """
     records = db.list_all()
+    published = dataset_records.published_workflow_ids()
+    visible = [r for r in records if include_archived or not r.get("archived", False)]
+    visible.sort(key=lambda r: not r.get("pinned", False))
     return [
         WorkflowSummary(
             id=r["id"], name=r["name"], status=r["status"],
             completion_score=r["completion"]["score"], updated_at=r["updated_at"],
+            pinned=r.get("pinned", False), archived=r.get("archived", False),
+            in_dataset=r["id"] in published,
         )
-        for r in records
+        for r in visible
     ]
 
 
@@ -116,7 +131,34 @@ def get_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
-    return WorkflowRecord.model_validate(_strip_internal(record))
+    in_dataset = bool(dataset_records.versions_containing(workflow_id))
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
+
+
+@router.patch("/{workflow_id}", response_model=WorkflowRecord)
+def update_workflow_meta(workflow_id: str, req: WorkflowMetaUpdateRequest) -> WorkflowRecord:
+    """左栏「...」下拉菜单：重命名 / 置顶 / 归档。用归档而不是删除 -- 归档只是把会话从默认
+    清单里隐藏、并从数据集草稿池里排除（见 datasets.py::_draft_pool），记录本身还在，因为已
+    发布的 expert_collected 数据集版本只存 workflow_ids、导出时才回读 graph（见
+    dataset_records.records_for_export），真删掉会让已发布的版本悄悄丢记录。
+    """
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    patch = req.model_dump(exclude_unset=True)
+    if "name" in patch:
+        name = (patch["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="会话名称不能为空")
+        record["name"] = name
+    if "pinned" in patch:
+        record["pinned"] = bool(patch["pinned"])
+    if "archived" in patch:
+        record["archived"] = bool(patch["archived"])
+    record["updated_at"] = _now()
+    db.save(record)
+    in_dataset = bool(dataset_records.versions_containing(workflow_id))
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
 
 
 @router.put("/{workflow_id}/manufacturing-context", response_model=WorkflowRecord)
@@ -132,7 +174,8 @@ def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpda
     record["manufacturing_context"] = req.model_dump()
     record["updated_at"] = _now()
     db.save(record)
-    return WorkflowRecord.model_validate(_strip_internal(record))
+    in_dataset = bool(dataset_records.versions_containing(workflow_id))
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
 
 
 def _describe_turn(record: dict, turn_id: str) -> str:
@@ -323,4 +366,85 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
     record["validation"] = issues
     record["updated_at"] = _now()
     db.save(record)
-    return WorkflowRecord.model_validate(_strip_internal(record))
+    in_dataset = bool(dataset_records.versions_containing(workflow_id))
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
+
+
+def _regenerate_check(record: dict) -> RegenerateGraphCheck:
+    """Shared gate for both the pre-flight GET (frontend shows the reason instead of a
+    confirm dialog) and the actual POST (never trust the client-only check -- re-verify
+    server-side right before calling the LLM, in case the workflow got published in the
+    meantime).
+
+    用户的两条规则，原样实现：
+    1. 流程图已经进入数据集（任何 dataset_version 引用过这个会话，包括已归档的版本）——不
+       允许重新生成，因为 expert_collected 版本发布时不做快照，是发布后每次都回读当前的
+       graph（见 dataset_records.records_for_export），重新生成会悄悄改掉已发布版本的内容。
+    2. 还没有进入数据集——允许重新生成，但如果这个会话还在采集中（没有一条专家消息），没有
+       内容可整理，也拦住。
+    """
+    versions = dataset_records.versions_containing(record["id"])
+    if versions:
+        names = "、".join(f"{v['source_type']} v{v['version_number']}" for v in versions)
+        return RegenerateGraphCheck(
+            allowed=False, blocked_code="in_dataset",
+            reason=f"这个会话的流程图已经录入数据集（{names}），为避免悄悄改动已发布的数据，不能再重新生成。",
+            dataset_versions=versions,
+        )
+    if not any(t["role"] == "expert" for t in record["turns"]):
+        return RegenerateGraphCheck(
+            allowed=False, blocked_code="no_expert_turns",
+            reason="还没有专家发言内容，无法根据会话重新生成流程图。",
+        )
+    return RegenerateGraphCheck(
+        allowed=True, will_reset_confirmation=record["status"] == "expert_confirmed",
+    )
+
+
+@router.get("/{workflow_id}/regenerate-check", response_model=RegenerateGraphCheck)
+def regenerate_check(workflow_id: str) -> RegenerateGraphCheck:
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return _regenerate_check(record)
+
+
+@router.post("/{workflow_id}/regenerate-graph", response_model=WorkflowRecord)
+def regenerate_graph(workflow_id: str) -> WorkflowRecord:
+    """用大模型把整段会话重新整理成一张流程图，整体替换当前 graph。前置校验见
+    `_regenerate_check`；LLM 调用失败时（未配置/超时/输出格式不对）原有 graph 保持不动，只
+    把错误原样返回给前端，绝不用半成品或猜测的内容覆盖专家已经确认过的图。
+    """
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    check = _regenerate_check(record)
+    if not check.allowed:
+        raise HTTPException(status_code=409, detail=check.reason)
+
+    try:
+        new_graph = guide_service.regenerate_graph_from_transcript(record["turns"])
+    except llm_client.LLMError as e:
+        raise HTTPException(status_code=502, detail=f"重新生成流程图失败：{e}") from e
+
+    issues = graph_validator.validate(new_graph)
+    if any(i["level"] == "error" for i in issues):
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "模型重新生成的流程图未通过结构校验，原有流程图未改动", "issues": issues},
+        )
+
+    record["graph"] = new_graph
+    record["validation"] = issues
+    # A regenerated graph is unconfirmed by construction -- even if the workflow was already
+    # expert_confirmed, the expert hasn't looked at *this* graph yet, so drop it back to
+    # needs_confirmation for another review pass rather than silently keeping the old
+    # confirmed status on new content.
+    if record["status"] == "expert_confirmed":
+        record["status"] = "needs_confirmation"
+    record["completion"] = {"score": record["completion"]["score"], "ready_for_confirmation": not any(
+        i["level"] == "error" for i in issues
+    )}
+    record["updated_at"] = _now()
+    db.save(record)
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
