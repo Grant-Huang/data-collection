@@ -379,6 +379,19 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
                   </tbody>
                 </table>
               )}
+              {exp.error_clusters.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>典型失败模式（AI 归纳）</div>
+                  {exp.error_clusters.map((c, i) => (
+                    <div key={i} style={{ fontSize: 12.5, marginBottom: 8, padding: "8px 10px", background: "#f8fafc", borderRadius: 6 }}>
+                      <div style={{ fontWeight: 600 }}>{c.label}</div>
+                      <div style={{ color: "#475467", marginTop: 2 }}>{c.description}</div>
+                      <div style={{ color: "#94a3b8", marginTop: 2 }}>涉及：{c.workflow_names.join("、")}</div>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 11.5, color: "#94a3b8" }}>以上归纳由 AI 根据失败案例摘要自动生成，请结合上方明细数据核实。</div>
+                </div>
+              )}
             </section>
 
             <section style={{ ...sectionCard, color: "#94a3b8", fontSize: 12.5 }}>

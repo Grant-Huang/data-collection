@@ -3,7 +3,7 @@
 // MobileApp (Phase 2) drive the conversation through this one hook.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { WorkflowRecord, WorkflowSummary } from "../api/types";
+import type { ManufacturingContext, WorkflowRecord, WorkflowSummary } from "../api/types";
 
 export function useWorkflowSession() {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -83,6 +83,20 @@ export function useWorkflowSession() {
     }
   }, [active, refreshList]);
 
+  const updateManufacturingContext = useCallback(
+    async (patch: Partial<ManufacturingContext>) => {
+      if (!active) return;
+      setError(null);
+      try {
+        const record = await api.updateManufacturingContext(active.id, patch);
+        setActive(record);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [active],
+  );
+
   return {
     workflows,
     active,
@@ -93,5 +107,6 @@ export function useWorkflowSession() {
     createWorkflow,
     sendTurn,
     confirmWorkflow,
+    updateManufacturingContext,
   };
 }

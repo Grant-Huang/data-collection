@@ -180,6 +180,27 @@ def archive_dataset_version(version_id: str) -> None:
         conn.close()
 
 
+def set_dataset_version_gold(version_id: str, is_gold: bool) -> None:
+    """IMPLEMENTATION_PLAN.md section 14, §9 Phase C-1: PRD 16.1's "标记为 Gold 版本" --
+    stored only in the `data` JSON blob (no new SQL column) since nothing needs to filter on
+    it at the SQL level yet, same as most other per-version flags.
+    """
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT data FROM dataset_versions WHERE id = ?", (version_id,)).fetchone()
+        if not row:
+            return
+        version = json.loads(row[0])
+        version["is_gold"] = is_gold
+        conn.execute(
+            "UPDATE dataset_versions SET data = ? WHERE id = ?",
+            (json.dumps(version, ensure_ascii=False), version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_settings() -> Optional[dict]:
     conn = _connect()
     try:

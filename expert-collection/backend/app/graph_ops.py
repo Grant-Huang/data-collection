@@ -44,6 +44,8 @@ def apply_ops(graph: dict, ops: list[dict]) -> dict:
             graph["edges"] = [
                 e for e in graph["edges"] if e["from"] != op["node_id"] and e["to"] != op["node_id"]
             ]
+            graph["start_node_ids"] = [n for n in graph["start_node_ids"] if n != op["node_id"]]
+            graph["end_node_ids"] = [n for n in graph["end_node_ids"] if n != op["node_id"]]
         elif kind == "add_edge":
             edge = op["edge"]
             if not _find_edge(graph, edge["edge_id"]):

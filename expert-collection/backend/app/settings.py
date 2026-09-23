@@ -111,6 +111,24 @@ def resolve_slot(settings: dict, slot: str) -> dict:
     }
 
 
+def resolve_slot_for_call(settings: dict, slot: str) -> dict:
+    """Same join as `resolve_slot`, but with the real `api_key` value instead of the masked
+    `api_key_set` boolean -- this is what `llm_client.py` reads to actually make a call. Never
+    return this dict from an API response; `resolve_slot`/`mask_for_display` exist precisely
+    so the settings endpoints don't have to handle masking themselves.
+    """
+    slot_cfg = settings["llm_slots"][slot]
+    level_cfg = settings["llm_levels"][slot_cfg["level"]]
+    return {
+        "level": slot_cfg["level"],
+        "enabled": slot_cfg.get("enabled", True),
+        "temperature": slot_cfg.get("temperature", 0.2),
+        "endpoint": level_cfg.get("endpoint", ""),
+        "model_name": level_cfg.get("model_name", ""),
+        "api_key": level_cfg.get("api_key", ""),
+    }
+
+
 def _mask_key(value: str) -> str:
     if not value:
         return ""
