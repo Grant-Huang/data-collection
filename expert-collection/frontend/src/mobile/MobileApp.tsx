@@ -1,15 +1,21 @@
 // PRD 5.1/5.4: mobile app shell -- session page (home, static) and a read-only DAG page that
-// slides in as a card from the right on a right-swipe, and slides back out on a left-swipe.
-// The left 20px is excluded on the session page only, reserving it for the browser's own
-// edge-triggered back gesture; the DAG page's return swipe isn't edge-triggered so it has no
-// such exclusion. Voice recording temporarily disables the gesture (PRD 5.4).
+// slides in as a card from the right on a right-to-left swipe, and slides back out on a
+// left-to-right swipe. This is the reverse of what you'd get by naively mapping "swipe
+// direction" to "content motion direction" -- the card and the finger move the same way
+// (both right-to-left on entry, both left-to-right on exit), matching how a physical card
+// being pulled onto/off of the screen from the right edge would behave under the finger,
+// rather than a scroll-style inverse mapping. No left-edge exclusion is needed for either
+// gesture: the browser's own edge-triggered back gesture is a left-to-right swipe starting
+// at the left edge, which is the *exit* direction here, and exit only ever fires from the
+// dag page (the chat page only listens for the entry gesture, which is the opposite
+// direction and so never fights the browser gesture regardless of where it starts).
+// Voice recording temporarily disables the gesture (PRD 5.4).
 import { useRef, useState } from "react";
 import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { MobileChatPage } from "./MobileChatPage";
 import { MobileDagPage } from "./MobileDagPage";
 import { HistorySheet } from "./HistorySheet";
 
-const EDGE_EXCLUSION_PX = 20;
 const SWIPE_THRESHOLD_PX = 70;
 
 type Page = "chat" | "dag";
@@ -25,29 +31,28 @@ export function MobileApp() {
   // Drag progress in [0, 1]: 0 = DAG page fully hidden (off right edge), 1 = fully shown.
   const [dragProgress, setDragProgress] = useState<number | null>(null);
 
-  const touchStart = useRef<{ x: number; y: number; blockedByEdge: boolean; width: number } | null>(null);
+  const touchStart = useRef<{ x: number; y: number; width: number } | null>(null);
 
   function onTouchStart(e: React.TouchEvent) {
     if (recording || drawerOpen) return;
     const t = e.touches[0];
-    const blockedByEdge = page === "chat" && t.clientX < EDGE_EXCLUSION_PX;
-    touchStart.current = { x: t.clientX, y: t.clientY, blockedByEdge, width: window.innerWidth };
+    touchStart.current = { x: t.clientX, y: t.clientY, width: window.innerWidth };
   }
 
   function onTouchMove(e: React.TouchEvent) {
     const start = touchStart.current;
-    if (!start || start.blockedByEdge || recording || drawerOpen) return;
+    if (!start || recording || drawerOpen) return;
     const t = e.touches[0];
     const dx = t.clientX - start.x;
     const dy = t.clientY - start.y;
     if (Math.abs(dx) < Math.abs(dy)) return; // vertical scroll intent, ignore
 
-    if (page === "chat" && dx > 0) {
-      // Dragging the DAG card in from the right.
-      setDragProgress(Math.min(1, dx / start.width));
-    } else if (page === "dag" && dx < 0) {
-      // Dragging the DAG card back out.
-      setDragProgress(Math.max(0, 1 + dx / start.width));
+    if (page === "chat" && dx < 0) {
+      // Right-to-left swipe: dragging the DAG card in from the right.
+      setDragProgress(Math.min(1, -dx / start.width));
+    } else if (page === "dag" && dx > 0) {
+      // Left-to-right swipe: dragging the DAG card back out to the right.
+      setDragProgress(Math.max(0, 1 - dx / start.width));
     }
   }
 

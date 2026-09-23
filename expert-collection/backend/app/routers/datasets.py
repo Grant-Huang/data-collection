@@ -11,8 +11,15 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import anonymize, audit, db, explain, import_pipeline, quality, settings as settings_module
-from ..models import DatasetVersionSummary, ImportConfirmRequest, PublishDatasetRequest
+from .. import anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
+from ..models import (
+    DatasetVersionSummary,
+    DuplicateCheckRequest,
+    DuplicateCheckResult,
+    DuplicateMatch,
+    ImportConfirmRequest,
+    PublishDatasetRequest,
+)
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -34,14 +41,54 @@ def _draft_pool(source_type: str) -> list[dict]:
     if source_type != "expert_collected":
         return []
     already_published = _published_workflow_ids(source_type)
+    # Archived sessions are the expert/admin saying "set this one aside" -- keep them out of
+    # the next publish until they're unarchived.
     return [
         w for w in db.list_all()
         if w["status"] == "expert_confirmed" and w["id"] not in already_published
+        and not w.get("archived", False)
     ]
+
+
+def _live_annotation_readiness(version: dict) -> dict:
+    """§9 Phase C-2: annotation_readiness is the one dimension recomputed at read time
+    instead of frozen at publish -- see quality.compute_annotation_readiness's docstring.
+    """
+    records = dataset_records.records_for_export(version)
+    gold_count = double_count = arbitrated_count = 0
+    kappa_pairs: list[tuple[str, str]] = []
+    for r in records:
+        history = db.list_annotations(version["id"], r["record_id"])
+        if gold_annotation.compute_gold_status(history) == "gold":
+            gold_count += 1
+        independents = [a for a in history if a.get("role_in_process", "independent") == "independent"]
+        if len(independents) >= 2:
+            double_count += 1
+            kappa_pairs.append((independents[0]["verdict"], independents[1]["verdict"]))
+        if any(a.get("role_in_process") == "arbitration" for a in history):
+            arbitrated_count += 1
+
+    min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
+    return quality.compute_annotation_readiness(
+        total_records=len(records), gold_count=gold_count, double_annotated_count=double_count,
+        arbitrated_count=arbitrated_count, agreement_kappa=gold_annotation.cohens_kappa(kappa_pairs),
+        min_sample_size=min_sample_size,
+    )
 
 
 def _to_summary(version: dict) -> DatasetVersionSummary:
     readiness = version["readiness"]
+    dims = dict(readiness["dimensions"])
+    if version["source_type"] in ("public_extracted", "expert_collected"):
+        dims["annotation_readiness"] = _live_annotation_readiness(version)
+    scores = [dims[key]["score"] for key in quality.DIMENSION_WEIGHTS]
+    if all(s is not None for s in scores):
+        overall = round(sum(dims[key]["score"] * w for key, w in quality.DIMENSION_WEIGHTS.items()), 1)
+        band = quality.band(overall)
+    else:
+        overall, band = readiness["overall"], readiness["band"]
+    readiness = {**readiness, "overall": overall, "band": band, "dimensions": dims}
+
     dims_with_explanations = {
         key: {**dim, "explanation": version["explanations"].get(key, "")}
         for key, dim in readiness["dimensions"].items()
@@ -56,6 +103,7 @@ def _to_summary(version: dict) -> DatasetVersionSummary:
         created_at=version["created_at"],
         readiness={**readiness, "dimensions": dims_with_explanations},
         archived=version.get("archived", False),
+        is_gold=version.get("is_gold", False),
     )
 
 
@@ -72,8 +120,9 @@ def publish_dataset(req: PublishDatasetRequest) -> DatasetVersionSummary:
         raise HTTPException(status_code=400, detail="草稿池为空，没有可发布的新记录")
 
     graphs = [w["graph"] for w in pool]
+    case_contexts = [w.get("case_context") for w in pool]
     min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
-    readiness = quality.compute_readiness(graphs, min_sample_size=min_sample_size)
+    readiness = quality.compute_readiness(graphs, min_sample_size=min_sample_size, case_contexts=case_contexts)
     explanations = explain.explain_all(readiness, pool)
 
     existing = db.list_dataset_versions(req.source_type)
@@ -115,6 +164,24 @@ def archive_version(version_id: str, actor_role: str = "unknown") -> DatasetVers
     return _to_summary(version)
 
 
+@router.post("/versions/{version_id}/mark-gold", response_model=DatasetVersionSummary)
+def mark_gold_version(version_id: str, is_gold: bool = True, actor_role: str = "unknown") -> DatasetVersionSummary:
+    """PRD 16.1/16.2: admin-only in principle (no backend permission enforcement yet -- same
+    honest gap as every other admin action in this codebase, see assumption 1/5/7; the
+    frontend hides this control for non-admin roles, the audit log records who actually did it).
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    db.set_dataset_version_gold(version_id, is_gold)
+    version["is_gold"] = is_gold
+
+    audit.log(actor_role, "dataset_mark_gold" if is_gold else "dataset_unmark_gold",
+              {"dataset_version_id": version_id})
+
+    return _to_summary(version)
+
+
 @router.get("/versions", response_model=list[DatasetVersionSummary])
 def list_versions(source_type: str = "expert_collected", include_archived: bool = False) -> list[DatasetVersionSummary]:
     versions = db.list_dataset_versions(source_type)
@@ -136,11 +203,59 @@ def _thresholds() -> tuple[float, float]:
     return qp["near_dup_text_threshold"], qp["near_dup_structure_threshold"] or 0.7
 
 
+def _existing_records_for_gatekeeping(source_type: str) -> list[dict]:
+    """Every record already published under `source_type`, across all still-active (not
+    archived) dataset_versions -- the cross-version comparison corpus for import_pipeline's
+    strict gatekeeping (IMPLEMENTATION_PLAN.md section 10). Archived versions are excluded:
+    they were intentionally retired, so gatekeeping against still-active data only.
+    Reuses _records_for_export so expert_collected and public_extracted are normalized the
+    same way this module already normalizes them for every other cross-cutting use (export,
+    drill-down).
+    """
+    out: list[dict] = []
+    for v in db.list_dataset_versions(source_type):
+        if v.get("archived"):
+            continue
+        for r in _records_for_export(v):
+            out.append({**r, "_version_number": v["version_number"]})
+    return out
+
+
+@router.post("/duplicate-check", response_model=DuplicateCheckResult)
+def duplicate_check(req: DuplicateCheckRequest) -> DuplicateCheckResult:
+    """Standalone查重接口 (IMPLEMENTATION_PLAN.md section 10): classifies every record in
+    `payload` against the full existing corpus of the same source_type, independent of
+    precheck/import -- for inspecting a file's relationship to already-published data
+    (e.g. before deciding whether to fix and re-upload it) without going through the whole
+    ten-step precheck. Uses the exact same classification import/confirm relies on
+    internally, so results here are consistent with what a subsequent import would block.
+    """
+    source_type = (req.payload.get("dataset_meta") or {}).get("source_type")
+    records = req.payload.get("records")
+    if not source_type or records is None:
+        raise HTTPException(status_code=400, detail="上传内容需要包含 dataset_meta.source_type 和 records[]")
+
+    text_threshold, structure_threshold = _thresholds()
+    existing = _existing_records_for_gatekeeping(source_type)
+    matches = import_pipeline.compare_cross_version(records, existing, text_threshold, structure_threshold)
+
+    duplicates = [DuplicateMatch(**m) for m in matches if m["kind"] == "duplicate"]
+    reuse_candidates = [DuplicateMatch(**m) for m in matches if m["kind"] == "microflow_reuse_candidate"]
+    other = [DuplicateMatch(**m) for m in matches if m["kind"] == "content_match_structure_diff"]
+
+    return DuplicateCheckResult(
+        source_type=source_type, total_records=len(records),
+        duplicates=duplicates, reuse_candidates=reuse_candidates, other_matches=other,
+    )
+
+
 @router.post("/import/precheck")
 def import_precheck(payload: dict) -> dict:
     text_threshold, structure_threshold = _thresholds()
+    source_type = (payload.get("dataset_meta") or {}).get("source_type")
+    existing = _existing_records_for_gatekeeping(source_type) if source_type else []
     try:
-        return import_pipeline.precheck(payload, text_threshold, structure_threshold)
+        return import_pipeline.precheck(payload, text_threshold, structure_threshold, existing_records=existing)
     except (KeyError, TypeError) as e:
         raise HTTPException(status_code=400, detail=f"上传内容不是预期的 {{dataset_meta, records[]}} 结构：{e}")
 
@@ -148,7 +263,9 @@ def import_precheck(payload: dict) -> dict:
 @router.post("/import/confirm", response_model=DatasetVersionSummary)
 def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
     text_threshold, structure_threshold = _thresholds()
-    report = import_pipeline.precheck(req.payload, text_threshold, structure_threshold)
+    source_type = (req.payload.get("dataset_meta") or {}).get("source_type")
+    existing = _existing_records_for_gatekeeping(source_type) if source_type else []
+    report = import_pipeline.precheck(req.payload, text_threshold, structure_threshold, existing_records=existing)
     if report["error_count"] > 0 and not req.import_records_without_errors:
         raise HTTPException(status_code=422, detail={"message": "预检有阻断错误，未确认跳过错误记录", "report": report})
 
@@ -194,22 +311,7 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
     return _to_summary(version)
 
 
-def _records_for_export(version: dict) -> list[dict]:
-    if version["source_type"] == "public_extracted":
-        return version.get("records", [])
-    # expert_collected: reconstruct a record-shaped dict from each stored WorkflowRecord.
-    out = []
-    for wid in version["workflow_ids"]:
-        w = db.get(wid)
-        if not w:
-            continue
-        out.append({
-            "record_id": w["id"],
-            "scenario": {"scenario_name": w["name"]},
-            "graph": w["graph"],
-            "provenance": {"source_type": "expert_collected"},
-        })
-    return out
+_records_for_export = dataset_records.records_for_export
 
 
 @router.get("/versions/{version_id}/export")
@@ -262,6 +364,22 @@ def drill_down(version_id: str, dimension: str) -> dict:
             problems.append({"record_id": r.get("record_id"), "name": name, "reason": reason})
 
     return {"dimension": dimension, "score": dim["score"], "problem_records": problems[:50]}
+
+
+@router.get("/versions/{version_id}/slice")
+def slice_by_field(version_id: str, field: str) -> dict:
+    """§14.4 Dataset Slice -- real per-value counts from this version's own
+    `manufacturing_context` data (see dataset_records.SLICEABLE_FIELDS), not a placeholder
+    with nowhere to plug in: both source types already carry this object (public_extracted's
+    import schema requires it; expert_collected sets it via the manufacturing-context PUT
+    endpoint), it just wasn't sliced by anything before this.
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    if field not in dataset_records.SLICEABLE_FIELDS:
+        raise HTTPException(status_code=400, detail=f"不支持的切片字段：{field}")
+    return {"field": field, "buckets": dataset_records.slice_counts(version, field)}
 
 
 def _flag_for_dimension(dimension: str, graph: dict) -> tuple[bool, str]:

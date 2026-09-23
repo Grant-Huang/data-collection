@@ -62,7 +62,57 @@ export interface NextQuestion {
   priority: string;
   question: string;
   chips: string[] | null;
+  // "prefill" (or omitted): clicking a chip fills the whole draft box, single choice --
+  // this is also how the Scenario A-group's "简单说/详细说" mode chips work (the chip text
+  // IS the answer template, the expert types after it -- no separate mode round trip).
+  // "multi_select": chips toggle on/off, expert confirms the combined selection before it
+  // goes into the draft box (Case Context B-group). Never auto-sends either way.
+  chip_mode?: "prefill" | "multi_select" | null;
 }
+
+export interface CaseContext {
+  scenario_trigger: string | null;
+  scenario_goal: string | null;
+  scenario_success: string | null;
+  known_info: string | null;
+  unknown_info: string | null;
+  constraints: string | null;
+  available_resources: string | null;
+  detail_level: Record<string, string>;
+  skipped_fields: string[];
+}
+
+export type ManufacturingMode =
+  | "mass_repetitive" | "high_automation" | "high_mix_low_volume" | "eto_mto"
+  | "large_project" | "regulated_traceable" | "other";
+
+export const MANUFACTURING_MODE_LABELS: Record<ManufacturingMode, string> = {
+  mass_repetitive: "大批量重复生产",
+  high_automation: "高自动化产线",
+  high_mix_low_volume: "多品种小批量",
+  eto_mto: "按单设计/按单生产（ETO/MTO）",
+  large_project: "大型项目制造",
+  regulated_traceable: "强监管/可追溯行业",
+  other: "其他",
+};
+
+export interface ManufacturingContext {
+  manufacturing_mode: ManufacturingMode | null;
+  industry: string | null;
+  site_type: string | null;
+  process_area: string | null;
+  product_family: string | null;
+  shift_context: string | null;
+}
+
+// §14.4 Dataset Slice -- must match backend dataset_records.SLICEABLE_FIELDS.
+export const SLICEABLE_FIELDS: { field: keyof ManufacturingContext; label: string }[] = [
+  { field: "manufacturing_mode", label: "制造模式" },
+  { field: "industry", label: "行业" },
+  { field: "site_type", label: "现场类型" },
+  { field: "process_area", label: "工艺/工序范围" },
+  { field: "product_family", label: "产品族" },
+];
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -83,6 +133,11 @@ export interface WorkflowSummary {
   status: WorkflowStatus;
   completion_score: number;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  // True once any dataset_version (including archived ones) references this workflow --
+  // drives the "重新生成流程图" menu item's disabled state without a round trip.
+  in_dataset: boolean;
 }
 
 export interface WorkflowRecord {
@@ -95,8 +150,34 @@ export interface WorkflowRecord {
   unresolved: NextQuestion[];
   completion: Completion;
   validation: ValidationIssue[];
+  case_context: CaseContext | null;
+  manufacturing_context: ManufacturingContext | null;
   created_at: string;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  in_dataset: boolean;
+}
+
+export interface WorkflowMetaUpdate {
+  name?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+export interface DatasetVersionRef {
+  id: string;
+  source_type: SourceType;
+  version_number: number;
+  archived: boolean;
+}
+
+export interface RegenerateGraphCheck {
+  allowed: boolean;
+  blocked_code: "in_dataset" | "conversation_in_progress" | "no_expert_turns" | null;
+  reason: string | null;
+  dataset_versions: DatasetVersionRef[];
+  will_reset_confirmation: boolean;
 }
 
 export interface TurnResponse {
@@ -158,7 +239,73 @@ export interface DatasetVersionSummary {
   created_at: string;
   readiness: DatasetReadiness;
   archived: boolean;
+  is_gold: boolean;
 }
+
+// --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
+// "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this
+// (unchanged since Phase 7). Gold is a stricter status layered on top, requiring two
+// independent annotations that agree, or a third person's arbitration when they don't --
+// see gold_status. Applies to both public_extracted and expert_collected now.
+
+export type PriorStatus = "raw" | "expert_annotated";
+export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
+export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "gold";
+export type AnnotationRole = "independent" | "arbitration";
+// node_id -> "keep" | "delete" | "merge_into:<other_node_id>"
+export type NodeVerdicts = Record<string, string>;
+
+export interface PriorAnnotation {
+  annotation_id: string;
+  version_id: string;
+  record_id: string;
+  based_on_annotation_id: string | null;
+  verdict: PriorVerdict;
+  node_verdicts: NodeVerdicts;
+  note: string | null;
+  actor_role: string | null;
+  annotator_name: string;
+  role_in_process: AnnotationRole;
+  annotated_at: string;
+}
+
+export interface PriorRecordDetail {
+  record_id: string;
+  name: string;
+  graph: Graph;
+  prior_status: PriorStatus;
+  gold_status: GoldStatus;
+  annotations: PriorAnnotation[]; // oldest first
+}
+
+export interface PriorRecordSummary {
+  record_id: string;
+  name: string;
+  node_count: number;
+  prior_status: PriorStatus;
+  latest_verdict: PriorVerdict | null;
+  gold_status: GoldStatus;
+}
+
+export interface AnnotationSummary {
+  version_id: string;
+  total_records: number;
+  annotated_records: number;
+  verdict_counts: Partial<Record<PriorVerdict, number>>;
+  gold_counts: Partial<Record<GoldStatus, number>>;
+  agreement_kappa: number | null;
+}
+
+export const GOLD_STATUS_LABELS: Record<GoldStatus, string> = {
+  not_gold: "非 Gold",
+  pending_second_review: "待第二人复核",
+  disputed_pending_arbitration: "分歧待仲裁",
+  gold: "★ Gold",
+};
+
+export const VERDICT_LABELS: Record<PriorVerdict, string> = {
+  accepted: "采纳", needs_revision: "需要修改", rejected: "丢弃",
+};
 
 // --- Experiment Center (PRD 14) ---
 
@@ -169,12 +316,12 @@ export type InputVersion = "raw" | "anonymized" | "role_normalized";
 
 export const METHOD_LABELS: Record<ExperimentMethod, string> = {
   consensus_dfg: "consensus_dfg（规则 baseline）",
-  pm4py_inductive: "pm4py_inductive",
-  pm4py_heuristics: "pm4py_heuristics",
+  pm4py_inductive: "pm4py_inductive（Inductive Miner）",
+  pm4py_heuristics: "pm4py_heuristics（Heuristics Miner）",
   llm_extractor: "基于 LLM 的抽取器",
 };
 
-export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg"];
+export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg", "pm4py_inductive", "pm4py_heuristics"];
 
 export interface CreateExperimentRequest {
   name: string;
@@ -217,6 +364,12 @@ export interface ErrorCase {
   group: string;
 }
 
+export interface ErrorCluster {
+  label: string;
+  description: string;
+  workflow_names: string[];
+}
+
 export interface ExperimentDetail extends ExperimentSummary {
   source_type: SourceType;
   input_version: InputVersion;
@@ -232,6 +385,7 @@ export interface ExperimentDetail extends ExperimentSummary {
   explanation_edited: boolean;
   consensus_graph: Graph | null;
   error_analysis: ErrorCase[];
+  error_clusters: ErrorCluster[];
   failure_reason: string | null;
 }
 
@@ -251,17 +405,25 @@ export interface ComparisonResult {
 
 // --- Settings (PRD 17) ---
 
-export interface LlmSlotConfig {
-  category: string;
+// Level-first model config (IMPLEMENTATION_PLAN.md section 11): each level (L/C_standard/
+// C_flagship) carries the connection details exactly once; a slot only references which
+// level it uses plus what's genuinely per-task (enabled, temperature) -- no more retyping
+// the same endpoint/model/key into every slot that happens to use the same connection.
+export interface LlmLevelConfig {
   endpoint?: string;
   model_name?: string;
-  temperature?: number;
-  enabled?: boolean;
   api_key_set: boolean;
 }
 
+export interface LlmSlotConfig {
+  level: string;
+  enabled?: boolean;
+  temperature?: number;
+}
+
 export interface Settings {
-  llm_configs: Record<string, LlmSlotConfig>;
+  llm_levels: Record<string, LlmLevelConfig>;
+  llm_slots: Record<string, LlmSlotConfig>;
   voice: { workspace_id: string; realtime_model: string };
   quality_params: {
     min_sample_size: number;
@@ -284,6 +446,11 @@ export const LLM_SLOT_LABELS: Record<string, string> = {
   experiment_explain: "实验结果文字解读", experiment_compare_explain: "多实验对比解读",
   error_clustering: "Error Analysis 案例聚类归纳", anonymize_name: "导出匿名化人名脱敏",
   role_normalize: "角色归一化", dashboard_explain: "Dashboard 评分项解释生成",
+  graph_regenerate: "根据会话内容重新生成流程图",
+};
+
+export const LLM_LEVEL_LABELS: Record<string, string> = {
+  L: "L（本地 7B）", C_standard: "C-标准档", C_flagship: "C-旗舰档",
 };
 
 // --- Admin (PRD 16) ---

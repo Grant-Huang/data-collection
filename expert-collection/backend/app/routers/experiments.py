@@ -1,5 +1,7 @@
 """Experiment Center endpoints -- PRD 14, Phase 4 sub-scope (IMPLEMENTATION_PLAN.md section
-7): create/list/detail/compare work for every method; only `consensus_dfg` actually executes.
+7 / §14): create/list/detail/compare work for every method; `consensus_dfg`, `pm4py_inductive`
+and `pm4py_heuristics` actually execute (see experiments.py), `llm_extractor` does not yet
+(needs its own input/output protocol design, not just a metrics swap).
 Runs go through a real async transition (queued -> running -> completed/failed) via FastAPI
 BackgroundTasks, not a fake progress bar.
 """
@@ -64,7 +66,11 @@ def _run_experiment(exp_id: str) -> None:
         test_graphs = [r["graph"] for r in test_records]
         test_names = [r["name"] for r in test_records]
 
-        result = engine.run_consensus_dfg(train_graphs, test_graphs, test_names)
+        if exp["method"] == "consensus_dfg":
+            result = engine.run_consensus_dfg(train_graphs, test_graphs, test_names)
+        else:
+            result = engine.run_pm4py_method(exp["method"], train_graphs, test_graphs, test_names)
+        error_clusters = explain.cluster_error_cases(result["error_analysis"])
         explanation = explain.explain_experiment(
             result["metrics"], result["error_analysis"], len(train_graphs), len(test_graphs)
         )
@@ -76,6 +82,7 @@ def _run_experiment(exp_id: str) -> None:
             "metrics": result["metrics"],
             "consensus_graph": result["consensus_graph"],
             "error_analysis": result["error_analysis"],
+            "error_clusters": error_clusters,
             "explanation": explanation,
             "explanation_edited": False,
         })
@@ -112,7 +119,7 @@ def create_experiment(req: CreateExperimentRequest, background_tasks: Background
         "created_at": _now(),
         "train_count": None, "test_count": None, "metrics": {},
         "explanation": None, "explanation_edited": False,
-        "consensus_graph": None, "error_analysis": [], "failure_reason": None,
+        "consensus_graph": None, "error_analysis": [], "error_clusters": [], "failure_reason": None,
     }
     db.save_experiment(exp)
     audit.log(exp["created_by"], "experiment_create", {"experiment_id": exp_id, "method": req.method})
@@ -154,6 +161,7 @@ def regenerate_explanation(exp_id: str) -> ExperimentDetail:
     exp["explanation"] = explain.explain_experiment(
         exp["metrics"], exp["error_analysis"], exp["train_count"], exp["test_count"]
     )
+    exp["error_clusters"] = explain.cluster_error_cases(exp["error_analysis"])
     exp["explanation_edited"] = False
     db.save_experiment(exp)
     return _to_detail(exp)

@@ -1,11 +1,14 @@
 // PRD 17: real CRUD form. See app/settings.py's docstring / IMPLEMENTATION_PLAN.md
 // assumption 6 -- saving a config here does not yet switch any Mock service's behavior
 // (no reachable inference service in this sandbox); the quality/run params DO take effect.
+//
+// Model config is level-first (IMPLEMENTATION_PLAN.md section 11): configure each of the
+// three levels once (endpoint/model/key), then every slot below just picks which level it
+// uses. Previously each of the 8 slots carried its own full connection form, so the same
+// endpoint had to be retyped into however many slots happened to share it.
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { api } from "../api/client";
-import { LLM_SLOT_LABELS, type LlmSlotConfig, type Settings } from "../api/types";
-
-const CATEGORY_LABEL: Record<string, string> = { L: "L（本地 7B）", C_standard: "C-标准档", C_flagship: "C-旗舰档" };
+import { LLM_LEVEL_LABELS, LLM_SLOT_LABELS, type LlmLevelConfig, type LlmSlotConfig, type Settings } from "../api/types";
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -17,11 +20,24 @@ export function SettingsPage() {
     api.getSettings().then(setSettings).catch((e) => setError(String(e)));
   }, []);
 
+  async function saveLlmLevel(level: string, patch: Partial<LlmLevelConfig> & { api_key?: string }) {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      const updated = await api.updateSettings({ llm_levels: { [level]: patch } });
+      setSettings(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveLlmSlot(slot: string, patch: Partial<LlmSlotConfig>) {
     if (!settings) return;
     setSaving(true);
     try {
-      const updated = await api.updateSettings({ llm_configs: { [slot]: patch } });
+      const updated = await api.updateSettings({ llm_slots: { [slot]: patch } });
       setSettings(updated);
     } catch (e) {
       setError(String(e));
@@ -54,9 +70,9 @@ export function SettingsPage() {
     }
   }
 
-  async function handleTestConnection(slot: string) {
-    const res = await api.testConnection(slot);
-    setTestResults((prev) => ({ ...prev, [slot]: res.message }));
+  async function handleTestConnection(level: string) {
+    const res = await api.testConnection(level);
+    setTestResults((prev) => ({ ...prev, [level]: res.message }));
   }
 
   if (!settings) return null;
@@ -68,19 +84,37 @@ export function SettingsPage() {
         {saving && <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 8 }}>保存中…</div>}
 
         <section style={sectionCard}>
-          <h2 style={sectionTitle}>LLM 模型配置</h2>
+          <h2 style={sectionTitle}>模型级别配置</h2>
           <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
-            每个环节独立配置，互不绑定（PRD 17.2）。当前环境没有可达的推理服务，"测试连接"会如实反馈，不会伪造成功。
+            每个级别只配置一次（服务地址/模型名称/API Key），下面各环节直接引用级别，不用重复填连接信息。当前环境没有可达的推理服务，"测试连接"会如实反馈，不会伪造成功。
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {Object.entries(settings.llm_configs).map(([slot, cfg]) => (
-              <LlmSlotCard
+            {Object.entries(settings.llm_levels).map(([level, cfg]) => (
+              <LlmLevelCard
+                key={level}
+                level={level}
+                cfg={cfg}
+                onSave={(patch) => saveLlmLevel(level, patch)}
+                onTest={() => handleTestConnection(level)}
+                testResult={testResults[level]}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section style={sectionCard}>
+          <h2 style={sectionTitle}>环节引用级别（PRD 17.2）</h2>
+          <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
+            每个环节只需要选一个级别；temperature 是任务级别的调优参数，保留在这里单独配置，不随级别绑定。
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {Object.entries(settings.llm_slots).map(([slot, cfg]) => (
+              <LlmSlotRow
                 key={slot}
                 slot={slot}
                 cfg={cfg}
+                levels={Object.keys(settings.llm_levels)}
                 onSave={(patch) => saveLlmSlot(slot, patch)}
-                onTest={() => handleTestConnection(slot)}
-                testResult={testResults[slot]}
               />
             ))}
           </div>
@@ -142,32 +176,24 @@ export function SettingsPage() {
   );
 }
 
-function LlmSlotCard({ slot, cfg, onSave, onTest, testResult }: { slot: string; cfg: LlmSlotConfig; onSave: (patch: Partial<LlmSlotConfig>) => void; onTest: () => void; testResult?: string }) {
-  const [category, setCategory] = useState(cfg.category);
+function LlmLevelCard({ level, cfg, onSave, onTest, testResult }: { level: string; cfg: LlmLevelConfig; onSave: (patch: Partial<LlmLevelConfig> & { api_key?: string }) => void; onTest: () => void; testResult?: string }) {
   const [endpoint, setEndpoint] = useState(cfg.endpoint ?? "");
   const [modelName, setModelName] = useState(cfg.model_name ?? "");
   const [apiKey, setApiKey] = useState("");
-  const [temperature, setTemperature] = useState(cfg.temperature ?? 0.2);
 
   return (
     <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>{LLM_SLOT_LABELS[slot] ?? slot}</div>
-        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ ...inputStyle, width: 140 }}>
-          {Object.entries(CATEGORY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{LLM_LEVEL_LABELS[level] ?? level}</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input placeholder={category === "L" ? "内网服务地址" : "API 端点"} value={endpoint} onChange={(e) => setEndpoint(e.target.value)} style={inputStyle} />
+        <input placeholder={level === "L" ? "内网服务地址" : "API 端点"} value={endpoint} onChange={(e) => setEndpoint(e.target.value)} style={inputStyle} />
         <input placeholder="模型名称" value={modelName} onChange={(e) => setModelName(e.target.value)} style={inputStyle} />
-        {category !== "L" && (
+        {level !== "L" && (
           <input placeholder={cfg.api_key_set ? "已设置（留空保持不变）" : "API Key"} type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} style={inputStyle} />
         )}
-        <input type="number" step={0.1} placeholder="temperature" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} style={inputStyle} />
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
         <button
-          onClick={() => onSave({ category, endpoint, model_name: modelName, temperature, ...(apiKey ? { api_key: apiKey } : {}) })}
+          onClick={() => onSave({ endpoint, model_name: modelName, ...(apiKey ? { api_key: apiKey } : {}) })}
           style={primaryBtnSmall}
         >
           保存
@@ -175,6 +201,27 @@ function LlmSlotCard({ slot, cfg, onSave, onTest, testResult }: { slot: string; 
         <button onClick={onTest} style={secondaryBtnSmall}>测试连接</button>
         {testResult && <span style={{ fontSize: 11, color: "#94a3b8" }}>{testResult}</span>}
       </div>
+    </div>
+  );
+}
+
+function LlmSlotRow({ slot, cfg, levels, onSave }: { slot: string; cfg: LlmSlotConfig; levels: string[]; onSave: (patch: Partial<LlmSlotConfig>) => void }) {
+  const [level, setLevel] = useState(cfg.level);
+  const [enabled, setEnabled] = useState(cfg.enabled ?? true);
+  const [temperature, setTemperature] = useState(cfg.temperature ?? 0.2);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px" }}>
+      <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{LLM_SLOT_LABELS[slot] ?? slot}</div>
+      <select value={level} onChange={(e) => setLevel(e.target.value)} style={{ ...inputStyle, width: 140 }}>
+        {levels.map((l) => <option key={l} value={l}>{LLM_LEVEL_LABELS[l] ?? l}</option>)}
+      </select>
+      <input type="number" step={0.1} value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} style={{ ...inputStyle, width: 80 }} title="temperature" />
+      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#374151" }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        启用
+      </label>
+      <button onClick={() => onSave({ level, enabled, temperature })} style={primaryBtnSmall}>保存</button>
     </div>
   );
 }

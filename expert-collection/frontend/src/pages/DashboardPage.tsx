@@ -1,21 +1,24 @@
 // PRD 13: desktop-only Dashboard. Phase 6 (IMPLEMENTATION_PLAN.md section 8) fills in real
 // public_extracted import, export, drill-down and trend -- see that section for what's still
-// deferred (Dataset Slice-style industry/scenario cross-tabs, dual-source trend overlay).
+// deferred (dual-source trend overlay). §14.4 Dataset Slice (industry/scenario cross-tabs)
+// is implemented -- see the "slice" tab below.
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
-import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS } from "../api/types";
-import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
+import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, GOLD_STATUS_LABELS, SLICEABLE_FIELDS, VERDICT_LABELS } from "../api/types";
+import type { AnnotationSummary, DatasetVersionSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { TrendChart } from "../components/TrendChart";
+import { PriorAnnotationPanel } from "../components/PriorAnnotationPanel";
 
-type Tab = "quality" | "completeness" | "leakage" | "trend";
+type Tab = "quality" | "completeness" | "leakage" | "trend" | "slice";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "quality", label: "质量评分" },
   { key: "completeness", label: "完整度明细" },
   { key: "leakage", label: "泄漏与重复" },
   { key: "trend", label: "趋势" },
+  { key: "slice", label: "行业/场景切片" },
 ];
 
 const BAND_COLOR: Record<string, string> = { good: "#0ca30c", warning: "#fab219", poor: "#ec835a", insufficient_sample: "#94a3b8" };
@@ -28,6 +31,11 @@ export function DashboardPage({ role }: { role: Role }) {
   const [tab, setTab] = useState<Tab>("quality");
   const [publishing, setPublishing] = useState(false);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [priorRecords, setPriorRecords] = useState<PriorRecordSummary[]>([]);
+  const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
+  const [annotatingRecordId, setAnnotatingRecordId] = useState<string | null>(null);
+  const [sliceField, setSliceField] = useState<string>(SLICEABLE_FIELDS[0].field);
+  const [sliceBuckets, setSliceBuckets] = useState<{ value: string; count: number; pct: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async (st: SourceType) => {
@@ -40,6 +48,19 @@ export function DashboardPage({ role }: { role: Role }) {
       setVersions(vs);
       setDraftCount(pool.count);
       setTrend(trendRes.points);
+
+      const latestId = vs[0]?.id;
+      if (latestId) {
+        const [records, summary] = await Promise.all([
+          api.listPriorRecords(latestId),
+          api.getAnnotationSummary(latestId),
+        ]);
+        setPriorRecords(records);
+        setAnnotationSummary(summary);
+      } else {
+        setPriorRecords([]);
+        setAnnotationSummary(null);
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -48,6 +69,14 @@ export function DashboardPage({ role }: { role: Role }) {
   useEffect(() => {
     refresh(sourceType);
   }, [sourceType, refresh]);
+
+  useEffect(() => {
+    const versionId = versions[0]?.id;
+    if (tab !== "slice" || !versionId) return;
+    api.getSlice(versionId, sliceField)
+      .then((res) => setSliceBuckets(res.buckets))
+      .catch((e) => setError(String(e)));
+  }, [tab, sliceField, versions]);
 
   async function handlePublish() {
     setPublishing(true);
@@ -66,6 +95,16 @@ export function DashboardPage({ role }: { role: Role }) {
     setError(null);
     try {
       await api.archiveDatasetVersion(versionId);
+      await refresh(sourceType);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleToggleGold(versionId: string, nextIsGold: boolean) {
+    setError(null);
+    try {
+      await api.markDatasetVersionGold(versionId, nextIsGold, role);
       await refresh(sourceType);
     } catch (e) {
       setError(String(e));
@@ -101,6 +140,68 @@ export function DashboardPage({ role }: { role: Role }) {
             {latest ? `最近更新: ${new Date(latest.created_at).toLocaleString("zh-CN")}` : "尚未发布任何版本"}
           </div>
         </div>
+
+        {priorRecords.length > 0 && (
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                {sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
+              </div>
+              {annotationSummary && (
+                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
+                  标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
+                  {annotationSummary.annotated_records > 0 && (
+                    <span>
+                      {" "}
+                      （{(["accepted", "needs_revision", "rejected"] as const)
+                        .filter((v) => annotationSummary.verdict_counts[v])
+                        .map((v) => `${VERDICT_LABELS[v]} ${annotationSummary.verdict_counts[v]}`)
+                        .join("，")}
+                      ）
+                    </span>
+                  )}
+                  {" ・ "}Gold {annotationSummary.gold_counts.gold ?? 0} 条
+                  {annotationSummary.agreement_kappa !== null && ` ・ 一致性 κ=${annotationSummary.agreement_kappa}`}
+                </div>
+              )}
+            </div>
+            <div>
+              {priorRecords.map((r) => (
+                <div key={r.record_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5" }}>
+                  <div style={{ fontSize: 12.5 }}>
+                    {r.name} <span style={{ color: "#94a3b8" }}>（{r.node_count} 节点）</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span
+                      style={{
+                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                        background: r.prior_status === "expert_annotated" ? "#eafaea" : "#f1f5f9",
+                        color: r.prior_status === "expert_annotated" ? "#0ca30c" : "#667085",
+                      }}
+                    >
+                      {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                        background: r.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
+                        color: r.gold_status === "gold" ? "#b45309" : "#667085",
+                      }}
+                    >
+                      {GOLD_STATUS_LABELS[r.gold_status]}
+                    </span>
+                    <button
+                      onClick={() => setAnnotatingRecordId(r.record_id)}
+                      style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 11.5, cursor: "pointer" }}
+                    >
+                      去标注
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {sourceType === "expert_collected" && (
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -138,6 +239,24 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         ) : (
           <>
+            {(latest.is_gold || role === "admin") && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                {latest.is_gold && (
+                  <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "2px 10px", background: "#fff7e6", color: "#b45309" }}>
+                    ★ Gold 版本
+                  </span>
+                )}
+                {role === "admin" && (
+                  <button
+                    onClick={() => handleToggleGold(latest.id, !latest.is_gold)}
+                    style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "2px 10px", fontSize: 11, cursor: "pointer" }}
+                  >
+                    {latest.is_gold ? "取消 Gold 标记" : "标记为 Gold 版本"}
+                  </button>
+                )}
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 20 }}>
               <MetricCard label="工作流数" value={latest.workflow_count} tip="当前版本包含的记录数量。" />
               <MetricCard label="步骤总数" value={latest.total_steps} tip="所有工作流的节点总数之和，衡量数据集的体量，不只是条数。" />
@@ -208,6 +327,46 @@ export function DashboardPage({ role }: { role: Role }) {
                 <TrendChart points={trend} />
               </div>
             )}
+            {tab === "slice" && (
+              <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                  {SLICEABLE_FIELDS.map((f) => (
+                    <button
+                      key={f.field}
+                      onClick={() => setSliceField(f.field)}
+                      style={{
+                        border: sliceField === f.field ? "none" : "1px solid #d0d5dd",
+                        borderRadius: 999, padding: "4px 12px", fontSize: 12, cursor: "pointer",
+                        background: sliceField === f.field ? "#2a78d6" : "#fff",
+                        color: sliceField === f.field ? "#fff" : "#475569",
+                      }}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                {!latest ? (
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>还没有已发布的版本，无法切片。</div>
+                ) : sliceBuckets.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>这个版本还没有记录。</div>
+                ) : (
+                  <div>
+                    {sliceBuckets.map((b) => (
+                      <div key={b.value} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #f1f3f5" }}>
+                        <div style={{ width: 180, fontSize: 12.5, color: b.value === "未填写" ? "#94a3b8" : "#1f2937" }}>{b.value}</div>
+                        <div style={{ flex: 1, height: 8, background: "#f1f5f9", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${Math.round(b.pct * 100)}%`, height: "100%", background: "#2a78d6" }} />
+                        </div>
+                        <div style={{ width: 70, textAlign: "right", fontSize: 12, color: "#667085" }}>{b.count} 条・{Math.round(b.pct * 100)}%</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12 }}>
+                  切片依据每条记录的 manufacturing_context（导入公共集时已随记录一起校验；专家采集的工作流可在会话页顶部补填）。"未填写"是诚实的空值分组，不是缺陷。
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -217,6 +376,16 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         )}
       </div>
+
+      {annotatingRecordId && latest && (
+        <PriorAnnotationPanel
+          versionId={latest.id}
+          recordId={annotatingRecordId}
+          role={role}
+          onClose={() => setAnnotatingRecordId(null)}
+          onSaved={() => refresh(sourceType)}
+        />
+      )}
     </div>
   );
 }

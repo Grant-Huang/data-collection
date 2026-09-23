@@ -353,7 +353,7 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
 
             <section style={sectionCard}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Graph（挖出来的共识结构）</div>
-              <div style={{ height: 320, border: "1px solid #f1f3f5", borderRadius: 8 }}>
+              <div style={{ height: 320, border: "1px solid #f1f3f5", borderRadius: 8, overflow: "hidden" }}>
                 {exp.consensus_graph && <DagView graph={exp.consensus_graph} readOnly />}
               </div>
             </section>
@@ -379,10 +379,23 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
                   </tbody>
                 </table>
               )}
+              {exp.error_clusters.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>典型失败模式（AI 归纳）</div>
+                  {exp.error_clusters.map((c, i) => (
+                    <div key={i} style={{ fontSize: 12.5, marginBottom: 8, padding: "8px 10px", background: "#f8fafc", borderRadius: 6 }}>
+                      <div style={{ fontWeight: 600 }}>{c.label}</div>
+                      <div style={{ color: "#475467", marginTop: 2 }}>{c.description}</div>
+                      <div style={{ color: "#94a3b8", marginTop: 2 }}>涉及：{c.workflow_names.join("、")}</div>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 11.5, color: "#94a3b8" }}>以上归纳由 AI 根据失败案例摘要自动生成，请结合上方明细数据核实。</div>
+                </div>
+              )}
             </section>
 
             <section style={{ ...sectionCard, color: "#94a3b8", fontSize: 12.5 }}>
-              Dataset Slice（按行业/制造模式/场景切片）本轮未实现——需要本系统尚未采集的分类字段，与 Dashboard 覆盖度维度是同一个缺口。
+              按行业/制造模式/场景对 Error Analysis 做切片本轮未实现——分类字段（manufacturing_context）本身已经接上了，Dashboard 的"行业/场景切片"Tab 能看，只是还没有把这个筛选条件接进实验详情页的失败案例分析。
             </section>
           </>
         )}

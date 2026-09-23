@@ -18,7 +18,7 @@
 **实现前仍需要记录的假设**（PRD 没有强制要求、但代码必须选一个具体值才能跑起来的地方，选择依据写在这里，不算擅自变更需求）：
 1. **认证**：PRD 定义了角色（专家/研究员/管理员，16.2）但没有设计登录页——MVP 阶段用一个最简单的"当前身份"选择器（下拉切换角色，不做真实账号密码），把角色权限的前端隐藏/后端校验逻辑跑通，真实登录系统留到正式上线前再补
 2. **存储**：PRD 没有指定数据库——MVP 用 SQLite（单文件、零运维，跟"封闭域、自托管"的产品定位一致），表结构直接对应 Schema v2 的 JSON 结构（整条记录存 JSON 字段，另建索引字段供列表查询，第 33 节"关系表 vs JSONB"思路的 SQLite 版）
-3. **7B 引导模型（L 类）**：这个环境没有本地 7B 推理服务可接，也没有外部 API Key——先实现一个**规则驱动的 Mock Guide Service**，接口签名和真实 LLM 版完全一致（第 14 节每轮 LLM 输入/输出协议），先把"专家打字 → 结构化抽取 → DAG 更新"这条主链路跑通、可演示、可测试；真正接 7B 模型时只需要替换这一个模块的实现，不影响其余代码，替换点在第 17.2 节设置页的"专家采集会话引导"这一项
+3. **7B 引导模型（L 类）**：这个环境没有本地 7B 推理服务可接，也没有外部 API Key——先实现一个**规则驱动的 Mock Guide Service**，接口签名和真实 LLM 版完全一致（第 14 节每轮 LLM 输入/输出协议），先把"专家打字 → 结构化抽取 → DAG 更新"这条主链路跑通、可演示、可测试；真正接 7B 模型时只需要替换这一个模块的实现，不影响其余代码，替换点在第 17.2 节设置页的"专家采集会话引导"这一项。**更新（本节第 14 部分）**：这条假设已经不再是"待办"——`guide_service`/`explain`/`anonymize_name`/`error_clustering` 都已经真接了 `llm_client.py`（真实 OpenAI 兼容 HTTP 客户端），在真实环境里填了可达的 endpoint 后就会真的调用，不再是 Mock；只有 `mobile_speech_polish` 还完全没有接线（见第 4 条，改用浏览器原生 API 替代了），`role_normalize` 是主动决定不接（第 14 部分"不用动的"）。设置页"测试连接"也已经改成真的发一次请求，不再是无论怎么填都返回失败的占位实现——见下方"设置页测试连接改为真实调用"。
 4. **移动端语音识别（V 类，第 6.2 节）**：PRD 要求复用 `web-demo` 已验证的 Qwen Realtime 转写链路（`QWEN_API_KEY` + `input_audio_transcription.completed` 事件），但这个沙箱环境既没有 `QWEN_API_KEY`，也没有可达的 dashscope WebSocket 出口——先用浏览器原生 `SpeechRecognition` API 作为**真实可用、无需密钥**的替代实现（不是模拟：识别结果是真实的，只是识别后端不同，且仅 Chrome/Edge 等部分浏览器支持），三按钮/波形 UI 与转写结果回填/直接发送的产品行为按 PRD 4.3.1 完整实现；组件对外接口（`onTranscript`）与真实链路接入后需要的形状一致，替换时只需要改 `VoiceCapsuleInput.tsx` 内部的 `startRecognition`/`stopRecognition`，不影响其余代码
 
 ## 2. 技术选型
@@ -152,3 +152,328 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - 真实 LLM 接入（人名脱敏、Guide Service 等）：跟 Phase 1-4 一样，等有可达的 L/C 推理服务再替换对应 Mock 模块，接口已经按"这次调用要接收什么、返回什么"设计好
 
 **假设 7（新增）**：近重复检测的两个阈值本轮从 Settings 读取，但公共集导入界面本身没有做管理员权限门禁（延续假设 5 的"暴露在前端里、权限校验留到真实登录系统接入时一并做"）。
+
+## 9. Phase 7：Scenario/Case Context 采集 + Prior 标注流程
+
+对应 `docs/expert-workflow-collection/design/case_context_and_prior_annotation_draft.md` 定稿后的两处扩展。文末"决策记录"表的 4 个决定在本轮直接实现，不再重复推导；这里只记录落成代码时的具体取舍。按草稿建议的顺序拆成两个独立子阶段，分别提交：
+
+### 9.1 子阶段 A — Scenario / Case Context 采集（改动面小，先做）
+
+- `guide_service.py`：在现有 `opening → trigger_detail` 之间插入 7 个新 stage：`scenario_trigger` / `scenario_goal` / `scenario_success`（A组，直接复用现有"chip 只回填输入框"机制——两个 chip 文案本身就是"简单说：" / "详细说：提示语——"的答案模板前缀，专家在其后接自己的话；guide_service 靠前缀识别 `detail_level`，不需要新的前端交互）；`context_known` / `context_unknown` / `context_constraints` / `context_resources`（B组，每个问题拆成"选择"+"澄清"两个 stage，选择 stage 用多选 chip、命中非"无"的 chip 才进入澄清 stage，"无"直接跳到下一题）。C组的"为什么这样做"归因追问（PRD 里原设计的一部分）本轮**不做**，作为已知缺口记录在 9.3——它要求把现有 `main_path`/`branch_check` 等每个 stage 都拆成两段，改动面明显大于 A/B 两组，留到下一轮单独评估。
+- `models.py`：新增 `CaseContext` 模型（`scenario_trigger/goal/success`、`known_info`/`unknown_info`/`constraints`/`available_resources`、`detail_level: dict`、`skipped_fields: list`），`WorkflowRecord` 新增 `case_context: Optional[CaseContext]`。
+- `NextQuestion` 新增 `chip_mode: Optional[Literal["prefill", "multi_select"]]`，默认 `None`（等价于现有行为，所有旧 stage 不用改）；B组四个 stage 的选择环节设为 `"multi_select"`。
+- `routers/expert_workflows.py`：`post_turn` 里把 `new_state["pending"].get("case_context")` 同步写回 `record["case_context"]`；`end_condition` stage 把 pending 清空成 `{}` 时要保留 `case_context`（原代码会连带清掉，是一个真实需要修的点，不是新增行为）。
+- 前端 `ChatPanel.tsx`：新增 `chip_mode === "multi_select"` 的渲染分支——chip 变成可切换选中状态的按钮组 + 一个"确认选择"按钮，点击后把选中项拼成字符串回填草稿框（沿用"永不自动发送"的规则，不新增例外）；`chip_mode` 为空或 `"prefill"` 时行为完全不变。
+- 前端 `SessionPage.tsx`：`active.graph.nodes.length === 0` 时右栏显示"背景信息收集中"占位态而不是空 DAG——这个条件本身就和"A/B 组阶段"重合，不需要额外按 stage 名判断。
+- `quality.py`：不改动评分公式本身（草稿 1.7 已经说这是要不要计入总分的产品决策，本轮不擅自决定），只在 `completeness` 维度的 `sub_indicators` 里新增一个诊断字段 `case_context_fill_rate`（七个字段里非跳过的比例，跨数据集版本的平均值），先展示不影响分数。
+
+### 9.2 子阶段 B — Prior 标注（链式单人标注，改动面大，后做）
+
+- `models.py`：新增 `prior_status: Literal["raw", "expert_annotated"]`（只在 API 响应里按 9.2 的方式动态算出，不写回不可变的 `dataset_version` 数据）、`PriorVerdict = Literal["accepted", "needs_revision", "rejected"]`、`CreateAnnotationRequest`、`PriorAnnotation`（含 `based_on_annotation_id`，草稿 2.4 的链式设计）、`PriorRecordSummary`、`AnnotationSummary`。
+- `db.py`：新增 `prior_annotations` 表，`id/version_id/record_id/based_on_annotation_id/data/annotated_at`；`save_annotation`/`list_annotations(version_id, record_id)`/`latest_annotation(version_id, record_id)`/`list_annotations_for_version(version_id)`。标注按 `(version_id, record_id)` 定位，不去改 `dataset_versions` 表里已发布版本的不可变数据——这样"标注"和"版本不可变"两条规则不冲突。
+- 新增 `routers/annotations.py`：
+  - `GET /api/datasets/versions/{version_id}/records`：列出该版本所有记录 + 动态算出的 `prior_status`/`latest_verdict`/`node_count`，供标注列表用
+  - `GET /api/datasets/versions/{version_id}/records/{record_id}`：单条记录详情（图 + 标注历史链），标注面板预填链上最新判定用
+  - `POST /api/datasets/versions/{version_id}/records/{record_id}/annotations`：提交新标注，`based_on_annotation_id` 自动指向该 (version_id, record_id) 当前链上最新一条
+  - `GET /api/datasets/versions/{version_id}/annotation-summary`：标注覆盖率 + 判定分布，供 Dashboard 用
+- 只对 `source_type == "public_extracted"` 的版本开放（草稿 2.1：LLM 整合工作流本轮只走导入，和其他导入数据用同一套，不需要区分）；对 `expert_collected` 版本调用这组接口直接 404，不悄悄放行。
+- 前端新增 `PriorAnnotationPanel.tsx`：复用只读 `DagView`，三个大按钮（采纳/需要修改/丢弃）默认预选链上最新判定；选"需要修改"才展开逐节点 `保留/删除/合并进上一个节点` chip。
+- `DashboardPage.tsx` 公共集分支：记录列表旁加状态标签 + "去标注"按钮，新增"标注覆盖率"统计卡片，读取 `annotation-summary`。
+- `client.ts`/`types.ts`：新增对应的请求函数和类型。
+
+### 9.3 本轮仍不做，继续记录为已知缺口
+
+- C组"为什么这样做"的节点级归因追问（见 9.1）：需要把现有主流程每个 stage 拆成两段，工作量和现有 FSM 的 stage 总数成正比，留到下一轮单独排期。
+- B组 `context_known`/`context_unknown`/`context_resources` 三个问题的具体 chip 文案（草稿"下一步细化项"提到需要贴合真实业务场景再定）：本轮先用草稿里给的合理默认值实现机制，文案后续可直接改 `guide_service.py` 里的常量表，不涉及结构改动。
+- 标注一致性（Cohen's κ / Krippendorff's α）：按决策 3，本轮不做，`based_on_annotation_id` 的链式设计已经为以后升级成多人独立标注留了口子（草稿 2.4 结尾）。
+- `case_context_fill_rate` 是否要真正计入 Dataset Readiness Score 总分：本轮只展示不计分，计不计分是产品决策，留给下一轮。
+
+## 10. 跨版本近重复检测（严格把关，已实现）
+
+在实际导入两批公共集数据时发现并当场修复的产品缺口，不是本轮 Phase 7 设计里预见到的，单独记一节。原先只是记为已知缺口，后来按用户明确要求（"每次导入新数据的时候，都要做好严格把关"）当场实现，本节记录最终实现和过程中的一次真实调参。
+
+**发现过程**：导入第一批 20 条公共集（`manufacturing_workflows_consolidated_v2.json`）生成 v1 之后，再导入第二批 40 条，系统的预检报告对这两批之间的重复完全没有反应——因为 `import_pipeline.precheck` 的近重复检测（12.2.2）原来只在**当前这一次上传的 payload 内部**两两比较，从来不和数据库里已经导入过的历史 `dataset_version` 比。手工用 `import_pipeline._jaccard`/`_record_structure_sets` 把两批原始记录做了一次跨批比较，找到 78 组结构近重复，预检报告里一条都没出现，证实这是真问题。
+
+**实现**（`import_pipeline.py` + `routers/datasets.py`）：
+- `precheck()` 新增 `existing_records` 参数：调用方（`routers/datasets.py`）负责从数据库取出**同一 `source_type` 下所有未归档版本**的记录（复用现成的 `_records_for_export`），`import_pipeline.py` 本身不碰数据库，保持纯函数、方便单测
+- `record_id` 唯一性检查（原第 6 步）从"只查本批"扩展为"本批 + 历史"：任何 record_id 已经出现在历史已发布版本里，直接算错误（`record_id_already_exists`），阻断该条导入
+- 新增独立的**查重接口** `POST /api/datasets/duplicate-check`：不依赖导入流程，单独传 `{dataset_meta, records[]}` 就能拿到分类结果，用来在决定要不要修数据、要不要导入之前先看一眼这批数据和已有数据的关系；内部复用和 `precheck` 完全同一套分类逻辑（`import_pipeline.compare_cross_version`），保证这里看到的结果和真正导入时会被拦下的结果一致，不是另一套口径
+
+**分类逻辑——两级判定，按场景是否重复 + 结构是否重复两个维度分开定义（这是根据反馈明确要求的判定方式，不是延续上一版"文本命中就阻断、结构命中就警告"的裁剪版本）**：
+- **整体重复**（`duplicate`）：文本相似度**和**结构相似度**同时**达到阈值——做的事情（场景）重复，做的工作流（结构）也重复，判定为真正的重复数据，默认阻断导入
+- **疑似微工作流复用**（`microflow_reuse_candidate`）：文本相似度**没**达到阈值，但结构相似度达到阈值——做的事情不一样，中间的处理结构却很像，判定为疑似复用了同一个可复用的 micro-workflow 模板（呼应实验设计文档 §4.4："同一个 micro-workflow 故意在多个场景里重复出现"），只警告、不阻断，交给 Prior 标注环节人工复核
+- 极少数"文本相似但结构不同"的组合单独归为 `content_match_structure_diff`，同样只警告，不强并入前两类
+
+这个两级判定同时应用在批内比较（`_find_near_duplicates`）和跨版本比较（`_find_cross_version_duplicates`）上，口径统一——批内如果真的整体重复（同一批文件里不小心塞了两条一样的数据）也会被阻断，不再像之前那样"批内一律只警告"。
+
+**已验证（在干净的 v1 基线上重新走了一遍完整闭环，不是接着之前测试残留的脏状态继续测）**：
+1. 清空测试库，只留最初那 20 条真实数据作为 v1
+2. 对修好的 40 条数据调用 `/duplicate-check`：`duplicates: 0`、`reuse_candidates: 348`、`other_matches: 0`——因为这 40 条从未导入过，和 v1 的重叠纯粹是结构模板共享，符合预期
+3. 走完整 `precheck`：40/40 可导入，0 个阻断错误，1052 条警告全部是 `microflow_reuse_candidate`（704 批内 + 348 跨版本）
+4. 确认导入为 v2，40 条全部成功
+5. 对完全相同的文件再跑一次 `/duplicate-check`：这次正确识别出 **40 个 `duplicate`**（文本相似度 1.0 且结构相似度 1.0 的自我匹配），证明真正的重复不会被放过
+
+**仍未做（下一轮）**：
+- 跨批结构命中要不要在 Prior 标注环节里显式呈现"这条和历史某条结构相似"供专家参考，目前只是预检报告里的一条警告文字，标注面板本身还没读取这个信号
+- 计算量会随历史数据量增长而变大（每次导入都要和全部历史记录比较一遍），目前 40 vs 20+8+32 的规模完全没问题，等数据量大到有性能问题时再考虑索引/分桶优化，现在不提前做
+
+## 11. 模型配置改为"级别优先"，环节只引用级别
+
+按反馈修的产品缺陷："现在的模式重复配置没必要"——原来 `Settings.llm_configs` 是 8 个环节（专家采集会话引导/移动端语音口述整理/……）各自一份完整配置（`category` + `endpoint` + `model_name` + `temperature` + `api_key`），即使多个环节实际用的是同一个模型级别（比如都是 `C_standard`），端点/模型名/API Key 也要在每个环节的表单里分别填一遍、改的时候要记得同步改好几处。
+
+**改法**：拆成两层。
+- `llm_levels`（新增，3 个级别：`L`/`C_standard`/`C_flagship`，每个只配一次）：`endpoint`/`model_name`/`api_key`——这才是真正意义上"重复"的部分，同一个级别只有一份连接信息
+- `llm_slots`（原 `llm_configs` 改名）：每个环节只保留 `level`（引用哪个级别）+ `enabled` + `temperature`——`temperature` 特意留在环节这一层没有并进级别，因为同一个级别下不同任务想要不同的采样温度是合理的调优需求（比如 `guide_service` 用 0.1、`mobile_speech_polish` 用 0.2，都是 `L` 级别），这不是"重复配置"，是任务级别的真实差异，不能一并砍掉
+
+新增 `settings.resolve_slot(settings, slot)` 帮助函数：把某个环节引用的级别信息和它自己的 `enabled`/`temperature` 合并成一份完整视图，真正要调用模型的代码只需要调这一个函数，不用自己去做级别查找和合并。
+
+`POST /api/settings/llm/{slot}/test-connection` 改成 `POST /api/settings/llm-levels/{level}/test-connection`——测试连接本来就是在测"这个连接通不通"，既然多个环节共享同一个级别的连接，按环节测是没有意义的重复测试，按级别测一次就够了。
+
+**已验证**：真实 HTTP 调用——只给 `C_standard` 级别填一次连接信息，把 `error_clustering` 和 `dashboard_explain` 两个环节都指向它，两个环节各自读到的仍然是它们自己的 `enabled`/`temperature`，但连接信息（`endpoint`/`model_name`/`api_key_set`）自动一致，不需要分别填两遍；`resolve_slot()` 正确合并出两个环节各自完整的等效视图；给一个环节传不存在的 `level` 值会被 400 拒绝；`tsc -b` 通过；headless Chromium 截图确认页面正确分成"模型级别配置"（3 张卡片）和"环节引用级别"（8 行，每行只有级别下拉 + temperature + 启用勾选 + 保存，不再有端点/模型名/Key 输入框）两个区块。
+
+## 12. 节点拆分：一句话里的复合动作不再塞进一个节点
+
+真实截图暴露的问题："是质检员发现的，第一时间就记录系统并通知对应的车间班组长" 这一整句话被原样塞进了一个 `activity` 节点，实际上是两件事（记录系统 / 通知班组长），外加一段跟步骤本身无关的"谁发现的"背景交代。反馈明确要求：不能是把专家原句原样搬进框里——不管最后拆成一步还是两步，框里放的都必须是"对这一步的描述"，而不是从原文里抠出来的一句话。
+
+这跟 `guide_service.py` 文件头一直强调的"Honest Mock：内容完全按专家原话逐字记录，不做任何 NLU"的设计原则是有真实张力的——诚实地说，这个 Mock 没有真正的语义理解/摘要能力，不可能做到"提炼出专家没有明确说出的表述"那种意义上的抽取。能在不越界（不产生专家没说过的内容）的前提下做到的，是**机械规则**，不是语义抽取：
+
+- 去掉开头一段"谁发现的/怎么知道的"背景交代（`是XX发现的，`/`XX反馈的，` 这类固定模式）——这部分内容本来就该属于已经单独问过的 `scenario_trigger`/case context，不是这一步动作本身。
+- 按一个固定的、封闭的并列连接词集合（`并`/`同时`/`然后`/`、`，跟 PRD 18 节里已经在用的"chip 是封闭选项集合，直接模式匹配没问题"是同一个思路，不是通用分句）切成最多两段。
+- 去掉切出来的每一段开头的时序填充词（`第一时间就`/`随后`/`先`/`再` 等），让节点标签读起来像"记录系统"这样的动作描述，而不是"第一时间就记录系统"这样的原句片段。
+
+**没有做**、也做不到的：真正意义上的提炼/改写/摘要（比如把"叫维修工老王来拆开看看是不是传感器坏了"提炼成"排查传感器故障"这种需要理解语义才能生成的表述）——这仍然超出 Honest Mock 的能力边界，留给真正接入 L 模型之后（PRD 15.0/17.2）。
+
+**实现**：`guide_service.py` 新增 `_extract_step_clauses(text, max_steps=2)`（做上面三步机械处理，返回 1-2 段文本）和 `_add_step_nodes(ops, from_id, text, ...)`（按提取结果链式创建 1-2 个 `activity` 节点，返回新的 cursor），替换了 `trigger_detail`/`main_path`/`branch_condition_a`/`branch_condition_b`/`parallel_branch_a`/`parallel_branch_b` 六处原来"整句 `text[:40]` 塞进一个节点"的写法。
+
+**已验证**：真实 HTTP 端到端跑通完整对话流程（含 Scenario/Case Context 采集），把截图里的原句 "是质检员发现的，第一时间就记录系统并通知对应的车间班组长" 发给 `trigger_detail` 阶段，返回的图正确生成了「开始」→「记录系统」→「通知对应的车间班组长」三个节点、两条 `normal` 边，"是质检员发现的" 背景交代被正确去掉；单句无连接词的输入（如"维修工到场维修"）保持原样单节点不受影响；`main_path` 阶段同样验证了三段式压缩为两段（"记录、通知、并归档" → "记录" / "通知、归档"）。
+
+## 13. 复合句"并/同时"的串并行歧义：改成追问，不再默认串行；"更正语句"识别记为已知缺口
+
+真实线上截图（`workflow-data.inkpath.cc`）复测第12节的修复时又暴露两个问题，都是"规则匹配没有语义理解"这条 Honest Mock 边界带来的真实代价：
+
+**问题 A：专家说"我说错了，……"这种更正/撤回语句，被当成普通的下一步塞进图里。** 例如专家在 `main_path` 阶段回复"哦，我说错了，做这两步之前我会先做复检。确认后才会记录系统和通知班组长"，系统没有能力识别"这是在更正上一句"还是"这是新的一步"——`guide_service.py` 文件头本来就写明"它永远机械地把新一轮输入当成往前推进一步"，这次是这条设计边界第一次被真实数据踩到。
+
+真要解决这个问题，需要两件事：(1) 判断一句话是不是在更正前面的内容——这是纯语义判断，封闭关键词表（"我说错了"/"不对"/"应该是"……）必然会漏判（更正语句的说法太多样）或者误判（"不对"完全可能出现在正常业务描述里），跟第12节里"chip 是封闭选项集合，模式匹配没问题"不是一回事；(2) 就算识别出来了，"撤销上一步"这个操作本身现在也不存在——`graph_ops.py` 只有 `add_node`/`add_edge`/`update_node` 这类前进操作，没有"撤销/回退到某个节点"的能力，而且"撤销几步"这个范围本身也是要靠语义理解才能判断的（这次的例子里，专家说错的到底是最近1个节点还是2个节点，从文字本身并不是完全无歧义的）。
+
+**决定（用户明确选择）**：这两件事现在都不做，留作已知缺口，等真正接入 PRD 15.0/17.2 的 L 模型后再解决——现在这个阶段不用规则硬凑一个不可靠的模拟。产品影响：专家发现自己说错话之后，仍然需要自己在图上手动删除/修改错误节点，系统不会自动帮忙撤销。
+
+**问题 B：复合句里的"并"默认当串行处理，没有跟专家确认过。** 第12节的 `_extract_step_clauses` 按 `并`/`同时`/`然后`/`、` 这组封闭连接词切句子，但不管碰到哪个连接词，`_add_step_nodes` 一律用 `normal`（串行）边把切出来的两个节点连起来。这本身不够诚实：`然后`/`、` 读起来确实没有歧义（先后关系很明确），但"记录系统**并**通知班组长"里的"并"，语义上完全可能是"同时做"而不是"先后做"——系统里本来就有专门的 `先后做`/`同时做` chip 用来问这个问题（`parallel_check` 阶段），但那一套之前只在专家**换行**另起一步时才会触发，句子内部切出来的分句从来没有走过这个确认流程。
+
+**决定（用户明确选择）**：遇到"并/并且/同时"作为切分连接词时，追加一次澄清提问，复用现成的 `先后做`/`同时做` chips，由系统据此生成对应结构，而不是先猜后问。"然后"/"、" 语义上已经足够明确是先后关系，不需要额外确认。
+
+**实现**：`guide_service.py` 新增：
+- `_needs_parallel_clarify(text)`：只有当 `_extract_step_clauses` 切出恰好两段、且实际生效的切分连接词是"并/并且/同时"时才返回 `True`（`然后`/`、` 切分不触发）。
+- `_build_step_chain` / `_build_parallel_branches`：把原来 `_add_step_nodes` 里"建节点"的部分拆成两种可复用的建图方式——前者按顺序链式建 `activity` 节点（原来的行为），后者建一个完整的 `parallel_split → 各分句一个 activity（parallel 边）→ parallel_join` 结构。
+- `_continue_after_step(resume, tail_id, pending, ops, entry_id=None)`：把"这一步节点建完之后要问什么、进入哪个 stage"这部分逻辑，从原来 6 个 stage handler 里各自内联的代码，收敛成一个共享函数——不管是直接建图（无歧义）还是等专家答完"先后做/同时做"之后再建图（有歧义），走的都是同一段"之后怎么问"代码，不会出现两条路径各写一遍、后续改一处忘了改另一处的问题。
+- `_start_parallel_clarify` / `_resolve_parallel_clarify`：新增一个 `compound_parallel_clarify` stage，把分句结果暂存在 `pending._compound` 里，问完 chip 之后专家的下一轮回答（"先后做"/"同时做"/"不确定，再想想"）不会被当成新的步骤内容去重新提取，而是只用来决定走哪种建图方式；"不确定，再想想" 和其它非"同时"的回答一样，诚实地退回串行（跟 `parallel_check` 阶段现有的三态 chip 处理方式一致）。
+- 六个原来直接调用 `_add_step_nodes` 的入口（`trigger_detail`/`main_path`/`branch_condition_a`/`branch_condition_b`/`parallel_branch_a`/`parallel_branch_b`）全部先判断 `_needs_parallel_clarify`，命中就转去问 chip，不命中才维持原来的直接建图行为。
+
+**踩过的坑**：第一版实现里，`trigger_detail` 阶段先把"开始"节点的 `add_node`/`set_start` 操作塞进 `ops` 列表，再判断要不要转入澄清分支——但转入澄清分支的函数当时返回的是一个全新的空列表，把已经排队的"开始"节点操作整个丢掉了，导致专家选完"同时做"之后，图上有并行结构但没有"开始"节点、`start_node_ids` 是空的。用真实 HTTP 全流程测试才测出来（直接看 `_needs_parallel_clarify` 单测是看不出这个问题的，因为它不牵扯 `ops` 列表）。修复：让 `_start_parallel_clarify` 接收调用方已经排好的 `ops` 并原样带出去，而不是自己另起一个空列表。
+
+**已验证**：真实 HTTP 端到端跑通，覆盖了 `trigger_detail`（含上面那个"开始"节点丢失的回归测试）、`main_path`、`branch_condition_a`（确认 `entry_id` 机制正确让 `branch_condition_b` 还能从同一个判断节点继续问"另一种情况呢"）、嵌套的 `parallel_branch_a`（一个已经在并行分支里的步骤，自己又是复合句，需要生成"外层并行 + 内层并行"两层结构）——"先后做"和"同时做"两种回答都验证了对应的图结构（前者是链式 `activity`，后者是 `parallel_split`/`parallel_join` 结构），"然后"/"、" 连接词确认不会触发澄清提问（沿用第12节已验证行为）。
+
+## 14. 真实大模型接入路线图（用户已确认本地/外部大模型部署到位，重新排序）
+
+用户确认：他这一端的大模型（本地 L 类 + 外部 C 类）已经部署好，接口协议是 **OpenAI 兼容（`/chat/completions`）**。这份路线图把此前"这个环境没有可用模型，先用 Mock"的假设（Phase 1 假设 3、Phase 2 假设 4、Phase 3 假设 5、假设 6/7 里反复出现的同一条）逐项推翻，按用户排定的优先级重新排序，并且**每一项都要有写清楚的验收标准**——用户原话："有时候在会话框里说的很好，但是实现起来结果不是那么回事"，所以这里不写"目标"这种一句话描述，写的是"要跑通哪些具体场景、每个场景的输出要满足什么条件"，以后直接照着这份清单做端到端测试。
+
+编号沿用 PRD 第15节自己的体系（`§15.1-①` 这种记法 = PRD 15.1 节第①行），不在 PRD 15 节清单里的另外补充章节号。
+
+### §15.1-① 专家采集会话引导（`guide_service`）真实 LLM 接入 —— 最高优先级
+
+这一项范围比"把 Mock 换成真调用"大，包含用户在设计讨论里确认的"更正/回退"能力，拆成四个子项：
+
+**(a) 通用 LLM 客户端封装（`llm_client.py`，新增）**
+- 验收 1：读 `settings.resolve_slot(slot)` 拿到 `endpoint`/`model_name`/`api_key`/`temperature`，发起真实 OpenAI 兼容 `/chat/completions` 请求，正确解析 `choices[0].message.content`
+- 验收 2：在本仓库里起一个假的 OpenAI 兼容 stub 服务器（用于自动化测试，不依赖用户真实模型），覆盖四种场景各有对应行为并有测试用例：①正常响应 ②网络超时 ③HTTP 5xx ④响应体不是合法 JSON 或缺字段——超时/5xx/格式错误都不能让上层代码崩溃或挂起，要有明确的错误态返回给调用方
+- 验收 3：这一层是所有其余 slot（§15.2 的四项）复用的基础设施，不是只为 guide_service 写一次性代码——验收时至少要确认 `explain.py`/`anonymize.py` 后续改造时能直接复用这个客户端，不用各自重新写一套 HTTP 调用逻辑
+
+**(b) 结构化抽取（把专家原话转成 graph_ops）**
+- 验收 1（不能倒退）：用现有 regex 机制已经验证过的全部用例（单步骤、"然后"/"、" 复合串行、"并"/"同时" 复合歧义、条件分支拆分、并行分支内部复合、"是XX发现的" 场景交代剥离）跑一遍，LLM 版本产出的图结构要跟现有版本结构等价或更好，一条都不能倒退（比如不能把单句错误拆成两步，不能把"然后"误判成需要澄清的并行歧义）
+- 验收 2（新增能力，这才是换真模型的意义所在）：至少测 3 个现有 regex 处理不了、但语义等价的说法变体（比如"班长跟我反映的情况"这种不含"发现"两个字但语义上是场景交代的说法），确认真模型能正确识别、regex 版本会漏判的地方现在能处理了
+- 验收 3（不能引入脏数据）：LLM 返回的结构解析失败、字段不完整（比如 decision 节点但只给了1个分支条件）时，不能静默接受塞进图里——要么重新问一遍，要么明确报错；最后一道防线继续用现有 `graph_validator.py`，这个不用改
+
+**(c) 更正/回退能力（这次设计讨论定下来的新功能，直接在这一项里一起做，不再单列缺口）**
+- 验收 1：`source_turn_ids` 在每次 `add_node`/`add_edge` 时真实赋值为产生它的 `turn_id`（不再是 `[]`）
+- 验收 2：每轮处理完后存一份带 `turn_id` 的 FSM 状态快照（`stage`/`cursor`/`pending`），能查到"第 N 轮结束时状态是什么"
+- 验收 3：`graph_ops.py` 新增 `remove_node`/`remove_edge`，按 `source_turn_ids >= T` 批量删除某轮及之后产生的节点/边，级联规则要写清楚（删节点连带删它的边）
+- 验收 4：端到端场景——大模型判断"这轮像是更正" → 先问二次确认 chip `[是，回退重做]`/`[不是，这是新的一步]`，避免误判 → 专家确认"是"后，列出最近几轮供选择，**每一轮的候选描述用该轮完整产出**（含并行结构合并成一项描述，比如"「记录系统」+「通知班组长」（同时做）"作为一个整体选项，不拆成两个可单独选的节点——候选粒度是"轮次"不是"节点"，这样天然不会出现"回退到并行分支中间"这种没有良好定义的状态，不需要额外写规则判断"这个节点在不在并行分支里"）→ 专家选中某一轮 → 图正确回退到该轮之前的状态 → 专家重新输入更正后的话 → 图从回退点正确重新生长
+- 验收 5（误判防护）：构造一个文本里恰好出现"不对"但其实是正常业务描述的测试用例（比如"设备卡料的判断标准不对称，需要两边都测"），确认二次确认 chip 能被专家点"不是，这是新的一步"，不会被强行当成更正处理
+
+**(d) 非功能验收**
+- 延迟：这是高频关键路径调用（每轮对话都要调），需要跟用户对齐一个可接受的延迟目标（比如 P95 < 3 秒），验收时要实测
+- `temperature` 真正生效：设置页早就能配 `temperature`，但之前 Mock 版本没有真正的模型调用可传，现在要验证 slot 配置的 `temperature` 真的传进了请求体，不是摆设
+
+**(a)(b) 已实现**（(c)(d) 还没做）：
+- 新增 `app/llm_client.py`：`chat_completion()`/`chat_completion_json()`，OpenAI 兼容 `/chat/completions`，`urllib.request` 实现（不引入新依赖）。失败一律抛 `LLMError(kind, message)`，`kind` 取 `not_configured`/`timeout`/`http_error`/`bad_response` 四种之一，调用方据此决定怎么降级，永远不裸抛、不返回假成功。
+- `settings.py` 新增 `resolve_slot_for_call()`：跟已有的 `resolve_slot()`（给 API 响应用，`api_key` 脱敏成 `api_key_set` 布尔）区分开，这个给真实调用用，返回明文 `api_key`——两个函数分工清楚，脱敏这件事不会因为以后忘记而泄漏。
+- 用一个自建的 stub OpenAI 兼容服务器（`urllib.request`/`http.server` 写的，仅用于测试，没有提交进仓库）跑通验收 2 要求的四种场景（正常响应、超时、5xx、响应体不是合法 JSON），另外追加测试了"响应体是合法 JSON 但缺 `content` 字段"、`chat_completion_json()` 在模型返回非 JSON 内容时正确拒绝——全部按预期抛出对应 `kind` 的 `LLMError`，全部通过
+- `guide_service.py` 新增 `_understand_step(text)`：`guide_service` slot 启用且配置了 `endpoint`/`model_name` 时走真实 LLM 调用（`_llm_understand_step`，prompt 约束模型只能从专家原话里提炼、不能编造，且遇到"并/同时"这类连接词依然要老实说"ambiguous"而不是自己瞎猜——这是产品决策，不是 Mock 能力限制，换了真模型也要守住），任何失败（未配置/网络错误/超时/输出解析失败/字段缺失）都会退回原来的 regex 实现（`_extract_step_clauses`/`_needs_parallel_clarify`），不抛错到专家面前
+- 原来六处调用点各自的 `_needs_parallel_clarify` + `_add_step_nodes` 双重调用，统一收敛成 `_understand_step()` 只调一次 + `_apply_understanding()` 三路分发（`ambiguous`→追问，`parallel`→直接建 split/join 结构，其余→串行链）——**这里测试时抓到一个真实 bug**：一开始的实现只处理了"ambiguous"和"其他都当串行"两种情况，遗漏了大模型可以直接、自信地判定"parallel"（不需要追问）这条路径——用 regex 版本测不出这个 bug，因为 regex 永远只会给出"ambiguous"或"serial"，从来不会自信地直接说"parallel"；是用一个自建的 stub 场景（模型固定返回 `relationship: "parallel"`，且 clauses 内容跟输入原文完全无关，专门设计用来证明真的是 LLM 路径在起作用而不是 regex 兜底）测出来的：串行链被误建了，没有生成该有的 `parallel_split`/`parallel_join` 结构。加了 `_apply_understanding()` 统一三路分发后修复
+- **已验证**：真实 HTTP 端到端跑通四条路径——① 未配置任何 LLM 时行为跟换模型之前完全一致（回归测试）；② LLM 自信判定 parallel，直接生成 split/branches/join，不问澄清问题；③ LLM 判定 ambiguous，走跟之前 PR #11 一样的"先后做/同时做"追问流程，但 clauses 内容来自 LLM 输出而不是 regex 提取；④ LLM 调用失败（5xx）时正确退回 regex 路径，行为跟未配置时一致，不崩溃不挂起
+
+**(c) 已实现**（更正/回退能力，设计讨论定下来的完整方案）：
+- `graph_ops.py`：`remove_node`/`remove_edge` 本来就已经存在（早期就是按"LLM 修改与人工修改共用一套变更协议"设计的），这次只补了一个真实 bug——`remove_node` 之前没有把节点从 `start_node_ids`/`end_node_ids` 里摘掉，回退掉"开始"节点所在的那一轮时会留下悬空引用
+- `guide_service.handle_turn(state, text, turn_id=None)`：新增 `turn_id` 参数，处理完一轮后统一给这一轮产出的所有 `add_node`/`add_edge` 打上 `source_turn_ids: [turn_id]`（原来的内层函数改名 `_dispatch_turn`，逻辑不变，只是外面套了一层打标签）
+- `_understand_step_and_check_correction(text)`：跟 `_understand_step` 平行的另一个 LLM 调用，多问模型一件事——"这句话是不是在更正/撤回之前的内容"，同一次调用返回，不额外增加一次往返；规则兜底路径永远返回 `is_correction: False`（跟这个能力存在之前的行为完全一样，符合决策：这本质是语义判断，关键词表不可靠，交给真模型）
+- 六个步骤创建 stage 全部接入：检测到 `is_correction` 时不建节点，转去问"要回退重做吗？"（`_start_correction_confirm`），"不是" 会用 `skip_correction_check=True` 重新走一遍原文字对应的原 stage（避免同一句话被反复判成更正、死循环）；"是" 转到一个 guide_service 自己没法处理的 stage（`awaiting_turn_selection_setup`）——因为候选轮次列表需要完整的图和对话历史，guide_service 这个模块设计上就不碰这些，只管对话逻辑
+- `routers/expert_workflows.py` 新增：`_describe_turn`（按图里这一轮实际生成的节点内容描述"这一轮做了什么"，并行结构自动合并成一项，不会把并行分支内部的某个节点单独列成候选——因为这一整个并行结构本来就是同一轮原子生成的，"这一轮"天然就是主干线上的合法检查点）、`_correction_candidates`（最近5轮，过滤掉内部机制性的几个 stage，不会让专家看到"「是，回退重做」"这种没意义的选项）、`_rollback_to_turn`（按轮次在 `_turn_state_log` 里的位置找到截止点，把这个位置及之后所有轮次产生的节点/边一次性摘掉，状态和对话记录都截断回去，取出原来问的那个问题重新问一遍）
+- `post_turn` 里两处特殊接入：guide_service 返回 `awaiting_turn_selection_setup` 时，router 把候选列表填进 `chips` 里、状态推进到 `awaiting_turn_selection`；下一轮专家选中某个选项时，`awaiting_turn_selection` 这个 stage 完全由 router 自己处理，压根不经过 `guide_service.handle_turn`（这一轮不需要理解自然语言，只是把选中的候选映射回具体轮次执行回退）
+
+**已验证**：真实 HTTP 端到端跑通完整链路（用一个能识别"我说错了"关键词、模拟"这轮是不是更正"判断的自建 stub 场景）——① 在 `branch_condition_b` 说"我说错了"被正确识别成更正，问出确认问题，这一轮本身不建任何节点；② 点"是，回退重做"后，候选列表正确列出最近5轮，每一项描述都对：并行/复合轮次合并成一项、`decision`/`parallel_split` 这类结构节点不出现在描述文字里、没建过节点的轮次正确回退成显示专家原话；③ 选中一个候选后，该轮次及之后所有节点/边被正确移除（含悬空的"开始"节点边界情形），FSM 状态正确回退，之前问过的原始问题被重新问出来，专家能正常继续把内容说一遍，图从回退点起正确重新生长；④ 点"不是，这是新的一步"能正确恢复原状态、重新处理原文字，不会死循环重复问"是不是更正"；⑤ 构造了一个包含"不对"但明显不是更正的句子（"这个判断标准不对称，需要两边都测"），确认没有被误判成更正，正常建节点、不弹确认问题；⑥ 常规回归（未配置 LLM）行为不变，且确认 `source_turn_ids` 现在真的被赋值了（不再是 `[]`）。
+
+**后续简化（用户提出的产品体验优化，不是新增能力）**："检测到更正 → 问'要回退重做吗'（是/否） → 再问'回退到哪一步'（列表）"这两问能不能合并成一问？想清楚之后答案是可以：候选列表本身完全可以再加一项"不是，这是新的一步"，专家一次点选就够了，没必要先问一次是非题。改法：
+- `guide_service.py` 删掉 `correction_confirm` 这个中间 stage，`_start_correction_confirm` 改名 `_start_correction_pick`，检测到更正之后直接转到 `awaiting_turn_selection_setup`（原来"是"分支要走的下一步），不再有单独的确认步骤
+- `handle_turn()` 新增 `skip_correction_check` 参数（原来这个参数只存在于内层 `_dispatch_turn`，因为"不是"分支的重新处理逻辑挪到了 router 里，router 需要能直接调用 `handle_turn` 时带上这个参数）
+- `routers/expert_workflows.py`：候选列表里追加一项固定选项"不是，这是新的一步"（映射到 `None` 而不是某个 `turn_id`）；专家选中它时，router 自己完成"恢复原状态、用 `skip_correction_check=True` 重新处理原文字"这件事（原来这部分逻辑在 `guide_service.py` 的 `correction_confirm` stage 里，现在挪过来了，因为决定选哪个选项这件事本身现在是由 router 管理候选列表决定的，逻辑放在一起更清楚）
+
+**已验证（合并后重新跑了一遍端到端）**：单步问出"要回退到哪一步重新做？"，chips 里候选轮次后面跟着"不是，这是新的一步"一项；选中某个候选轮次，回退和重新提问跟之前完全一样；选中"不是，这是新的一步"，正确恢复原状态、重新处理原文字、不死循环；选了一个不在列表里的文本，正确要求重新选。
+
+**(d) 还没做**：延迟/`temperature` 生效的量化验收——这个需要接真实模型才能测出有意义的数字，自建 stub 服务器本地环回延迟接近 0，测不出真实场景下的 P95。
+
+**(b) 还差**：验收2 要求的"至少3个 regex 处理不了但真模型能处理"的真实语义变体测试——这个要接到真实模型才能测，自建 stub 只能测"插拔链路对不对"，测不出真实语言理解能力。
+
+至此，§15.1-①(a)(b)(c) 三个子项的插拔链路和降级逻辑全部经过真实 HTTP 端到端验证；(b)(d) 各剩一项必须接真实模型才能验的测试，等你接入真实 endpoint 后一起补上。下一步按排定顺序推进 §15.2-①②（实验解读）。
+
+### §15.2-①② 实验结果解读 + 多实验对比解读（`explain.py`，C_flagship，合并做）
+
+- 验收 1：复用 (a) 的 LLM 客户端，输入是 `quality.py`/`experiments.py` 算出的真实指标（不是编的）
+- 验收 2（防幻觉）：输出文本里提到的每一个具体数字（百分比、次数、指标名）都能在输入的 `dim_result`/`metrics` 里追溯到对应值——写一个简单校验器或者至少定一个人工抽查流程，防止模型编数字
+- 验收 3：PRD 14.5.2 强制要求的"以上解读由 AI 自动生成"免责声明必须保留，换真模型后不能漏
+- 验收 4：真实 API 调用失败时明确提示"解读生成失败"，不能悄悄退回模板文字又不说明
+
+**实现时对验收4的调整（有意识的决定，不是偷懒）**：实际做的是跟 `guide_service` 一致的"静默退回模板"，不是弹出"解读生成失败"提示——想清楚之后发现这个模板本来就不是"降级到一个更差的体验"，它本身就是诚实的、全部数字都可追溯的、能正常读的解读，跟真模型版本相比只是"文笔生硬一点"，不是"坏掉了"。给一个正常工作的东西报错反而是误导，所以延续 `guide_service` 已经验证过的"失败就换一条能用的路，不打扰用户"这条原则，没有另立新规则。
+
+**实现**：`explain.py` 新增共享的 `_llm_narrate(slot, system_prompt, user_payload, source_stats)`，`_no_fabricated_numbers()` 防幻觉校验器（把输入统计数据里所有出现过的数字展平成一个集合——含浮点数四舍五入到0-3位小数的常见写法，因为模型把 0.8234 说成"0.82"不算编造——再检查模型输出里的每个数字是否都在这个集合里，不在就整段拒绝，退回模板）。`explain_dimension`/`explain_experiment`/`explain_comparison` 三个对外接口不变，内部都是"先试 LLM（若失败/防幻觉不通过则退回原模板，原模板逻辑原样保留、改名成 `_template_explain_*`）"。`explain_comparison` 额外把"实验对比之间的差值"预先算好（`precomputed_deltas`）一起喂给模型和防幻觉校验器——差值是简单减法，不该让模型自己算，也不该因为它是"推导出来的数"就被误判成编造。
+
+**已验证**：直接调用 `explain.py` 的三个对外函数跑了四种场景——① 未配置 LLM，行为跟换模型前一致；② LLM 返回干净的解读（只引用真实数字），正确被采用，且 `explain_experiment`/`explain_comparison` 走 LLM 路径时免责声明正确追加；③ LLM 返回的文字里编了一个输入里根本没有的数字（`42.195`），正确被防幻觉校验器拒绝、退回模板；④ LLM 调用失败（5xx），正确退回模板。
+
+### §15.2-③ Dashboard 评分项解释（`explain.py`，C_standard）—— 已实现（跟 §15.2-①② 同一次改动一起做的，同一个 `explain_dimension` 函数）
+
+- 验收：同上（数字可追溯、免责声明、失败降级）—— 已验证，见上一节
+- 额外验收：样本量 <20 条时的"暂不生成分数依据"逻辑必须保留，不能因为换了真模型就被覆盖掉——**已验证**：这条分支在 `explain_dimension` 里排在调用 LLM 之前就直接返回，样本不足时压根不会触发 LLM 调用，逻辑没被动过
+
+### §15.2-⑤ 导出匿名化人名脱敏（`anonymize.py`，L 级别）—— 已实现
+
+- 验收 1（这项最关键——隐私相关，不能只求"能跑"）：构造一批带各种人名说法的测试文本（常见姓氏、生僻姓氏、"职务+姓名"组合、纯职务无姓名、容易误伤的普通词如"张三丰机床"），人工标注"应该被脱敏的片段"作为标准答案，跑一遍算召回率和误伤率，跟用户对齐一个可接受阈值后才算过关
+- 验收 2：原有规则兜底（姓氏词典+正则）保留，作为 LLM 调用失败时的降级路径，不删除
+
+**实现**：
+- `redact_names(text) -> (redacted_text, count, used_llm)`：`anonymize_name` slot 启用且配置好时先试真模型（`_llm_redact_names`），失败（未配置/调用出错/输出格式不对/没通过下面的安全检查）退回规则兜底 `_rule_based_redact_names`（原来的姓氏词典+正则实现，原样保留）。返回值新增 `used_llm`，让调用方能诚实报告"这次到底是不是真模型做的"，而不是只看配置是否打开——配置打开但这次调用失败退回规则兜底，也要如实说，不能因为"设置里配了"就谎报成 LLM 结果。
+- **安全检查（防止模型"顺手"改写内容）**：人名脱敏这个任务，模型该做的事只有"删掉人名 span、换成'某人'"，不该做任何总结/改写/新增内容。`_is_subsequence()` 检查——把模型输出里所有"某人"去掉之后剩下的文字，必须是原文的一个子序列（字符集合、相对顺序都不能变，只能是"删除"，不能是"改写"）。不满足就整段拒绝，退回规则兜底，跟 `explain.py` 的防幻觉校验器是同一个思路，换了个检查方式（一个是"数字可追溯"，一个是"文字只能删不能改"）。
+- `apply_anonymization` 的说明文字改成按实际发生的情况动态生成——"全用了真模型"/"部分用了真模型部分因失败退回规则"/"全部规则兜底"三种措辞分开报，不再固定写死"规则兜底"（换了真模型之后这句话本来就该变）。
+- 新增 `scripts/measure_anonymize_recall.py`：**验收1要求的真实测试工具，写成脚本留在仓库里**，不只是这次临时跑一下——12条标注好的测试用例，覆盖常见姓氏+职务（"王工"）、生僻姓氏（"欧阳工"）、"职务+姓名"组合（"李班长"/"张师傅"）、纯职务无姓名（"班组长"）、经典误伤陷阱（"张三丰机床"——姓名样式的词嵌在机器/产品名里）、无职务后缀的纯姓名（"陈伟"——这是规则版正则的已知盲区，因为正则要求姓氏后面跟1-2个字的"名"再跟称呼后缀，"王工"这种姓氏直接接称呼、中间没有"名"的写法，正则设计上就漏掉）。跑完输出召回率（该脱敏的有多少真被脱敏了）和"保护字段完整率"（不该动的有多少被误伤了），用户接入真模型后重跑这个脚本就是真实验收数据。
+
+**已验证（两组数据都是真实跑出来的，不是编的）**：
+- **不配置 LLM（纯规则兜底）**：召回率只有 **8.3%**（12个应该脱敏的人名片段，只抓到1个），保护字段完整率 100%（没有误伤）。低召回率完全在预期内、而且比之前设想的更差——用这个脚本才实际测出规则版正则连"王工"这种最常见的"姓氏直接接称呼"写法都抓不住（正则要求姓氏和称呼中间必须有1-2个字的"名"），这恰恰是这一项工作真正要解决的问题，用真实测试量化出来了，不是猜的。
+- **配置 LLM（用一个模拟"还算靠谱"的自建 stub 场景）**：召回率 100%、保护字段完整率 100%——证明真模型接入后插拔链路完全正确（这不是真实模型的召回率数字，只是证明"配置生效、安全检查不误杀正常输出"）。
+- **安全检查生效**：构造一个"胡乱改写而不是删除人名"的 stub 场景（把整句话换成"某位同事处理了这件事情，具体经过不详"），确认被 `_is_subsequence` 正确拒绝，退回规则兜底，没有把编造的内容当成脱敏结果放出去。
+- **调用失败降级**：LLM 返回 5xx 时正确退回规则兜底。
+- **`apply_anonymization` 说明文字**：真模型全部生效时正确显示"使用真实模型识别"，不再是写死的"规则兜底"。
+
+**注意**：召回率 100%/8.3% 这两个数字都是跟自建 stub 或规则本身测出来的，**不是真实模型的验收数字**——用户接入真实 endpoint 后需要重跑 `scripts/measure_anonymize_recall.py`，看真实模型能打到多少，再跟用户对齐一个可接受阈值（验收1明确要求"跟用户对齐阈值"，这一步必须有真模型才能做，不能我自己定）。
+
+### §15.2-④ Error Analysis 案例聚类归纳（`error_clustering`，C_standard，从零建）—— 已实现
+
+- 验收 1：输入是规则初筛后的失败案例摘要列表，输出几种典型失败模式 + 每种模式关联哪些具体 case
+- 验收 2：人工抽查归纳合理性（不出现把明显不同类的错误归成一类这种低级错误）——这项比较主观，验收标准是"通过人工抽查"，不强求量化指标
+
+**实现**：这项之前完全没有代码（连 Mock 都没有），是纯新建功能，不是"换掉一个模板"。
+- `explain.py` 新增 `cluster_error_cases(error_cases) -> list[dict]`：读 `error_clustering` slot，把 `experiments.py::run_consensus_dfg` 已经按结构类型规则分好组的失败案例（`{workflow_name, node_f1, edge_f1, structural_match, group}`）整体喂给模型，要求归纳成 1-4 种典型失败模式（PRD 建议 2-4 种，案例数很少时允许少于2种），每种模式给标签+一句话描述+关联的案例名称列表。空输入、未配置、调用失败、输出格式不对，一律返回空列表——调用方把空列表当成"这次没有聚类结果"，不是报错状态，跟这个仓库里其余 LLM 环节"失败就安静地退回一个诚实的替代状态"是同一个规矩。
+- **校验（这里防的不是数字幻觉，是编案例名字）**：这个任务的产出不是数字叙述，是"哪些案例属于哪一类"，所以幻觉的表现形式不一样——校验器检查每个 `workflow_names` 条目必须是输入案例里真实存在的名字，编一个不存在的工作流名字会让整个响应被拒绝退回空列表，不是"数字对不对"那种检查，是"引用的东西存不存在"那种检查。
+- `models.py`：`ExperimentDetail` 新增 `error_clusters: list[dict]` 字段；`routers/experiments.py` 三处收口（创建实验的初始占位、`run_consensus_dfg` 跑完之后、"重新生成解读"接口）都接上，创建时先给空列表占位，跑完之后调用 `cluster_error_cases`。
+- 前端 `ExperimentCenterPage.tsx`：Error Analysis 表格下面加一个"典型失败模式（AI 归纳）"小节，只在 `error_clusters` 非空时显示，每条展示标签/描述/涉及的工作流，底部带免责声明——这是本轮唯一动了前端的一项 LLM 接入（前面几项都是纯后端替换，接口不变），因为这项本来就没有旧的展示位置可以复用，不加前端这个功能等于做了但看不见。`tsc -b` 通过。
+
+**已验证**：直接调用 `cluster_error_cases()` 跑了5种场景——① 未配置 LLM，返回空列表；② 空输入，返回空列表；③ 自建 stub 返回结构合理的归纳（2组案例、标签/描述/关联案例名称都对），正确被采用；④ 构造一个引用了不存在的工作流名字（`wf-does-not-exist`）的 stub 响应，正确被校验器拒绝、返回空列表，没有把编造的案例关联放出去；⑤ LLM 调用失败（5xx），返回空列表。前端 TypeScript 编译通过。
+
+### §9 Phase C — Gold Annotation 标注体系 + 多专家复核/一致性系数
+
+- 这项不是"换模型"能解决的，是产品设计缺口：谁来定义标准答案、多专家标注 UI 怎么呈现分歧、一致性系数（Cohen's κ）怎么算怎么用
+- 验收：这一项"完成"的标志是**先有一份定稿的产品设计文档**，不是直接写代码——排在纯 LLM 替换工作（§15.1/§15.2）之后
+
+**设计已定稿（用户确认四个关键决策）**：PRD 里"Gold"其实是两层不同粒度的概念，拆成两个子项分别交付：
+
+**C-1：数据集版本级 Gold 标记（PRD §16.1，小，已实现）**
+- `dataset_versions` 的 JSON 数据里新增 `is_gold: bool`（不新增 SQL 列，跟大多数版本级标记一样只存在 `data` 里），`db.set_dataset_version_gold()` 读写
+- 新增 `POST /api/datasets/versions/{id}/mark-gold?is_gold=true|false`，管理员操作，写审计日志（`dataset_mark_gold`/`dataset_unmark_gold`）——沿用现有"后端不做权限强制、前端隐藏非管理员入口、审计记录真实操作人"的诚实惯例（跟归档功能同一个模式，assumption 1/5/7 的老问题，不重新讨论）
+- 前端 `DashboardPage.tsx`：当前版本旁边显示"★ Gold 版本"徽章，管理员角色能看到"标记为 Gold 版本"/"取消 Gold 标记"按钮
+- **已验证**：真实调用 mark-gold/unmark-gold，确认 `is_gold` 正确持久化、列表接口正确返回、审计日志正确记录操作人和动作；`tsc -b` 通过
+
+**C-2：记录级双人独立标注 + 仲裁 + Cohen's κ（大，已实现）**——用户确认的四个决策：① `expert_collected` 和 `public_extracted` 都需要 Gold；② `expert_collected` 要独立第二人复核，不是自我确认；③ 第一版先做整图级别判定，升级现有 Prior 标注链为双人独立，不做字段级（Boundary/Role/Edge/Condition 分别标注）；④ 分歧时第三人仲裁。
+
+**现实约束（提前说明，不是实现时才发现）**：产品目前没有真实账号系统（assumption 1），"双人独立"没法在系统层面验证"这两次真的是两个不同的人"。解决办法：标注时新增必填的"标注人姓名"文本框（诚实的轻量身份代理，跟现有 `actor_role` 同一个档次），第二次独立标注/仲裁时校验姓名跟之前的不同，挡不住存心作弊但挡得住无意识重复点击。
+
+**数据模型**：`models.py` 新增 `GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "gold"]`、`AnnotationRole = Literal["independent", "arbitration"]`；`PriorAnnotation` 新增必填 `annotator_name` 和 `role_in_process`（默认 `independent`）；`PriorRecordDetail`/`PriorRecordSummary` 新增 `gold_status`；`AnnotationSummary` 新增 `gold_counts`（各状态计数）和 `agreement_kappa`。
+
+**Gold 状态判定**（`app/gold_annotation.py::compute_gold_status`，`annotations.py` 和 `datasets.py` 共用同一份逻辑，不允许两处算出不一样的结果）：只看第一、第二次独立标注（第三次独立标注不是这个设计的一部分——分歧永远走仲裁，不是"投票"）——0/1 次独立标注 → `not_gold`/`pending_second_review`；两次独立标注一致 → `accepted` 记为 `gold`，其余记为 `not_gold`；两次独立标注不一致 → `disputed_pending_arbitration`；一旦出现仲裁记录（`role_in_process="arbitration"`），仲裁结果就是终态，覆盖之前的状态。
+
+**独立性/仲裁校验**（`routers/annotations.py::create_annotation`）：已完成仲裁的记录拒绝任何新标注（流程已终结）；已有两次一致独立标注的记录拒绝新标注（Gold 已定，无需仲裁）；已有两次分歧独立标注时，新提交自动记为仲裁，但仲裁人姓名不能跟前两次独立标注人中任意一个相同；只有一次独立标注时，第二次标注人姓名必须跟第一次不同。
+
+**Cohen's κ**（`app/gold_annotation.py::cohens_kappa`）：标准两评分者公式 `(po - pe) / (1 - pe)`，输入是所有已有两次独立标注的记录的 `(第一次判定, 第二次判定)` 对；`pe >= 1.0` 的退化情况（比如样本量为 1 且两次判定完全不同导致边际概率为 0）显式处理，避免除零。
+
+**实时计算的 `annotation_readiness` 维度**（唯一一个不在发布时冻结快照的 Dataset Readiness Score 维度，因为标注活动发生在版本发布之后）：`quality.py::compute_annotation_readiness`，公式是 50% Gold 覆盖率 + 30% 双人标注覆盖率 + 20% Cohen's κ（负值按 0 计，因为 κ 为负不代表"更差"只代表"比随机一致还差"，跟这个维度想衡量的"覆盖是否足够"不是一回事）；`routers/datasets.py::_live_annotation_readiness` 在 `_to_summary()` 里实时覆盖这一维度、并在全部 10 个维度都有分数时重新算总分和评级（`quality.band()`，原来的私有 `_band` 改成公开函数，因为 `datasets.py` 需要跨模块调用它）；仲裁比例只作为诊断信息展示，不计入打分（需要仲裁本身不代表质量差，只代表两个独立判断出现了分歧）。
+
+**代码复用**：`app/dataset_records.py::records_for_export()` 从 `datasets.py` 的私有函数抽出来，供 `annotations.py` 和 `datasets.py` 共用同一套"这个版本里到底有哪些记录"的逻辑（原来只有 `datasets.py` 用）。
+
+**前端**：`PriorAnnotationPanel.tsx` 新增必填的"标注人姓名"输入框；**关键行为变化**：不再像原来单链式 Prior 标注那样预填上一条标注的判定/备注/节点判定——Gold 需要真正独立的判断，预填等于让第二个标注人被第一个标注人的结论"锚定"；面板头部展示 Gold 状态徽章，以及根据当前状态动态生成的提示文案（"已有独立标注：X——这次需要换一个不同的人"/"已完成仲裁，标注流程已结束（只读）"/"尚未标注过，这次会作为第一次独立标注"）；已完成仲裁的记录整个表单只读。`DashboardPage.tsx`：Prior 标注区块的展示条件从"仅 `public_extracted`"放宽为"任意来源类型只要有已标注数据"（因为 `expert_collected` 现在也走同一套 Gold 流程），标题按来源类型区分文案，每条记录展示 `gold_status` 徽章，汇总行新增"Gold N 条 · 一致性 κ=value"。
+
+**已验证**：
+1. 真实 HTTP 联调：构造 3 条记录场景——① 一次独立标注（`pending_second_review`）；② 两次独立标注一致采纳（预期 `gold`）；③ 两次独立标注分歧（`disputed_pending_arbitration`），随后用第三个姓名提交仲裁，正确转为终态；重复提交、同名重复标注、对已仲裁记录再标注，均被正确拒绝并返回对应错误信息。
+2. 后端 `tsc -b`/前端 `tsc -b` 均通过。
+3. 真实浏览器可视化验证（headless Chromium + CDP，非单元测试层面的"看起来应该对"）：起了独立的后端（端口 8000）+ Vite 开发服务器，用 `db.py` 直接构造了一个 3 条记录的 `public_extracted` 版本（`r1` 一次独立标注、`r2` 两次分歧独立标注、`r3` 未标注），截图确认 Dashboard 正确显示三种 Gold 状态徽章（待第二人复核/分歧待仲裁/非 Gold）和汇总行（标注覆盖率 2/3・Gold 0 条・一致性 κ=0），打开标注面板确认独立性提示文案、必填姓名框、提交按钮禁用态、标注历史都渲染正确。过程中发现两个测试环境问题（均非产品 bug，已排查清楚并修正测试方式）：一是最初把 Vite 起在 5180 端口导致后端 CORS 白名单（只允许 5173）拒绝请求，改用 5173 后恢复正常；二是 `κ=0` 的结果起初看着反直觉（两次标注完全相反，直觉上 κ 应该是负数），核对公式后确认：样本量为 1 且两次判定的边际分布互补（一个全说"采纳"、一个全说"丢弃"）时，按公式算出的机会一致概率 `pe` 恰好为 0，代入公式得到 `κ=0` 是数学上正确的结果，只是小样本下这个指标本身不够有信息量，不是实现错误。
+4. 测试完成后清理：从 sqlite 里删除了 `visual-test-v1` 版本及其全部标注记录，把临时调低的 `min_sample_size` 改回 20，关闭了测试用的后端/前端/headless Chromium 进程。
+
+### §14 实验中心其余方法
+
+**`pm4py_inductive`/`pm4py_heuristics`（集成开源库，跟 LLM 无关，已实现）**：验收是真实跑通、产出真实指标，不是空跑占位——这两个方法现在真的调用 pm4py 库的 Inductive Miner / Heuristics Miner 做流程挖掘，不是套壳 `consensus_dfg` 换个名字。
+
+**设计**（`experiments.py::run_pm4py_method`）：
+- **DAG → 事件日志**：pm4py 挖掘算法要的输入是"案例+活动序列"的事件日志，不是图。新增 `_graph_to_traces(graph)`：从起点节点出发遍历图，每个节点的每条出边都单独展开成一条延续路径——判断节点的每个分支天然变成不同的 trace，并行分支也都会被走到（只是不模拟真正的并发交织，因为挖掘算法看的是"谁跟在谁后面"这个直接前驱关系，交织顺序不影响这个关系是否存在）。设了 `max_traces=6` 的上限，防止分支嵌套很深的图把事件日志炸开——这跟 `_main_path_types` 只取主路径是同一类"诚实地不完整"取舍，只是覆盖面更宽。`_build_event_log()` 把这些路径铺成 pm4py 要的 `case:concept:name`/`concept:name`/`time:timestamp` 三列（时间戳是合成的相对顺序，这个产品本来就不采集真实时长）。
+- **挖掘 + 评估**：训练集事件日志喂给 `pm4py.discover_petri_net_inductive`/`discover_petri_net_heuristics` 得到一个真实的 Petri 网模型；测试集事件日志喂给 pm4py 自带的 `fitness_token_based_replay`/`precision_token_based_replay`（标准 token-based replay 一致性检验，不是自造指标）算出模型对留出测试集的拟合度和精确度。
+- **指标映射**（复用现有 `node_f1`/`edge_f1`/`graph_structural_f1`/`structural_match_rate` 四个字段，让 Experiment Center 前端和 `compare` 接口不用为新方法改字段）：`node_f1` ← 平均 trace fitness（模型能重现测试集里发生过的事情吗）；`graph_structural_f1` ← precision（模型会不会放行测试集里从没发生过的路径）；`edge_f1` ← fitness 和 precision 的调和平均（标准 F-measure 算法，不是这个项目自己发明的指标）；`structural_match_rate` 不变，仍然是 `_majority_profile` 那套"图本身有没有分支/并行/返工"结构特征比对，因为这个检查针对的是原始图，跟挖掘出的模型无关。
+- **展示用的代表性结构**：`consensus_dfg` 是从训练集里挑一条"最像大家"的真实主路径当展示图；pm4py 方法则是对挖掘出的真实模型做一次 `play_out`（模型的随机游走展示），取其中最短的一条结果序列展示——这样展示的结构是真的从挖掘出的模型里生成的，不是重用 `consensus_dfg` 那套跟 pm4py 无关的选择逻辑。
+- **代码复用**：把 `run_consensus_dfg` 里原本内嵌的 `majority_profile` 构建、`_avg`、`structural_match` 计算抽成模块级的 `_majority_profile`/`_avg`/`_structural_match`/`_mismatch_group`，`run_consensus_dfg` 和 `run_pm4py_method` 共用，不是各写一份。
+- **依赖**：新增 `pm4py>=2.7`（`requirements.txt`），装上后带了 numpy/pandas/scipy/matplotlib 等一整条依赖链——只用了它的挖掘算法和 token-based replay 评估函数，没用可视化部分。
+- **接线**：`routers/experiments.py::_run_experiment` 按 `method` 分派到 `run_consensus_dfg` 或 `run_pm4py_method`；`IMPLEMENTED_METHODS` 加入这两项；前端 `types.ts::IMPLEMENTED_METHODS` 同步更新，创建实验表单里这两个方法不再显示"本轮未接入真实执行引擎"的警告。
+
+**已验证**：真实 HTTP 联调，不是单测——构造 6 条真实工作流记录（3 条纯线性、3 条带判断分支），发布成一个 `expert_collected` 数据集版本，通过真实 `POST /api/experiments` 分别跑 `pm4py_inductive`/`pm4py_heuristics`/`consensus_dfg`/`llm_extractor` 四个方法：前三个全部 `status: completed` 并产出合理的真实指标（两个 pm4py 方法算出 node_f1=1.0、graph_structural_f1=0.789，consensus_dfg 算出 0.929/0.667——pm4py 方法因为看到了完整分支不只是主路径，指标确实更高，符合预期方向）；`llm_extractor` 仍然诚实失败（`方法 llm_extractor 本轮未接入真实执行引擎`），没有被误伤。三个已完成实验一起跑 `/api/experiments/compare`，metric_table 正确对比出最优值。另外验证了训练集为空图（没有可用起点到终点路径）时正确抛出 `RuntimeError` 而不是崩溃或返回假指标。前端 `tsc -b` 通过。测试完成后清理了 sqlite 里的测试工作流、数据集版本和实验记录，关闭了测试后端进程。
+
+**真正的"LLM 抽取器"实验方法（`llm_extractor`，仍未实现）**：这是"批量从原始文本/记录抽取 Graph"的独立流水线，跟 guide_service 的实时对话式抽取不是一回事（一个是事后批处理，一个是逐轮交互），需要单独设计输入输出协议，工作量大，本轮不展开，等排到再细化
+
+### §14.4 Dataset Slice
+
+- 验收：新增行业/场景分类字段后，Dashboard 能按这些字段真实切片显示（有数据可切，不是加了字段没地方用）——**已实现**
+
+**字段来源**：不是本轮新发明一套分类体系——`schema/workflow_graph_schema_v2.json` 里 `workflow_record` 定义本来就有一个 `manufacturing_context` 对象（`manufacturing_mode`/`industry`/`site_type`/`process_area`/`product_family`/`shift_context`），`manufacturing_mode` 还带着现成的枚举值（`mass_repetitive`/`high_automation`/`high_mix_low_volume`/`eto_mto`/`large_project`/`regulated_traceable`/`other`），`import_pipeline.py` 也早就在校验这个枚举——只是校验完之后没有任何代码真正读它。这次做的是把这条已经设计好、只是没接上的线接上，不是凭空猜一套字段。
+
+**设计**：
+- `models.py` 新增 `ManufacturingContext`（跟 schema 字段一一对应）和 `ManufacturingContextUpdateRequest`；`WorkflowRecord` 新增可选的 `manufacturing_context` 字段。
+- **`public_extracted`**：导入时已经是必填对象、已经被校验，`records_for_export()` 对这个来源本来就是把 `version["records"]` 原样返回，字段天然就在，不用额外接线。
+- **`expert_collected`**：这是个静态分类标签，不是逐轮对话收集的场景叙述，硬塞进 FSM 会话流程会显著增加范围，所以做成一个随时可编辑的普通字段——新增 `PUT /api/expert-workflows/{id}/manufacturing-context`，会话页顶部加两个轻量控件（制造模式下拉 + 行业文本框），改动即时保存，跟节点/对话轮次完全无关，确认前后都能改。`dataset_records.py::records_for_export()` 的 `expert_collected` 分支补上 `manufacturing_context` 键，让两种来源在读取侧长一样的形状。
+- **切片计算**（`dataset_records.py::slice_counts`）：按选定字段对 `records_for_export()` 的结果分组计数，缺失值归到诚实的"未填写"桶（不是把没分类的记录悄悄丢掉）。新增 `GET /api/datasets/versions/{id}/slice?field=...`，非法字段名返回 400。
+- **前端**：Dashboard 新增"行业/场景切片"Tab，五个字段（制造模式/行业/现场类型/工艺工序范围/产品族）做成切换按钮，下面是条形图+计数+百分比；会话页头部加分类控件，读写走 `useWorkflowSession` 新增的 `updateManufacturingContext`。
+
+**已验证**：真实 HTTP 联调——① `expert_collected`：创建 4 条工作流，用真实 `PUT .../manufacturing-context` 请求给 3 条设置制造模式/行业（第 4 条故意留空），发布成一个版本，`GET .../slice?field=manufacturing_mode` 和 `field=industry` 都返回正确的分组计数（含"未填写"桶），非法字段名返回 400。② `public_extracted`：构造一个带 `manufacturing_context` 的导入 JSON，真实走 `/import/precheck` → `/import/confirm`（顺带验证了近重复检测确实会拦住结构完全相同的记录，属于产品既有行为，不是本次改动引入的问题，调整测试数据后放行），确认导入后的版本也能正确切片。③ headless Chromium 截图验证真实 UI：Dashboard"行业/场景切片"Tab 的条形图、字段切换按钮、百分比显示都正确渲染；会话页头部的制造模式下拉和行业输入框正确回显了通过 API 设置的值。前端 `tsc -b` 通过。测试完成后清理了 sqlite 里的全部测试工作流和数据集版本，关闭了测试用的后端/前端/headless Chromium 进程。
+
+### 设置页测试连接改为真实调用（部署前发现的遗留问题，已修复）
+
+**问题**：`routers/settings.py::test_connection` 之前是写死的——只要填了 endpoint/model_name 就无论真假一律返回 `ok=False` + "当前环境未配置可达的推理服务"，注释写明这是因为**这次开发会话所在的沙箱**够不到真实推理服务，返回假的 `ok=True` 会捏造一个产品明确禁止捏造的结果。但用户要把这个产品部署到真的能连上 L/C 推理服务的服务器上，这条"沙箱限制"就不再成立了——继续硬返回失败，就从"诚实地承认做不到"变成了"明明能做却不做"，是另一种不诚实。
+
+**修复**：`test_connection` 现在真的调用 `llm_client.chat_completion`（跟 `guide_service`/`explain`/`anonymize_name`/`error_clustering` 用的是同一个 OpenAI 兼容客户端），发一条极短的"只回复 ok"测试消息（10 秒超时，不是走完整生成流程），把 `llm_client.LLMError` 的四种 `kind`（`not_configured`/`timeout`/`http_error`/`bad_response`）翻译成对应的中文诊断提示（分别对应"没填地址"/"连不上，检查网络防火墙"/"连得上但返回错误码，检查 key/model_name"/"连得上但响应格式不对，检查是不是真的实现了 OpenAI 兼容接口"），成功时把模型的真实回复片段带回去，不再是任何写死的固定文案。
+
+**顺带检查**：审计了后端里所有调用 `llm_client`/`resolve_slot_for_call` 的地方（`guide_service.py` 三处、`explain.py` 两处、`anonymize.py` 一处），确认每一处都已经是"配置齐全（enabled + endpoint + model_name）才真的发起调用，任何失败都走原有的规则兜底路径"，没有第二处类似 `test_connection` 这种"不管填没填、能不能连都写死返回失败"的沙箱专属占位逻辑——只有 `test_connection` 是本轮修的这一处。`app/settings.py` 模块顶部关于"assumption 6"的说明也一并更新，不再说"保存配置不会真的生效"（那是本轮之前几次会话陆续把各环节接上真实模型之后就已经过时、没跟着更新的旧描述）。
+
+**已验证**：真实 HTTP 联调，自建 OpenAI 兼容 stub 服务器模拟 5 种场景——① 完全没填 endpoint/model_name → `not_configured` 提示；② 填了一个真实拒绝连接的地址（`127.0.0.1:1`）→ `timeout` 提示，带上真实的 `Connection refused` 系统错误；③ stub 返回 401 → `http_error` 提示；④ stub 返回不是合法 JSON 的内容 → `bad_response` 提示；⑤ stub 正常返回 `{"choices":[{"message":{"content":"ok"}}]}` → `ok=True`，消息里带着模型的真实回复 `'ok'`。五种结果都是真实调用的产物，不是分支硬编码出来的。测试完成后把设置里的测试配置清空，关闭了 stub 服务器和测试后端进程。
+
+### 不用动的
+
+- §15.2-⑥ 角色归一化：PRD 原文虽然建议 L+规则兜底，但规则+同义词典已经够用，不强制换模型
+- §15.3 明确列出的四项（评分体系/Graph Validator/近重复检测/完成度）：确定性统计，不需要 LLM
+
+### 往后放（用户明确表示不是本轮重点）
+
+- §15.1-②③ 语音识别 ASR 真实替换成 Qwen Realtime + 移动端语音口述整理：ASR 现在有浏览器原生 SpeechRecognition API 作为真实可用替代（不是 Mock），非阻塞
+- §9 Phase M3 移动端"实时语音对话"连续追问模式：PRD 原文标注"可选增强"，没人明确要求过
+
+### 部署方式的现实约束（这次讨论确认）
+
+这个 Claude Code 会话运行在云端隔离容器里，够不到用户本地/内网的模型 endpoint，除非用户临时开一个公网可达的隧道。约定的开发方式：**先用自建的 OpenAI 兼容 stub 服务器（(a) 的验收 2）把客户端和 guide_service 的调用逻辑、错误处理、回退机制在沙箱里验证到位，用户在自己环境里填真实 endpoint/model/key 做最终验收**，需要一次真实联调再另外约时间。
