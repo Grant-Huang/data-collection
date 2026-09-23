@@ -18,7 +18,7 @@
 **实现前仍需要记录的假设**（PRD 没有强制要求、但代码必须选一个具体值才能跑起来的地方，选择依据写在这里，不算擅自变更需求）：
 1. **认证**：PRD 定义了角色（专家/研究员/管理员，16.2）但没有设计登录页——MVP 阶段用一个最简单的"当前身份"选择器（下拉切换角色，不做真实账号密码），把角色权限的前端隐藏/后端校验逻辑跑通，真实登录系统留到正式上线前再补
 2. **存储**：PRD 没有指定数据库——MVP 用 SQLite（单文件、零运维，跟"封闭域、自托管"的产品定位一致），表结构直接对应 Schema v2 的 JSON 结构（整条记录存 JSON 字段，另建索引字段供列表查询，第 33 节"关系表 vs JSONB"思路的 SQLite 版）
-3. **7B 引导模型（L 类）**：这个环境没有本地 7B 推理服务可接，也没有外部 API Key——先实现一个**规则驱动的 Mock Guide Service**，接口签名和真实 LLM 版完全一致（第 14 节每轮 LLM 输入/输出协议），先把"专家打字 → 结构化抽取 → DAG 更新"这条主链路跑通、可演示、可测试；真正接 7B 模型时只需要替换这一个模块的实现，不影响其余代码，替换点在第 17.2 节设置页的"专家采集会话引导"这一项
+3. **7B 引导模型（L 类）**：这个环境没有本地 7B 推理服务可接，也没有外部 API Key——先实现一个**规则驱动的 Mock Guide Service**，接口签名和真实 LLM 版完全一致（第 14 节每轮 LLM 输入/输出协议），先把"专家打字 → 结构化抽取 → DAG 更新"这条主链路跑通、可演示、可测试；真正接 7B 模型时只需要替换这一个模块的实现，不影响其余代码，替换点在第 17.2 节设置页的"专家采集会话引导"这一项。**更新（本节第 14 部分）**：这条假设已经不再是"待办"——`guide_service`/`explain`/`anonymize_name`/`error_clustering` 都已经真接了 `llm_client.py`（真实 OpenAI 兼容 HTTP 客户端），在真实环境里填了可达的 endpoint 后就会真的调用，不再是 Mock；只有 `mobile_speech_polish` 还完全没有接线（见第 4 条，改用浏览器原生 API 替代了），`role_normalize` 是主动决定不接（第 14 部分"不用动的"）。设置页"测试连接"也已经改成真的发一次请求，不再是无论怎么填都返回失败的占位实现——见下方"设置页测试连接改为真实调用"。
 4. **移动端语音识别（V 类，第 6.2 节）**：PRD 要求复用 `web-demo` 已验证的 Qwen Realtime 转写链路（`QWEN_API_KEY` + `input_audio_transcription.completed` 事件），但这个沙箱环境既没有 `QWEN_API_KEY`，也没有可达的 dashscope WebSocket 出口——先用浏览器原生 `SpeechRecognition` API 作为**真实可用、无需密钥**的替代实现（不是模拟：识别结果是真实的，只是识别后端不同，且仅 Chrome/Edge 等部分浏览器支持），三按钮/波形 UI 与转写结果回填/直接发送的产品行为按 PRD 4.3.1 完整实现；组件对外接口（`onTranscript`）与真实链路接入后需要的形状一致，替换时只需要改 `VoiceCapsuleInput.tsx` 内部的 `startRecognition`/`stopRecognition`，不影响其余代码
 
 ## 2. 技术选型
@@ -453,6 +453,16 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 - **前端**：Dashboard 新增"行业/场景切片"Tab，五个字段（制造模式/行业/现场类型/工艺工序范围/产品族）做成切换按钮，下面是条形图+计数+百分比；会话页头部加分类控件，读写走 `useWorkflowSession` 新增的 `updateManufacturingContext`。
 
 **已验证**：真实 HTTP 联调——① `expert_collected`：创建 4 条工作流，用真实 `PUT .../manufacturing-context` 请求给 3 条设置制造模式/行业（第 4 条故意留空），发布成一个版本，`GET .../slice?field=manufacturing_mode` 和 `field=industry` 都返回正确的分组计数（含"未填写"桶），非法字段名返回 400。② `public_extracted`：构造一个带 `manufacturing_context` 的导入 JSON，真实走 `/import/precheck` → `/import/confirm`（顺带验证了近重复检测确实会拦住结构完全相同的记录，属于产品既有行为，不是本次改动引入的问题，调整测试数据后放行），确认导入后的版本也能正确切片。③ headless Chromium 截图验证真实 UI：Dashboard"行业/场景切片"Tab 的条形图、字段切换按钮、百分比显示都正确渲染；会话页头部的制造模式下拉和行业输入框正确回显了通过 API 设置的值。前端 `tsc -b` 通过。测试完成后清理了 sqlite 里的全部测试工作流和数据集版本，关闭了测试用的后端/前端/headless Chromium 进程。
+
+### 设置页测试连接改为真实调用（部署前发现的遗留问题，已修复）
+
+**问题**：`routers/settings.py::test_connection` 之前是写死的——只要填了 endpoint/model_name 就无论真假一律返回 `ok=False` + "当前环境未配置可达的推理服务"，注释写明这是因为**这次开发会话所在的沙箱**够不到真实推理服务，返回假的 `ok=True` 会捏造一个产品明确禁止捏造的结果。但用户要把这个产品部署到真的能连上 L/C 推理服务的服务器上，这条"沙箱限制"就不再成立了——继续硬返回失败，就从"诚实地承认做不到"变成了"明明能做却不做"，是另一种不诚实。
+
+**修复**：`test_connection` 现在真的调用 `llm_client.chat_completion`（跟 `guide_service`/`explain`/`anonymize_name`/`error_clustering` 用的是同一个 OpenAI 兼容客户端），发一条极短的"只回复 ok"测试消息（10 秒超时，不是走完整生成流程），把 `llm_client.LLMError` 的四种 `kind`（`not_configured`/`timeout`/`http_error`/`bad_response`）翻译成对应的中文诊断提示（分别对应"没填地址"/"连不上，检查网络防火墙"/"连得上但返回错误码，检查 key/model_name"/"连得上但响应格式不对，检查是不是真的实现了 OpenAI 兼容接口"），成功时把模型的真实回复片段带回去，不再是任何写死的固定文案。
+
+**顺带检查**：审计了后端里所有调用 `llm_client`/`resolve_slot_for_call` 的地方（`guide_service.py` 三处、`explain.py` 两处、`anonymize.py` 一处），确认每一处都已经是"配置齐全（enabled + endpoint + model_name）才真的发起调用，任何失败都走原有的规则兜底路径"，没有第二处类似 `test_connection` 这种"不管填没填、能不能连都写死返回失败"的沙箱专属占位逻辑——只有 `test_connection` 是本轮修的这一处。`app/settings.py` 模块顶部关于"assumption 6"的说明也一并更新，不再说"保存配置不会真的生效"（那是本轮之前几次会话陆续把各环节接上真实模型之后就已经过时、没跟着更新的旧描述）。
+
+**已验证**：真实 HTTP 联调，自建 OpenAI 兼容 stub 服务器模拟 5 种场景——① 完全没填 endpoint/model_name → `not_configured` 提示；② 填了一个真实拒绝连接的地址（`127.0.0.1:1`）→ `timeout` 提示，带上真实的 `Connection refused` 系统错误；③ stub 返回 401 → `http_error` 提示；④ stub 返回不是合法 JSON 的内容 → `bad_response` 提示；⑤ stub 正常返回 `{"choices":[{"message":{"content":"ok"}}]}` → `ok=True`，消息里带着模型的真实回复 `'ok'`。五种结果都是真实调用的产物，不是分支硬编码出来的。测试完成后把设置里的测试配置清空，关闭了 stub 服务器和测试后端进程。
 
 ### 不用动的
 

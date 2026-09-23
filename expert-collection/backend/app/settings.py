@@ -1,9 +1,12 @@
-"""System Settings -- PRD section 17. Real CRUD + persistence; per IMPLEMENTATION_PLAN.md
-assumption 6, saving an LLM endpoint here does not actually switch any Mock service's
-behavior yet (there's no reachable L/C inference service in this sandbox) -- the page itself
-is a real, working configuration surface, only the "takes effect" wiring for LLM calls is
-still pending a real model. The quality-parameter and run-parameter sections DO take real
-effect (see quality.py's use of get_effective_settings()).
+"""System Settings -- PRD section 17. Real CRUD + persistence, and (per IMPLEMENTATION_PLAN.md
+section 14) saving an LLM endpoint here DOES take effect for every slot that has been wired to
+a real model (guide_service, experiment_explain/compare_explain, dashboard_explain,
+error_clustering, anonymize_name -- see resolve_slot_for_call() and each slot's own module for
+its rule-based fallback on any failure). The remaining slots (mobile_speech_polish,
+role_normalize) still have no real-LLM call site regardless of what's configured here.
+IMPLEMENTATION_PLAN.md assumption 6 ("no reachable L/C inference service") described the
+development sandbox this was built in, not every environment the product runs in -- once
+pointed at a real reachable endpoint (including in production), it is actually called.
 
 Model config is level-first (IMPLEMENTATION_PLAN.md section 11): each of the three model
 levels (L / C_standard / C_flagship) is configured exactly once (endpoint, model name, API
