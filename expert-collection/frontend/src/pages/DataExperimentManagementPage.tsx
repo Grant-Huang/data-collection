@@ -24,7 +24,7 @@ const DATASET_SUB_TABS: { key: DatasetSubTab; label: string }[] = [
 
 const SOURCE_TYPE_TABS: { key: SourceType; label: string }[] = [
   { key: "expert_collected", label: "专家集" },
-  { key: "public_extracted", label: "公共集" },
+  { key: "public_extracted", label: "公有集" },
 ];
 
 const EXPORT_FORMATS: { key: string; label: string }[] = [

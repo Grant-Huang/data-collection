@@ -232,6 +232,7 @@ export interface DatasetReadiness {
 export interface DatasetVersionSummary {
   id: string;
   source_type: SourceType;
+  name: string;
   version_number: number;
   workflow_count: number;
   total_steps: number;
@@ -240,6 +241,15 @@ export interface DatasetVersionSummary {
   readiness: DatasetReadiness;
   archived: boolean;
   is_gold: boolean;
+}
+
+// Dashboard「查看全部」-- paginated + searchable, separate from the plain unpaginated
+// `DatasetVersionSummary[]` the existing `/versions` endpoint returns.
+export interface DatasetVersionListResponse {
+  items: DatasetVersionSummary[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 // --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
