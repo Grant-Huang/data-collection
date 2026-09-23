@@ -7,16 +7,19 @@ import { useState } from "react";
 import { useRole } from "../hooks/useRole";
 import { ROLE_LABELS } from "../api/types";
 import type { Role } from "../api/types";
-import { SessionPage } from "./SessionPage";
+import { DataEntryPage } from "./DataEntryPage";
 import { DashboardPage } from "./DashboardPage";
 import { ExperimentCenterPage } from "./ExperimentCenterPage";
 import { AdminPage } from "./AdminPage";
 import { SettingsPage } from "./SettingsPage";
 
-type View = "session" | "dashboard" | "experiments" | "admin" | "settings";
+type View = "data_entry" | "dashboard" | "experiments" | "admin" | "settings";
 
+// "数据录入与标注" 合并了原来的「专家采集」页和原来嵌在 Dashboard 里的标注功能（见
+// DataEntryPage.tsx 的「专家录入」「数据标注」两个 tab）；权限沿用原「专家采集」的可见范围，
+// 专家角色也要能进来录入。
 const NAV: { key: View; label: string; minRole: Role[] }[] = [
-  { key: "session", label: "专家采集", minRole: ["expert", "researcher", "admin"] },
+  { key: "data_entry", label: "数据录入与标注", minRole: ["expert", "researcher", "admin"] },
   { key: "dashboard", label: "Dashboard", minRole: ["researcher", "admin"] },
   { key: "experiments", label: "实验中心", minRole: ["researcher", "admin"] },
   { key: "admin", label: "管理页面", minRole: ["admin"] },
@@ -25,10 +28,10 @@ const NAV: { key: View; label: string; minRole: Role[] }[] = [
 
 export function DesktopApp() {
   const { role, setRole } = useRole();
-  const [view, setView] = useState<View>("session");
+  const [view, setView] = useState<View>("data_entry");
 
   const visibleNav = NAV.filter((n) => n.minRole.includes(role));
-  const activeView = visibleNav.some((n) => n.key === view) ? view : "session";
+  const activeView = visibleNav.some((n) => n.key === view) ? view : "data_entry";
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
@@ -60,7 +63,7 @@ export function DesktopApp() {
         </select>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        {activeView === "session" && <SessionPage />}
+        {activeView === "data_entry" && <DataEntryPage role={role} />}
         {activeView === "dashboard" && <DashboardPage role={role} />}
         {activeView === "experiments" && <ExperimentCenterPage role={role} />}
         {activeView === "admin" && <AdminPage />}
