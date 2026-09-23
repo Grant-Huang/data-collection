@@ -115,94 +115,97 @@ export function PriorAnnotationPanel({
           </button>
         </div>
 
-        <div style={{ height: 260, border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 16 }}>
-          <DagView graph={detail.graph} readOnly scrollable />
+        <div style={{ height: 260, border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 16, overflow: "hidden" }}>
+          <DagView graph={detail.graph} readOnly />
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {(["accepted", "needs_revision", "rejected"] as PriorVerdict[]).map((v) => (
+        {/* 灰底卡片把"标注操作区"跟上面白底的 DAG 图区分开，避免两块区域视觉上连成一片。 */}
+        <div style={{ background: "#f8fafc", border: "1px solid #eef1f4", borderRadius: 10, padding: 16 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {(["accepted", "needs_revision", "rejected"] as PriorVerdict[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => {
+                  setVerdict(v);
+                  setExpanded(v === "needs_revision");
+                }}
+                style={{
+                  flex: 1, border: verdict === v ? "none" : "1px solid #d0d5dd",
+                  borderRadius: 8, padding: "10px 0", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  background: verdict === v ? VERDICT_COLOR[v] : "#fff",
+                  color: verdict === v ? "#fff" : "#475569",
+                }}
+              >
+                {VERDICT_LABELS[v]}
+              </button>
+            ))}
+          </div>
+
+          {expanded && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#667085", marginBottom: 8 }}>逐节点判定</div>
+              {nodes.map((n, i) => {
+                const prevId = i > 0 ? nodes[i - 1].node_id : null;
+                const current = nodeVerdicts[n.node_id] ?? "keep";
+                const options = prevId ? ["keep", "delete", `merge_into:${prevId}`] : ["keep", "delete"];
+                return (
+                  <div key={n.node_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #e5e7eb" }}>
+                    <div style={{ flex: 1, fontSize: 12.5 }}>{n.label}</div>
+                    {options.map((opt) => (
+                      <button
+                        key={opt}
+                        onClick={() => setNodeVerdict(n.node_id, opt)}
+                        style={{
+                          border: `1px solid ${current === opt ? "#2a78d6" : "#d0d5dd"}`,
+                          color: current === opt ? "#2a78d6" : "#667085",
+                          background: current === opt ? "#eef4fc" : "#fff",
+                          borderRadius: 6, padding: "3px 10px", fontSize: 11.5, cursor: "pointer",
+                        }}
+                      >
+                        {opt === "keep" ? "保留" : opt === "delete" ? "删除" : "合并进上一个节点"}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {!isTerminal && (
+            <input
+              value={annotatorName}
+              onChange={(e) => setAnnotatorName(e.target.value)}
+              placeholder="标注人姓名（必填，用于识别独立标注/仲裁）"
+              style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 8, fontFamily: "inherit", background: "#fff" }}
+            />
+          )}
+
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="备注（可选）：为什么需要修改或丢弃"
+            rows={2}
+            disabled={isTerminal}
+            style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 12, fontFamily: "inherit", background: "#fff" }}
+          />
+
+          {error && <div style={{ color: "#991b1b", fontSize: 12, marginBottom: 8 }}>{error}</div>}
+
+          {!isTerminal && (
             <button
-              key={v}
-              onClick={() => {
-                setVerdict(v);
-                setExpanded(v === "needs_revision");
-              }}
+              onClick={handleSave}
+              disabled={!verdict || !annotatorName.trim() || saving}
               style={{
-                flex: 1, border: verdict === v ? "none" : "1px solid #d0d5dd",
-                borderRadius: 8, padding: "10px 0", fontSize: 13, fontWeight: 600, cursor: "pointer",
-                background: verdict === v ? VERDICT_COLOR[v] : "#fff",
-                color: verdict === v ? "#fff" : "#475569",
+                width: "100%", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 600, fontSize: 13,
+                background: !verdict || !annotatorName.trim() || saving ? "#e5e7eb" : "#0ca30c",
+                color: !verdict || !annotatorName.trim() || saving ? "#94a3b8" : "#fff",
+                cursor: !verdict || !annotatorName.trim() || saving ? "default" : "pointer",
               }}
             >
-              {VERDICT_LABELS[v]}
+              {saving ? "保存中…" : priorNames.length >= 2 ? "提交仲裁判定" : "提交标注"}
             </button>
-          ))}
+          )}
         </div>
-
-        {expanded && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#667085", marginBottom: 8 }}>逐节点判定</div>
-            {nodes.map((n, i) => {
-              const prevId = i > 0 ? nodes[i - 1].node_id : null;
-              const current = nodeVerdicts[n.node_id] ?? "keep";
-              const options = prevId ? ["keep", "delete", `merge_into:${prevId}`] : ["keep", "delete"];
-              return (
-                <div key={n.node_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f1f3f5" }}>
-                  <div style={{ flex: 1, fontSize: 12.5 }}>{n.label}</div>
-                  {options.map((opt) => (
-                    <button
-                      key={opt}
-                      onClick={() => setNodeVerdict(n.node_id, opt)}
-                      style={{
-                        border: `1px solid ${current === opt ? "#2a78d6" : "#d0d5dd"}`,
-                        color: current === opt ? "#2a78d6" : "#667085",
-                        background: current === opt ? "#eef4fc" : "#fff",
-                        borderRadius: 6, padding: "3px 10px", fontSize: 11.5, cursor: "pointer",
-                      }}
-                    >
-                      {opt === "keep" ? "保留" : opt === "delete" ? "删除" : "合并进上一个节点"}
-                    </button>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {!isTerminal && (
-          <input
-            value={annotatorName}
-            onChange={(e) => setAnnotatorName(e.target.value)}
-            placeholder="标注人姓名（必填，用于识别独立标注/仲裁）"
-            style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 8, fontFamily: "inherit" }}
-          />
-        )}
-
-        <textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="备注（可选）：为什么需要修改或丢弃"
-          rows={2}
-          disabled={isTerminal}
-          style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d0d5dd", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 12, fontFamily: "inherit" }}
-        />
-
-        {error && <div style={{ color: "#991b1b", fontSize: 12, marginBottom: 8 }}>{error}</div>}
-
-        {!isTerminal && (
-          <button
-            onClick={handleSave}
-            disabled={!verdict || !annotatorName.trim() || saving}
-            style={{
-              width: "100%", border: "none", borderRadius: 8, padding: "10px 0", fontWeight: 600, fontSize: 13,
-              background: !verdict || !annotatorName.trim() || saving ? "#e5e7eb" : "#0ca30c",
-              color: !verdict || !annotatorName.trim() || saving ? "#94a3b8" : "#fff",
-              cursor: !verdict || !annotatorName.trim() || saving ? "default" : "pointer",
-            }}
-          >
-            {saving ? "保存中…" : priorNames.length >= 2 ? "提交仲裁判定" : "提交标注"}
-          </button>
-        )}
 
         {detail.annotations.length > 0 && (
           <div style={{ marginTop: 16, fontSize: 11.5, color: "#94a3b8" }}>
