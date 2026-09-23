@@ -235,7 +235,7 @@ export function DashboardPage({ role }: { role: Role }) {
 
         {!latest ? (
           <div style={{ background: "#fff", border: "1px dashed #d0d5dd", borderRadius: 10, padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-            {sourceType === "expert_collected" ? "还没有发布过版本，先在专家采集页完成并确认几条会话，再回来发布。" : "还没有导入过公共集数据，请前往「管理页面」的导入/导出面板导入。"}
+            {sourceType === "expert_collected" ? "还没有发布过版本，先在专家采集页完成并确认几条会话，再回来发布。" : "还没有导入过公共集数据，请前往「数据与实验管理」的导入/导出面板导入。"}
           </div>
         ) : (
           <>
