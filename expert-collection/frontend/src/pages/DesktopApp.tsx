@@ -1,8 +1,8 @@
 // Desktop-only shell: top nav between the collection session and the other modules, gated by
 // role per PRD 16.2 (expert sees only 专家采集; researcher adds Dashboard/实验中心; admin adds
-// 管理页面/系统设置) -- plus the role switcher itself, which has to stay visible to everyone so
-// you can switch identity (IMPLEMENTATION_PLAN.md assumption 1's simplest current-identity
-// selector, finally wired up this phase).
+// 数据与实验管理/系统管理) -- plus the role switcher itself, which has to stay visible to
+// everyone so you can switch identity (IMPLEMENTATION_PLAN.md assumption 1's simplest
+// current-identity selector, finally wired up this phase).
 import { useState } from "react";
 import { useRole } from "../hooks/useRole";
 import { ROLE_LABELS } from "../api/types";
@@ -10,10 +10,10 @@ import type { Role } from "../api/types";
 import { DataEntryPage } from "./DataEntryPage";
 import { DashboardPage } from "./DashboardPage";
 import { ExperimentCenterPage } from "./ExperimentCenterPage";
-import { AdminPage } from "./AdminPage";
-import { SettingsPage } from "./SettingsPage";
+import { DataExperimentManagementPage } from "./DataExperimentManagementPage";
+import { SystemManagementPage } from "./SystemManagementPage";
 
-type View = "data_entry" | "dashboard" | "experiments" | "admin" | "settings";
+type View = "data_entry" | "dashboard" | "experiments" | "data-experiment-admin" | "system-admin";
 
 // "数据录入与标注" 合并了原来的「专家采集」页和原来嵌在 Dashboard 里的标注功能（见
 // DataEntryPage.tsx 的「专家录入」「数据标注」两个 tab）；权限沿用原「专家采集」的可见范围，
@@ -22,8 +22,8 @@ const NAV: { key: View; label: string; minRole: Role[] }[] = [
   { key: "data_entry", label: "数据录入与标注", minRole: ["expert", "researcher", "admin"] },
   { key: "dashboard", label: "Dashboard", minRole: ["researcher", "admin"] },
   { key: "experiments", label: "实验中心", minRole: ["researcher", "admin"] },
-  { key: "admin", label: "管理页面", minRole: ["admin"] },
-  { key: "settings", label: "系统设置", minRole: ["admin"] },
+  { key: "data-experiment-admin", label: "数据与实验管理", minRole: ["admin"] },
+  { key: "system-admin", label: "系统管理", minRole: ["admin"] },
 ];
 
 export function DesktopApp() {
@@ -66,8 +66,8 @@ export function DesktopApp() {
         {activeView === "data_entry" && <DataEntryPage role={role} />}
         {activeView === "dashboard" && <DashboardPage role={role} />}
         {activeView === "experiments" && <ExperimentCenterPage role={role} />}
-        {activeView === "admin" && <AdminPage />}
-        {activeView === "settings" && <SettingsPage />}
+        {activeView === "data-experiment-admin" && <DataExperimentManagementPage />}
+        {activeView === "system-admin" && <SystemManagementPage />}
       </div>
     </div>
   );
