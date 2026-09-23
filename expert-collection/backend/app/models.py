@@ -104,6 +104,39 @@ class WorkflowSummary(BaseModel):
     updated_at: str
 
 
+ManufacturingMode = Literal[
+    "mass_repetitive", "high_automation", "high_mix_low_volume", "eto_mto",
+    "large_project", "regulated_traceable", "other",
+]
+
+
+class ManufacturingContext(BaseModel):
+    """§14.4 Dataset Slice -- mirrors `manufacturing_context` in
+    schema/workflow_graph_schema_v2.json's `workflow_record` def verbatim (field names and the
+    `manufacturing_mode` enum), not an invented taxonomy: `public_extracted` imports already
+    require this object and `import_pipeline.py` already validates `manufacturing_mode`
+    against this enum, it just wasn't read by anything downstream yet. `expert_collected`
+    gets the same shape as an optional, editable-anytime tag (not collected through the FSM
+    conversation -- it's a static classification, not scenario narrative) so both source types
+    can be sliced by the same fields.
+    """
+    manufacturing_mode: Optional[ManufacturingMode] = None
+    industry: Optional[str] = None
+    site_type: Optional[str] = None
+    process_area: Optional[str] = None
+    product_family: Optional[str] = None
+    shift_context: Optional[str] = None
+
+
+class ManufacturingContextUpdateRequest(BaseModel):
+    manufacturing_mode: Optional[ManufacturingMode] = None
+    industry: Optional[str] = None
+    site_type: Optional[str] = None
+    process_area: Optional[str] = None
+    product_family: Optional[str] = None
+    shift_context: Optional[str] = None
+
+
 class CaseContext(BaseModel):
     """Scenario (A-group) + Case Context (B-group) -- IMPLEMENTATION_PLAN.md section 9.1.
     All fields optional/empty-default because this fills in gradually turn by turn; a
@@ -133,6 +166,7 @@ class WorkflowRecord(BaseModel):
     completion: Completion
     validation: list[ValidationIssue] = Field(default_factory=list)
     case_context: Optional[CaseContext] = None
+    manufacturing_context: Optional[ManufacturingContext] = None
     created_at: str
     updated_at: str
 

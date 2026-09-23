@@ -82,6 +82,38 @@ export interface CaseContext {
   skipped_fields: string[];
 }
 
+export type ManufacturingMode =
+  | "mass_repetitive" | "high_automation" | "high_mix_low_volume" | "eto_mto"
+  | "large_project" | "regulated_traceable" | "other";
+
+export const MANUFACTURING_MODE_LABELS: Record<ManufacturingMode, string> = {
+  mass_repetitive: "大批量重复生产",
+  high_automation: "高自动化产线",
+  high_mix_low_volume: "多品种小批量",
+  eto_mto: "按单设计/按单生产（ETO/MTO）",
+  large_project: "大型项目制造",
+  regulated_traceable: "强监管/可追溯行业",
+  other: "其他",
+};
+
+export interface ManufacturingContext {
+  manufacturing_mode: ManufacturingMode | null;
+  industry: string | null;
+  site_type: string | null;
+  process_area: string | null;
+  product_family: string | null;
+  shift_context: string | null;
+}
+
+// §14.4 Dataset Slice -- must match backend dataset_records.SLICEABLE_FIELDS.
+export const SLICEABLE_FIELDS: { field: keyof ManufacturingContext; label: string }[] = [
+  { field: "manufacturing_mode", label: "制造模式" },
+  { field: "industry", label: "行业" },
+  { field: "site_type", label: "现场类型" },
+  { field: "process_area", label: "工艺/工序范围" },
+  { field: "product_family", label: "产品族" },
+];
+
 export interface ValidationIssue {
   level: "error" | "warning";
   code: string;
@@ -114,6 +146,7 @@ export interface WorkflowRecord {
   completion: Completion;
   validation: ValidationIssue[];
   case_context: CaseContext | null;
+  manufacturing_context: ManufacturingContext | null;
   created_at: string;
   updated_at: string;
 }

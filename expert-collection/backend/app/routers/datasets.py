@@ -363,6 +363,22 @@ def drill_down(version_id: str, dimension: str) -> dict:
     return {"dimension": dimension, "score": dim["score"], "problem_records": problems[:50]}
 
 
+@router.get("/versions/{version_id}/slice")
+def slice_by_field(version_id: str, field: str) -> dict:
+    """§14.4 Dataset Slice -- real per-value counts from this version's own
+    `manufacturing_context` data (see dataset_records.SLICEABLE_FIELDS), not a placeholder
+    with nowhere to plug in: both source types already carry this object (public_extracted's
+    import schema requires it; expert_collected sets it via the manufacturing-context PUT
+    endpoint), it just wasn't sliced by anything before this.
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    if field not in dataset_records.SLICEABLE_FIELDS:
+        raise HTTPException(status_code=400, detail=f"不支持的切片字段：{field}")
+    return {"field": field, "buckets": dataset_records.slice_counts(version, field)}
+
+
 def _flag_for_dimension(dimension: str, graph: dict) -> tuple[bool, str]:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])

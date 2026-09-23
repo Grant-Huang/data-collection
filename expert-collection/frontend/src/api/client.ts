@@ -6,6 +6,7 @@ import type {
   DatasetVersionSummary,
   ExperimentDetail,
   ExperimentSummary,
+  ManufacturingContext,
   NodeVerdicts,
   PriorRecordDetail,
   PriorRecordSummary,
@@ -41,6 +42,8 @@ export const api = {
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
+  updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
+    req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
 
   getDraftPool: (sourceType: SourceType) =>
     req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),
@@ -87,6 +90,11 @@ export const api = {
     req<{ dimension: string; score: number | null; problem_records: { record_id: string; name: string; reason: string }[] }>(
       "GET",
       `/api/datasets/versions/${versionId}/drill-down?dimension=${dimension}`,
+    ),
+  getSlice: (versionId: string, field: string) =>
+    req<{ field: string; buckets: { value: string; count: number; pct: number }[] }>(
+      "GET",
+      `/api/datasets/versions/${versionId}/slice?field=${field}`,
     ),
   getTrend: (sourceType: SourceType) =>
     req<{ source_type: SourceType; points: TrendPoint[] }>("GET", `/api/datasets/trend?source_type=${sourceType}`),

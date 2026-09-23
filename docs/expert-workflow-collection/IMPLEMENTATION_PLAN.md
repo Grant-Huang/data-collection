@@ -441,7 +441,18 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 ### §14.4 Dataset Slice
 
-- 验收：新增行业/场景分类字段后，Dashboard 能按这些字段真实切片显示（有数据可切，不是加了字段没地方用）
+- 验收：新增行业/场景分类字段后，Dashboard 能按这些字段真实切片显示（有数据可切，不是加了字段没地方用）——**已实现**
+
+**字段来源**：不是本轮新发明一套分类体系——`schema/workflow_graph_schema_v2.json` 里 `workflow_record` 定义本来就有一个 `manufacturing_context` 对象（`manufacturing_mode`/`industry`/`site_type`/`process_area`/`product_family`/`shift_context`），`manufacturing_mode` 还带着现成的枚举值（`mass_repetitive`/`high_automation`/`high_mix_low_volume`/`eto_mto`/`large_project`/`regulated_traceable`/`other`），`import_pipeline.py` 也早就在校验这个枚举——只是校验完之后没有任何代码真正读它。这次做的是把这条已经设计好、只是没接上的线接上，不是凭空猜一套字段。
+
+**设计**：
+- `models.py` 新增 `ManufacturingContext`（跟 schema 字段一一对应）和 `ManufacturingContextUpdateRequest`；`WorkflowRecord` 新增可选的 `manufacturing_context` 字段。
+- **`public_extracted`**：导入时已经是必填对象、已经被校验，`records_for_export()` 对这个来源本来就是把 `version["records"]` 原样返回，字段天然就在，不用额外接线。
+- **`expert_collected`**：这是个静态分类标签，不是逐轮对话收集的场景叙述，硬塞进 FSM 会话流程会显著增加范围，所以做成一个随时可编辑的普通字段——新增 `PUT /api/expert-workflows/{id}/manufacturing-context`，会话页顶部加两个轻量控件（制造模式下拉 + 行业文本框），改动即时保存，跟节点/对话轮次完全无关，确认前后都能改。`dataset_records.py::records_for_export()` 的 `expert_collected` 分支补上 `manufacturing_context` 键，让两种来源在读取侧长一样的形状。
+- **切片计算**（`dataset_records.py::slice_counts`）：按选定字段对 `records_for_export()` 的结果分组计数，缺失值归到诚实的"未填写"桶（不是把没分类的记录悄悄丢掉）。新增 `GET /api/datasets/versions/{id}/slice?field=...`，非法字段名返回 400。
+- **前端**：Dashboard 新增"行业/场景切片"Tab，五个字段（制造模式/行业/现场类型/工艺工序范围/产品族）做成切换按钮，下面是条形图+计数+百分比；会话页头部加分类控件，读写走 `useWorkflowSession` 新增的 `updateManufacturingContext`。
+
+**已验证**：真实 HTTP 联调——① `expert_collected`：创建 4 条工作流，用真实 `PUT .../manufacturing-context` 请求给 3 条设置制造模式/行业（第 4 条故意留空），发布成一个版本，`GET .../slice?field=manufacturing_mode` 和 `field=industry` 都返回正确的分组计数（含"未填写"桶），非法字段名返回 400。② `public_extracted`：构造一个带 `manufacturing_context` 的导入 JSON，真实走 `/import/precheck` → `/import/confirm`（顺带验证了近重复检测确实会拦住结构完全相同的记录，属于产品既有行为，不是本次改动引入的问题，调整测试数据后放行），确认导入后的版本也能正确切片。③ headless Chromium 截图验证真实 UI：Dashboard"行业/场景切片"Tab 的条形图、字段切换按钮、百分比显示都正确渲染；会话页头部的制造模式下拉和行业输入框正确回显了通过 API 设置的值。前端 `tsc -b` 通过。测试完成后清理了 sqlite 里的全部测试工作流和数据集版本，关闭了测试用的后端/前端/headless Chromium 进程。
 
 ### 不用动的
 

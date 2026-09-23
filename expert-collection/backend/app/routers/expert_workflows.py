@@ -13,6 +13,7 @@ from .. import db, graph_ops, graph_validator, guide_service
 from ..models import (
     Completion,
     CreateWorkflowRequest,
+    ManufacturingContextUpdateRequest,
     TurnRequest,
     TurnResponse,
     ValidationIssue,
@@ -115,6 +116,22 @@ def get_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
+    return WorkflowRecord.model_validate(_strip_internal(record))
+
+
+@router.put("/{workflow_id}/manufacturing-context", response_model=WorkflowRecord)
+def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpdateRequest) -> WorkflowRecord:
+    """§14.4 Dataset Slice -- a static classification tag, not scenario narrative gathered
+    turn by turn, so it's a plain PUT rather than another guide_service/FSM stage; editable at
+    any time (before or after confirm), since re-tagging a workflow's industry/mode doesn't
+    touch its graph or turns.
+    """
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    record["manufacturing_context"] = req.model_dump()
+    record["updated_at"] = _now()
+    db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record))
 
 
