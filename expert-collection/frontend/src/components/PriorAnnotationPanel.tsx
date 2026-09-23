@@ -88,7 +88,18 @@ export function PriorAnnotationPanel({
           background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+        {/* 整个弹窗内容是可滚动的（outer div 的 overflowY: auto），标注区/DAG 都可能比视口高，
+            所以关闭按钮要跟标题一起吸顶，不能只在没滚动的时候才看得见——之前只是普通文档流里的
+            一个按钮，滚下去看按钮区时它跟标题一起滚出视口了，不是没有这个按钮，是看不见它。 */}
+        <div
+          style={{
+            position: "sticky", top: -24, zIndex: 2, background: "#fff",
+            marginLeft: -24, marginRight: -24, marginTop: -24,
+            padding: "24px 24px 12px",
+            display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+            borderBottom: "1px solid #f1f3f5", marginBottom: 12,
+          }}
+        >
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
               {detail.name}
@@ -110,7 +121,15 @@ export function PriorAnnotationPanel({
                   : "尚未标注过，这次会作为第一次独立标注"}
             </div>
           </div>
-          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer" }}>
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            style={{
+              border: "none", background: "#f1f5f9", color: "#475569", borderRadius: 999,
+              width: 28, height: 28, fontSize: 15, lineHeight: 1, cursor: "pointer", flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
             ✕
           </button>
         </div>
