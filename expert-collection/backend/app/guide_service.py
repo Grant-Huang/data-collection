@@ -394,7 +394,14 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
             cursor_after = merge_id
         else:
             cursor_after = a_tail  # "各自继续": keep going from the first branch, second tail gets its own end later
-        reply = "这两件事（比如设备检查和工艺检查这类）是先后做，还是可以同时进行？"
+        # No illustrative example here on purpose: this reply text is stored verbatim in the
+        # turn transcript, and an example like "比如设备检查和工艺检查" sitting right next to
+        # a real question reads, on a later pass over the transcript (rendering, export, or a
+        # real LLM re-deriving structure from conversation history), exactly like something
+        # the expert actually said -- there is nothing that marks it as "just an example" once
+        # it is plain text in the log. Keep this question generic so there is no fabricated
+        # content anywhere in the transcript for anything downstream to mistake for real input.
+        reply = "这两件事是先后做，还是可以同时进行？"
         nq = {"target": "parallel_merge_discovery", "priority": "P2", "question": reply,
               "chips": ["先后做", "同时做", "这里没有并行的事"]}
         new_state = {"stage": "parallel_check", "cursor": cursor_after,
