@@ -16,8 +16,8 @@ export function SessionPage() {
     toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
   } = useWorkflowSession();
 
-  // 「用大模型根据会话内容重新生成流程图」：先问后端能不能生成（是否已进入数据集 / 还没有
-  // 专家发言），不允许就把原因原样弹给专家，不装作按钮不存在；允许的话，如果这个会话已经
+  // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
+  // 还没有专家发言），不允许就把原因原样弹给专家，不装作按钮不存在；允许的话，如果这个会话已经
   // 确认过，额外提示一句「会变回待确认」，专家点确认后再真正调用。
   const handleRegenerateGraph = async () => {
     const check = await checkRegenerateGraph();
@@ -29,7 +29,7 @@ export function SessionPage() {
     const warning = check.will_reset_confirmation
       ? "\n\n注意：这个会话已经确认过，重新生成后会变回「待确认」，需要重新确认一遍。"
       : "";
-    if (!window.confirm(`用大模型根据当前会话内容重新生成流程图，会整体替换现在这张图。${warning}\n\n确定要继续吗？`)) {
+    if (!window.confirm(`刷新工作流图会用大模型根据当前会话内容重新生成，重绘之前的工作流图。${warning}\n\n确定要继续吗？`)) {
       return;
     }
     await regenerateGraph();
@@ -139,7 +139,7 @@ export function SessionPage() {
               <button
                 onClick={handleRegenerateGraph}
                 disabled={regenerating || active.in_dataset}
-                title={active.in_dataset ? "流程图已录入数据集，不能重新生成" : undefined}
+                title={active.in_dataset ? "流程图已录入数据集，不能刷新" : undefined}
                 style={{
                   border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 10px", fontSize: 11.5,
                   background: active.in_dataset ? "#f2f4f7" : "#fff",
@@ -147,7 +147,7 @@ export function SessionPage() {
                   cursor: regenerating || active.in_dataset ? "default" : "pointer",
                 }}
               >
-                {regenerating ? "生成中…" : "🪄 用 AI 重新生成流程图"}
+                {regenerating ? "刷新中…" : "🪄 刷新工作流图"}
               </button>
             </div>
           )}
