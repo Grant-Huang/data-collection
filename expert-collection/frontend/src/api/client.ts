@@ -3,6 +3,7 @@ import type {
   AuditLogEntry,
   ComparisonResult,
   CreateExperimentRequest,
+  DatasetVersionListResponse,
   DatasetVersionSummary,
   ExperimentDetail,
   ExperimentSummary,
@@ -11,9 +12,11 @@ import type {
   PriorRecordDetail,
   PriorRecordSummary,
   PriorVerdict,
+  RegenerateGraphCheck,
   Settings,
   SourceType,
   TurnResponse,
+  WorkflowMetaUpdate,
   WorkflowRecord,
   WorkflowSummary,
 } from "./types";
@@ -34,16 +37,23 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
-  listWorkflows: () => req<WorkflowSummary[]>("GET", "/api/expert-workflows"),
+  listWorkflows: (includeArchived = false) =>
+    req<WorkflowSummary[]>("GET", `/api/expert-workflows?include_archived=${includeArchived}`),
   createWorkflow: (name?: string) =>
     req<WorkflowRecord>("POST", "/api/expert-workflows", { name: name ?? null }),
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),
+  updateWorkflowMeta: (id: string, patch: WorkflowMetaUpdate) =>
+    req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
   postTurn: (id: string, text: string) =>
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
     req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
+  regenerateGraphCheck: (id: string) =>
+    req<RegenerateGraphCheck>("GET", `/api/expert-workflows/${id}/regenerate-check`),
+  regenerateGraph: (id: string) =>
+    req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/regenerate-graph`),
 
   getDraftPool: (sourceType: SourceType) =>
     req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),
@@ -51,6 +61,10 @@ export const api = {
     req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType, actor_role: actorRole }),
   archiveDatasetVersion: (versionId: string) =>
     req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/archive`),
+  renameDatasetVersion: (versionId: string, name: string, actorRole?: string) =>
+    req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/rename`, { name, actor_role: actorRole }),
+  deleteDatasetVersion: (versionId: string, actorRole?: string) =>
+    req<{ ok: boolean }>("DELETE", `/api/datasets/versions/${versionId}?actor_role=${encodeURIComponent(actorRole ?? "unknown")}`),
   markDatasetVersionGold: (versionId: string, isGold: boolean, actorRole?: string) =>
     req<DatasetVersionSummary>(
       "POST",
@@ -60,6 +74,21 @@ export const api = {
     req<DatasetVersionSummary[]>(
       "GET",
       `/api/datasets/versions?source_type=${sourceType}&include_archived=${includeArchived}`,
+    ),
+  getDatasetVersion: (versionId: string) =>
+    req<DatasetVersionSummary>("GET", `/api/datasets/versions/${versionId}`),
+  // Dashboard「查看全部」入口用的分页 + 查询列表，跟上面不分页的 listDatasetVersions
+  // 是两个独立接口，互不影响。
+  searchDatasetVersions: (
+    sourceType: SourceType,
+    opts: { query?: string; page?: number; pageSize?: number; includeArchived?: boolean } = {},
+  ) =>
+    req<DatasetVersionListResponse>(
+      "GET",
+      `/api/datasets/versions/search?source_type=${sourceType}` +
+        `&query=${encodeURIComponent(opts.query ?? "")}` +
+        `&page=${opts.page ?? 1}&page_size=${opts.pageSize ?? 20}` +
+        `&include_archived=${opts.includeArchived ?? false}`,
     ),
 
   listExperiments: () => req<ExperimentSummary[]>("GET", "/api/experiments"),

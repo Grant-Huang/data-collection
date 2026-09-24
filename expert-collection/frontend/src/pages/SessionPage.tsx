@@ -12,15 +12,35 @@ import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types"
 
 export function SessionPage() {
   const {
-    workflows, active, sending, creating, error,
+    workflows, active, sending, creating, error, showArchived, regenerating,
     selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext,
+    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
   } = useWorkflowSession();
 
-  // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
-  // only used the first time, before anything is stored -- after that the saved px width wins.
+  // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
+  // 还没有专家发言），不允许就把原因原样弹给专家，不装作按钮不存在；允许的话，如果这个会话已经
+  // 确认过，额外提示一句「会变回待确认」，专家点确认后再真正调用。
+  const handleRegenerateGraph = async () => {
+    const check = await checkRegenerateGraph();
+    if (!check) return;
+    if (!check.allowed) {
+      window.alert(check.reason ?? "暂时无法重新生成流程图。");
+      return;
+    }
+    const warning = check.will_reset_confirmation
+      ? "\n\n注意：这个会话已经确认过，重新生成后会变回「待确认」，需要重新确认一遍。"
+      : "";
+    if (!window.confirm(`刷新工作流图会用大模型根据当前会话内容重新生成，重绘之前的工作流图。${warning}\n\n确定要继续吗？`)) {
+      return;
+    }
+    await regenerateGraph();
+  };
+
   // Node ids to highlight on the DAG while the expert hovers a message's "图上 +N" tag.
   const [highlightNodeIds, setHighlightNodeIds] = useState<string[] | null>(null);
 
+  // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
+  // only used the first time, before anything is stored -- after that the saved px width wins.
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1440;
   const left = useResizablePanel("history", Math.round(viewportWidth * 0.18), 160, 560);
   const right = useResizablePanel("dag", Math.round(viewportWidth * 0.3), 220, 900);
@@ -35,6 +55,9 @@ export function SessionPage() {
             onSelect={selectWorkflow}
             onCreate={createWorkflow}
             creating={creating}
+            showArchived={showArchived}
+            onToggleShowArchived={toggleShowArchived}
+            onUpdateMeta={updateWorkflowMeta}
           />
         </div>
       </div>
@@ -115,17 +138,36 @@ export function SessionPage() {
         onToggleCollapse={right.toggleCollapsed}
         onResize={(dx) => right.resizeBy(dx, -1)}
       />
-      <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined }}>
-        <div style={{ width: right.width, height: "100%" }}>
-          {active && active.graph.nodes.length === 0 ? (
-            // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come
-            // before any graph node exists -- show that this is expected, not a stuck app.
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12.5, textAlign: "center", padding: 24 }}>
-              背景信息收集中，还没开始画图……
+      <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined, display: "flex", flexDirection: "column" }}>
+        <div style={{ width: right.width, height: "100%", display: "flex", flexDirection: "column" }}>
+          {active && (
+            <div style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={handleRegenerateGraph}
+                disabled={regenerating || active.in_dataset}
+                title={active.in_dataset ? "流程图已录入数据集，不能刷新" : undefined}
+                style={{
+                  border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 10px", fontSize: 11.5,
+                  background: active.in_dataset ? "#f2f4f7" : "#fff",
+                  color: active.in_dataset ? "#98a2b3" : "#344054",
+                  cursor: regenerating || active.in_dataset ? "default" : "pointer",
+                }}
+              >
+                {regenerating ? "刷新中…" : "🪄 刷新工作流图"}
+              </button>
             </div>
-          ) : (
-            active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />
           )}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {active && active.graph.nodes.length === 0 ? (
+              // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come
+              // before any graph node exists -- show that this is expected, not a stuck app.
+              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12.5, textAlign: "center", padding: 24 }}>
+                背景信息收集中，还没开始画图……
+              </div>
+            ) : (
+              active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />
+            )}
+          </div>
         </div>
       </div>
 

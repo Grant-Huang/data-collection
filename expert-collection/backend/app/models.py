@@ -116,6 +116,17 @@ class WorkflowSummary(BaseModel):
     status: WorkflowStatus
     completion_score: float
     updated_at: str
+    # Session-list housekeeping (left rail "..." menu). Archive, not delete: an archived
+    # session is only hidden from the default list and excluded from the dataset draft pool --
+    # its record stays in the DB, because a published expert_collected dataset_version only
+    # stores workflow_ids and reads each graph back live (dataset_records.records_for_export),
+    # so hard-deleting a workflow would silently drop records out of an already-published
+    # version.
+    pinned: bool = False
+    archived: bool = False
+    # True once any dataset_version (archived versions included) references this workflow --
+    # computed at read time from dataset_versions, never stored on the workflow itself.
+    in_dataset: bool = False
 
 
 ManufacturingMode = Literal[
@@ -185,6 +196,39 @@ class WorkflowRecord(BaseModel):
     manufacturing_context: Optional[ManufacturingContext] = None
     created_at: str
     updated_at: str
+    pinned: bool = False
+    archived: bool = False
+    in_dataset: bool = False
+
+
+class WorkflowMetaUpdateRequest(BaseModel):
+    """PATCH body for the session-list "..." menu (rename / pin / archive). Every field is
+    optional; only the ones actually sent are applied.
+    """
+    name: Optional[str] = None
+    pinned: Optional[bool] = None
+    archived: Optional[bool] = None
+
+
+class DatasetVersionRef(BaseModel):
+    id: str
+    source_type: str
+    version_number: int
+    archived: bool = False
+
+
+class RegenerateGraphCheck(BaseModel):
+    """Pre-flight answer for "用大模型根据会话内容重新生成流程图" -- the frontend asks this
+    first and shows `reason` instead of a confirm dialog when `allowed` is False.
+    """
+    allowed: bool
+    # "in_dataset" | "conversation_in_progress" | "no_expert_turns" | None when allowed
+    blocked_code: Optional[str] = None
+    reason: Optional[str] = None
+    dataset_versions: list[DatasetVersionRef] = Field(default_factory=list)
+    # Regenerating a confirmed workflow drops it back to needs_confirmation -- surfaced so the
+    # confirm dialog can warn about it up front.
+    will_reset_confirmation: bool = False
 
 
 class CreateWorkflowRequest(BaseModel):
@@ -227,6 +271,7 @@ class DatasetReadiness(BaseModel):
 class DatasetVersionSummary(BaseModel):
     id: str
     source_type: SourceType
+    name: str
     version_number: int
     workflow_count: int
     total_steps: int
@@ -237,9 +282,26 @@ class DatasetVersionSummary(BaseModel):
     is_gold: bool = False
 
 
+class DatasetVersionListResponse(BaseModel):
+    """Dashboard's「全部」数据集列表 -- paginated + searchable, distinct from the plain
+    `list[DatasetVersionSummary]` `/versions` already returns (that one stays a flat list
+    since existing callers -- the per-sourceType "latest version" read on the Dashboard
+    landing view, the experiment center's version picker -- just want everything, unpaginated).
+    """
+    items: list[DatasetVersionSummary]
+    total: int
+    page: int
+    page_size: int
+
+
 class PublishDatasetRequest(BaseModel):
     source_type: SourceType = "expert_collected"
     name: Optional[str] = None
+    actor_role: Optional[str] = None
+
+
+class RenameDatasetVersionRequest(BaseModel):
+    name: str
     actor_role: Optional[str] = None
 
 
@@ -367,9 +429,16 @@ InputVersion = Literal["raw", "anonymized", "role_normalized"]
 
 
 class CreateExperimentRequest(BaseModel):
+    """No `source_type` field -- IMPLEMENTATION_PLAN.md's Combined Train design (PRD §14.1:
+    "允许 Combined Train，Test 仍必须分别报告") means a single experiment's training pool can
+    span multiple dataset versions across both source types, so a single top-level source_type
+    would no longer describe the request. Each version's own `source_type` (read from
+    `db.get_dataset_version`) is what the run actually groups train/test by; the frontend's
+    "先筛一遍" source picker (PRD §12.0) is purely a UI convenience for narrowing the version
+    checklist, not a field the backend needs.
+    """
     name: str
-    source_type: SourceType = "expert_collected"
-    dataset_version_id: str
+    dataset_version_ids: list[str] = Field(min_length=1)
     input_version: InputVersion = "raw"
     representation: Representation = "node_edge_graph"
     method: ExperimentMethod = "consensus_dfg"
@@ -388,8 +457,9 @@ class CreateExperimentRequest(BaseModel):
 class ExperimentSummary(BaseModel):
     id: str
     name: str
-    dataset_version_id: str
+    dataset_version_ids: list[str]
     dataset_label: str
+    source_types: list[SourceType]
     method: ExperimentMethod
     model_name: Optional[str] = None
     status: ExperimentStatus
@@ -400,7 +470,6 @@ class ExperimentSummary(BaseModel):
 
 
 class ExperimentDetail(ExperimentSummary):
-    source_type: SourceType
     input_version: InputVersion
     representation: Representation
     prompt_version: Optional[str] = None
@@ -409,7 +478,10 @@ class ExperimentDetail(ExperimentSummary):
     train_split: float
     train_count: Optional[int] = None
     test_count: Optional[int] = None
+    train_count_by_source: dict = Field(default_factory=dict)
+    test_count_by_source: dict = Field(default_factory=dict)
     metrics: dict = Field(default_factory=dict)
+    metrics_by_source: dict = Field(default_factory=dict)
     explanation: Optional[str] = None
     explanation_edited: bool = False
     consensus_graph: Optional[Graph] = None

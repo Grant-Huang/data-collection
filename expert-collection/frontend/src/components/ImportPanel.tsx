@@ -60,7 +60,7 @@ export function ImportPanel({ role, onImported }: { role: Role; onImported: () =
 
   return (
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>导入公共集</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>导入公有集</div>
       <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
         上传符合 <code>{"{dataset_meta, records[]}"}</code> 结构的 JSON 文件（对照 schema/workflow_graph_schema_v2.json），先预检、再确认导入——确认导入即发布，不进草稿池。
       </div>

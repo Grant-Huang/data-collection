@@ -145,6 +145,11 @@ export interface WorkflowSummary {
   status: WorkflowStatus;
   completion_score: number;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  // True once any dataset_version (including archived ones) references this workflow --
+  // drives the "重新生成流程图" menu item's disabled state without a round trip.
+  in_dataset: boolean;
 }
 
 export interface WorkflowRecord {
@@ -161,6 +166,30 @@ export interface WorkflowRecord {
   manufacturing_context: ManufacturingContext | null;
   created_at: string;
   updated_at: string;
+  pinned: boolean;
+  archived: boolean;
+  in_dataset: boolean;
+}
+
+export interface WorkflowMetaUpdate {
+  name?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+export interface DatasetVersionRef {
+  id: string;
+  source_type: SourceType;
+  version_number: number;
+  archived: boolean;
+}
+
+export interface RegenerateGraphCheck {
+  allowed: boolean;
+  blocked_code: "in_dataset" | "conversation_in_progress" | "no_expert_turns" | null;
+  reason: string | null;
+  dataset_versions: DatasetVersionRef[];
+  will_reset_confirmation: boolean;
 }
 
 export interface TurnResponse {
@@ -215,6 +244,7 @@ export interface DatasetReadiness {
 export interface DatasetVersionSummary {
   id: string;
   source_type: SourceType;
+  name: string;
   version_number: number;
   workflow_count: number;
   total_steps: number;
@@ -223,6 +253,15 @@ export interface DatasetVersionSummary {
   readiness: DatasetReadiness;
   archived: boolean;
   is_gold: boolean;
+}
+
+// Dashboard「查看全部」-- paginated + searchable, separate from the plain unpaginated
+// `DatasetVersionSummary[]` the existing `/versions` endpoint returns.
+export interface DatasetVersionListResponse {
+  items: DatasetVersionSummary[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 // --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
@@ -308,8 +347,7 @@ export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg", "pm4py_
 
 export interface CreateExperimentRequest {
   name: string;
-  source_type: SourceType;
-  dataset_version_id: string;
+  dataset_version_ids: string[];
   input_version: InputVersion;
   representation: Representation;
   method: ExperimentMethod;
@@ -328,8 +366,9 @@ export interface CreateExperimentRequest {
 export interface ExperimentSummary {
   id: string;
   name: string;
-  dataset_version_id: string;
+  dataset_version_ids: string[];
   dataset_label: string;
+  source_types: SourceType[];
   method: ExperimentMethod;
   model_name: string | null;
   status: ExperimentStatus;
@@ -345,6 +384,7 @@ export interface ErrorCase {
   edge_f1: number;
   structural_match: number;
   group: string;
+  source_type?: SourceType;
 }
 
 export interface ErrorCluster {
@@ -354,7 +394,6 @@ export interface ErrorCluster {
 }
 
 export interface ExperimentDetail extends ExperimentSummary {
-  source_type: SourceType;
   input_version: InputVersion;
   representation: Representation;
   prompt_version: string | null;
@@ -363,7 +402,10 @@ export interface ExperimentDetail extends ExperimentSummary {
   train_split: number;
   train_count: number | null;
   test_count: number | null;
+  train_count_by_source: Partial<Record<SourceType, number>>;
+  test_count_by_source: Partial<Record<SourceType, number>>;
   metrics: Record<string, number>;
+  metrics_by_source: Partial<Record<SourceType, Record<string, number>>>;
   explanation: string | null;
   explanation_edited: boolean;
   consensus_graph: Graph | null;
@@ -394,6 +436,10 @@ export interface ComparisonResult {
 // the same endpoint/model/key into every slot that happens to use the same connection.
 export interface LlmLevelConfig {
   endpoint?: string;
+  // Only set (true/false) for level "L": its endpoint is a local file path/internal address,
+  // masked the same way api_key is -- see settings.py's mask_for_display. Other levels' endpoint
+  // is a public API URL and is returned in plaintext.
+  endpoint_set?: boolean;
   model_name?: string;
   api_key_set: boolean;
 }
@@ -407,7 +453,7 @@ export interface LlmSlotConfig {
 export interface Settings {
   llm_levels: Record<string, LlmLevelConfig>;
   llm_slots: Record<string, LlmSlotConfig>;
-  voice: { workspace_id: string; realtime_model: string };
+  voice: { workspace_id: string; realtime_model: string; api_key_set: boolean };
   quality_params: {
     min_sample_size: number;
     near_dup_text_threshold: number;
@@ -429,6 +475,7 @@ export const LLM_SLOT_LABELS: Record<string, string> = {
   experiment_explain: "实验结果文字解读", experiment_compare_explain: "多实验对比解读",
   error_clustering: "Error Analysis 案例聚类归纳", anonymize_name: "导出匿名化人名脱敏",
   role_normalize: "角色归一化", dashboard_explain: "Dashboard 评分项解释生成",
+  graph_regenerate: "根据会话内容重新生成流程图",
 };
 
 export const LLM_LEVEL_LABELS: Record<string, string> = {

@@ -147,17 +147,25 @@ def _mismatch_group(feats: dict[str, bool]) -> str:
     return "含分支" if feats["has_decision"] else "含并行" if feats["has_parallel"] else "含返工" if feats["has_retry"] else "线性"
 
 
-def run_consensus_dfg(train_graphs: list[dict], test_graphs: list[dict], test_names: list[str]) -> dict[str, Any]:
-    train_seqs = [s for s in (_main_path_types(g) for g in train_graphs) if s]
-    consensus_seq = _pick_medoid_sequence(train_seqs)
-    consensus_bigrams = _bigrams(consensus_seq)
-    consensus_types = set(consensus_seq)
+def _group_indices_by_source(source_types: list[str]) -> dict[str, list[int]]:
+    """PRD §14.1's hard rule ("Test 仍必须分别报告，禁止只给一个混合总分") needs to know which
+    test index came from which dataset version's source_type -- this is that grouping, shared
+    by every method's per-source metrics pass below.
+    """
+    groups: dict[str, list[int]] = {}
+    for i, s in enumerate(source_types):
+        groups.setdefault(s, []).append(i)
+    return groups
 
-    majority_profile = _majority_profile(train_graphs)
 
+def _score_against_consensus(
+    consensus_types: set, consensus_bigrams: set, majority_profile: dict[str, bool],
+    test_graphs: list[dict], test_names: list[str], test_source_types: list[str] | None = None,
+) -> tuple[dict[str, float], list[dict]]:
+    sources = test_source_types or [None] * len(test_graphs)
     node_f1s, edge_f1s = [], []
     error_cases = []
-    for graph, name in zip(test_graphs, test_names):
+    for graph, name, source in zip(test_graphs, test_names, sources):
         test_seq = _main_path_types(graph)
         test_types = set(test_seq)
         test_bigrams = _bigrams(test_seq)
@@ -168,10 +176,13 @@ def run_consensus_dfg(train_graphs: list[dict], test_graphs: list[dict], test_na
 
         structural_match = _structural_match(graph, majority_profile)
         if node_f1 < 0.6 or edge_f1 < 0.6:
-            error_cases.append({
+            case = {
                 "workflow_name": name, "node_f1": round(node_f1, 2), "edge_f1": round(edge_f1, 2),
                 "structural_match": round(structural_match, 2), "group": _mismatch_group(_structural_features(graph)),
-            })
+            }
+            if source is not None:
+                case["source_type"] = source
+            error_cases.append(case)
 
     metrics = {
         "node_f1": _avg(node_f1s),
@@ -180,8 +191,36 @@ def run_consensus_dfg(train_graphs: list[dict], test_graphs: list[dict], test_na
         "structural_match_rate": _avg([_structural_match(g, majority_profile) for g in test_graphs]),
     }
     error_cases.sort(key=lambda c: c["node_f1"])
+    return metrics, error_cases
+
+
+def run_consensus_dfg(
+    train_graphs: list[dict], test_graphs: list[dict], test_names: list[str],
+    test_source_types: list[str] | None = None,
+) -> dict[str, Any]:
+    train_seqs = [s for s in (_main_path_types(g) for g in train_graphs) if s]
+    consensus_seq = _pick_medoid_sequence(train_seqs)
+    consensus_bigrams = _bigrams(consensus_seq)
+    consensus_types = set(consensus_seq)
+
+    majority_profile = _majority_profile(train_graphs)
+
+    metrics, error_cases = _score_against_consensus(
+        consensus_types, consensus_bigrams, majority_profile, test_graphs, test_names, test_source_types,
+    )
+
+    metrics_by_source: dict[str, dict[str, float]] = {}
+    if test_source_types:
+        for source, idxs in _group_indices_by_source(test_source_types).items():
+            sub_metrics, _ = _score_against_consensus(
+                consensus_types, consensus_bigrams, majority_profile,
+                [test_graphs[i] for i in idxs], [test_names[i] for i in idxs],
+            )
+            metrics_by_source[source] = sub_metrics
+
     return {
         "metrics": metrics,
+        "metrics_by_source": metrics_by_source,
         "consensus_graph": _sequence_to_graph(consensus_seq),
         "error_analysis": error_cases[:10],
     }
@@ -231,24 +270,61 @@ def _build_event_log(graphs: list[dict], names: list[str]):
     graph -- `_graph_to_traces` supplies the per-workflow paths, this just lays them out as
     rows with a synthetic timestamp (pm4py only needs relative order, not real durations,
     since nothing about wall-clock time is collected in this product).
+
+    `_case_group` is the graph's own index in `graphs`/`names`, not `name` itself -- `name` is
+    only for display (error case labels) and two different records can legitimately share one
+    (e.g. two workflows both called "设备异常处理"), so it's unsafe to use for grouping rows
+    back to "which original graph did this case come from" (needed below for per-source-type
+    metric subsets). The index always uniquely identifies one graph.
     """
     import pandas as pd
 
     rows = []
-    for graph, name in zip(graphs, names):
+    for gi, (graph, name) in enumerate(zip(graphs, names)):
         for ti, trace in enumerate(_graph_to_traces(graph)):
-            case_id = f"{name}__{ti}"
+            case_id = f"{gi}__{ti}"
             for ei, node_type in enumerate(trace):
                 rows.append({
                     "case:concept:name": case_id,
                     "concept:name": node_type,
                     "time:timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(seconds=ei),
                     "_source_name": name,
+                    "_case_group": gi,
                 })
-    return pd.DataFrame(rows, columns=["case:concept:name", "concept:name", "time:timestamp", "_source_name"])
+    return pd.DataFrame(rows, columns=["case:concept:name", "concept:name", "time:timestamp", "_source_name", "_case_group"])
 
 
-def run_pm4py_method(method: str, train_graphs: list[dict], test_graphs: list[dict], test_names: list[str]) -> dict[str, Any]:
+def _pm4py_fitness_precision(log, net, im, fm) -> tuple[float, float]:
+    import pm4py
+
+    if log.empty:
+        return 0.0, 0.0
+    fitness = pm4py.fitness_token_based_replay(log, net, im, fm)["average_trace_fitness"]
+    precision = pm4py.precision_token_based_replay(log, net, im, fm)
+    return fitness, precision
+
+
+def _f_measure(a: float, b: float) -> float:
+    return (2 * a * b / (a + b)) if (a + b) else 0.0
+
+
+def _pm4py_metrics_for_indices(
+    idxs: list[int], test_log, test_graphs: list[dict], net, im, fm, majority_profile: dict[str, bool],
+) -> dict[str, float]:
+    sub_log = test_log[test_log["_case_group"].isin(idxs)]
+    fitness, precision = _pm4py_fitness_precision(sub_log, net, im, fm)
+    return {
+        "node_f1": round(fitness, 3),
+        "edge_f1": round(_f_measure(fitness, precision), 3),
+        "graph_structural_f1": round(precision, 3),
+        "structural_match_rate": _avg([_structural_match(test_graphs[i], majority_profile) for i in idxs]),
+    }
+
+
+def run_pm4py_method(
+    method: str, train_graphs: list[dict], test_graphs: list[dict], test_names: list[str],
+    test_source_types: list[str] | None = None,
+) -> dict[str, Any]:
     """Real process mining via the pm4py library (IMPLEMENTATION_PLAN.md §14), not a metrics
     swap on top of `run_consensus_dfg`'s hand-rolled baseline: `method` picks the actual mining
     algorithm (Inductive Miner or Heuristics Miner), and every metric below comes straight out
@@ -264,6 +340,12 @@ def run_pm4py_method(method: str, train_graphs: list[dict], test_graphs: list[di
     - structural_match_rate <- unchanged from run_consensus_dfg: still the majority-profile
                            comparison (has_decision/has_parallel/has_retry/is_linear), since
                            that check is about the *raw graphs*, not the mined model
+
+    `test_source_types` (PRD §14.1's "Combined Train allowed, Test must be reported separately
+    per source" rule): when given, `metrics_by_source` in the return value has one entry per
+    distinct source_type among the test set, computed by filtering the same discovered model's
+    conformance check down to just that source's test cases -- not a second model, the same
+    net/im/fm, just a different slice of the test log.
     """
     import pm4py
 
@@ -281,40 +363,33 @@ def run_pm4py_method(method: str, train_graphs: list[dict], test_graphs: list[di
 
     test_log = _build_event_log(test_graphs, test_names)
     majority_profile = _majority_profile(train_graphs)
+    sources = test_source_types or [None] * len(test_graphs)
 
     error_cases = []
     if not test_log.empty:
-        for graph, name in zip(test_graphs, test_names):
-            case_log = test_log[test_log["_source_name"] == name]
+        for gi, (graph, name, source) in enumerate(zip(test_graphs, test_names, sources)):
+            case_log = test_log[test_log["_case_group"] == gi]
             if case_log.empty:
                 continue
-            fit = pm4py.fitness_token_based_replay(case_log, net, im, fm)
-            prec = pm4py.precision_token_based_replay(case_log, net, im, fm)
-            trace_fitness = fit["average_trace_fitness"]
-            f_measure = (2 * trace_fitness * prec / (trace_fitness + prec)) if (trace_fitness + prec) else 0.0
-            if trace_fitness < 0.6 or f_measure < 0.6:
-                error_cases.append({
-                    "workflow_name": name, "node_f1": round(trace_fitness, 2), "edge_f1": round(f_measure, 2),
+            fitness, precision = _pm4py_fitness_precision(case_log, net, im, fm)
+            f_measure = _f_measure(fitness, precision)
+            if fitness < 0.6 or f_measure < 0.6:
+                case = {
+                    "workflow_name": name, "node_f1": round(fitness, 2), "edge_f1": round(f_measure, 2),
                     "structural_match": round(_structural_match(graph, majority_profile), 2),
                     "group": _mismatch_group(_structural_features(graph)),
-                })
+                }
+                if source is not None:
+                    case["source_type"] = source
+                error_cases.append(case)
 
-    if test_log.empty:
-        overall_fitness, overall_precision = 0.0, 0.0
-    else:
-        overall_fitness = pm4py.fitness_token_based_replay(test_log, net, im, fm)["average_trace_fitness"]
-        overall_precision = pm4py.precision_token_based_replay(test_log, net, im, fm)
-    overall_f = (
-        2 * overall_fitness * overall_precision / (overall_fitness + overall_precision)
-        if (overall_fitness + overall_precision) else 0.0
-    )
+    all_idxs = list(range(len(test_graphs)))
+    metrics = _pm4py_metrics_for_indices(all_idxs, test_log, test_graphs, net, im, fm, majority_profile)
 
-    metrics = {
-        "node_f1": round(overall_fitness, 3),
-        "edge_f1": round(overall_f, 3),
-        "graph_structural_f1": round(overall_precision, 3),
-        "structural_match_rate": _avg([_structural_match(g, majority_profile) for g in test_graphs]),
-    }
+    metrics_by_source: dict[str, dict[str, float]] = {}
+    if test_source_types:
+        for source, idxs in _group_indices_by_source(test_source_types).items():
+            metrics_by_source[source] = _pm4py_metrics_for_indices(idxs, test_log, test_graphs, net, im, fm, majority_profile)
 
     # Representative graph for display: play out the *actually discovered* model (not a
     # hand-picked medoid like run_consensus_dfg) and keep the shortest resulting trace, so the
@@ -327,6 +402,7 @@ def run_pm4py_method(method: str, train_graphs: list[dict], test_graphs: list[di
     error_cases.sort(key=lambda c: c["node_f1"])
     return {
         "metrics": metrics,
+        "metrics_by_source": metrics_by_source,
         "consensus_graph": _sequence_to_graph(consensus_seq),
         "error_analysis": error_cases[:10],
     }
