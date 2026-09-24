@@ -54,7 +54,16 @@ export interface Graph {
 export interface ConversationTurn {
   turn_id: string;
   role: "expert" | "assistant";
+  // Full plain text -- always present, and the only field older records have.
   text: string;
+  // Assistant turns only (optional): the same message split into layers so the bubble can
+  // render them separately -- restatement of what was recorded, the question, why it's
+  // asked, and the chips offered with it (kept so the history shows what was picked).
+  ack?: string | null;
+  question?: string | null;
+  why?: string | null;
+  chips?: string[] | null;
+  chip_mode?: "prefill" | "multi_select" | null;
 }
 
 export interface NextQuestion {
@@ -68,6 +77,8 @@ export interface NextQuestion {
   // "multi_select": chips toggle on/off, expert confirms the combined selection before it
   // goes into the draft box (Case Context B-group). Never auto-sends either way.
   chip_mode?: "prefill" | "multi_select" | null;
+  ack?: string | null;
+  why?: string | null;
 }
 
 export interface CaseContext {
@@ -78,6 +89,7 @@ export interface CaseContext {
   unknown_info: string | null;
   constraints: string | null;
   available_resources: string | null;
+  experience_notes?: string | null;
   detail_level: Record<string, string>;
   skipped_fields: string[];
 }

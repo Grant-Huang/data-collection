@@ -1,6 +1,7 @@
 // Desktop three-column layout (PRD 4/5: session history | conversation | DAG) for the
 // expert conversational collection loop. The left (history) and right (DAG) panels are
 // resizable and collapsible; the middle conversation column always fills what's left.
+import { useState } from "react";
 import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
@@ -34,6 +35,9 @@ export function SessionPage() {
     }
     await regenerateGraph();
   };
+
+  // Node ids to highlight on the DAG while the expert hovers a message's "图上 +N" tag.
+  const [highlightNodeIds, setHighlightNodeIds] = useState<string[] | null>(null);
 
   // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
   // only used the first time, before anything is stored -- after that the saved px width wins.
@@ -104,6 +108,8 @@ export function SessionPage() {
             <div style={{ flex: 1, minHeight: 0 }}>
               <ChatPanel
                 turns={active.turns}
+                graph={active.graph}
+                onHighlightNodes={setHighlightNodeIds}
                 nextQuestion={active.unresolved[0] ?? null}
                 onSend={sendTurn}
                 sending={sending}
@@ -159,7 +165,7 @@ export function SessionPage() {
                 背景信息收集中，还没开始画图……
               </div>
             ) : (
-              active && <DagView graph={active.graph} />
+              active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />
             )}
           </div>
         </div>

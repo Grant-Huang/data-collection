@@ -31,7 +31,7 @@ const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill"
   handoff: { fill: "#fff7ed", stroke: "#f97316", shape: "rect" },
 };
 
-function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean } }) {
+function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean; highlighted?: boolean } }) {
   const style = NODE_STYLE[data.nodeType];
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   return (
@@ -47,7 +47,13 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
         fontWeight: 700,
         color: "#1f2937",
         textAlign: "center",
-        boxShadow: data.confirmed ? "0 0 0 2px #0ca30c33" : "none",
+        // Highlight (hovering a chat message's "图上 +N" tag) wins over the confirmed ring.
+        boxShadow: data.highlighted
+          ? "0 0 0 3px #f59e0b88"
+          : data.confirmed
+            ? "0 0 0 2px #0ca30c33"
+            : "none",
+        transition: "box-shadow 0.15s",
         position: "relative",
       }}
     >
@@ -126,20 +132,30 @@ interface DagViewProps {
   // rest of a tall graph instead of the graph panning inside a fixed viewport. Used by the
   // mobile DAG page, which reads top-to-bottom and scrolls like the rest of the page.
   scrollable?: boolean;
+  // Nodes to emphasize (e.g. what the latest conversation turn added). Display-only; does
+  // not trigger a re-layout.
+  highlightNodeIds?: string[] | null;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const flowInstance = useRef<ReactFlowInstance | null>(null);
   const nodeCount = graph.nodes.length;
-  const edgeCount = graph.edges.length;
 
-  // Re-layout whenever the graph's shape changes; keying off node/edge counts (rather than
-  // deep-equality) is enough here since the mock guide service only ever appends structure.
-  const layoutKey = useMemo(() => `${nodeCount}-${edgeCount}`, [nodeCount, edgeCount]);
+  // Re-layout whenever the graph's content changes. Counts alone are not enough: the guide's
+  // structural questions rewire existing edges and fill in branch conditions / approver
+  // labels without changing how many nodes or edges there are.
+  const layoutKey = useMemo(
+    () =>
+      [
+        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}`),
+        ...graph.edges.map((e) => `${e.edge_id}:${e.from}>${e.to}:${e.edge_type}:${e.condition ?? ""}`),
+      ].join("|"),
+    [graph],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +171,14 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey]);
+
+  // Apply highlight on top of the laid-out nodes without re-running ELK.
+  const highlightKey = (highlightNodeIds ?? []).join(",");
+  useEffect(() => {
+    const ids = new Set(highlightNodeIds ?? []);
+    setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, highlighted: ids.has(n.id) } })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey, layoutKey]);
 
   const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {

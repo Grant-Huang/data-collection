@@ -4,6 +4,7 @@ endpoints here -- those are Phase 3/4).
 """
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import datetime, timezone
 
@@ -49,26 +50,24 @@ def _now() -> str:
 
 
 def _completion_score(record: dict) -> float:
-    """Simple, explainable completion heuristic for Phase 1: how far the Mock Guide Service's
-    fixed interview stages have progressed, since the real scoring model (PRD 8/13) is
-    out of scope until Phase 3. Kept as a plain ratio so it's easy to explain to the expert,
-    per the product principle that results always need a plain-language explanation.
-    """
-    stage = record["stage"]
-    order = [
-        "opening", "scenario_trigger", "scenario_goal", "scenario_success",
-        "context_known", "context_known_clarify", "context_unknown", "context_unknown_clarify",
-        "context_constraints", "context_constraints_clarify", "context_resources", "context_resources_clarify",
-        "trigger_detail", "main_path", "branch_check", "branch_condition_a",
-        "branch_condition_b", "merge_check", "parallel_check", "parallel_branch_a",
-        "parallel_branch_b", "approval_check", "approval_who", "retry_check",
-        "retry_target", "end_condition", "review",
-    ]
-    try:
-        idx = order.index(stage)
-    except ValueError:
-        idx = 0
-    return round(idx / (len(order) - 1), 2)
+    """Plain, explainable progress estimate -- see guide_service.progress."""
+    return guide_service.progress(record.get("_guide_state") or {"stage": record["stage"]}, record["graph"])
+
+
+def _assistant_turn(text: str, next_question: dict | None) -> dict:
+    """An assistant transcript entry. `text` stays the full plain message (what every
+    existing consumer reads); the layered fields let the chat bubble render the
+    restatement / question / why / chips separately."""
+    turn = {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": text}
+    if next_question:
+        turn.update({
+            "ack": next_question.get("ack"),
+            "question": next_question.get("question"),
+            "why": next_question.get("why"),
+            "chips": next_question.get("chips"),
+            "chip_mode": next_question.get("chip_mode"),
+        })
+    return turn
 
 
 @router.post("", response_model=WorkflowRecord)
@@ -84,7 +83,7 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "status": "collecting",
         "stage": state["stage"],
         "graph": graph,
-        "turns": [{"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": reply}],
+        "turns": [_assistant_turn(reply, next_question)],
         "unresolved": [next_question] if next_question else [],
         "completion": {"score": 0.0, "ready_for_confirmation": False},
         "validation": graph_validator.validate(graph),
@@ -211,11 +210,17 @@ def _correction_candidates(record: dict, limit: int = _MAX_CORRECTION_CANDIDATES
     return [(entry["turn_id"], _describe_turn(record, entry["turn_id"])) for entry in reversed(recent)]
 
 
-def _rollback_to_turn(record: dict, turn_id: str) -> str:
+def _rollback_to_turn(record: dict, turn_id: str) -> dict:
     """Removes every node/edge tagged with `turn_id` or any turn after it, restores the FSM
     state to what it was right before that turn was originally processed, truncates the
-    transcript and turn log to match, and returns the assistant question that led to that
-    turn in the first place (so the caller can re-ask it). Mutates `record` in place.
+    transcript and turn log to match, and returns the assistant turn that led to that turn
+    in the first place (so the caller can re-ask it, chips included). Mutates `record` in
+    place.
+
+    Newer log entries carry a full `graph_before` snapshot, which is restored as-is: the
+    guide's structural sweeps rewire *existing* edges (update_edge), and removing only the
+    nodes/edges tagged with later turns can't undo those rewires. Older entries without a
+    snapshot fall back to the tag-based removal.
     """
     log = record["_turn_state_log"]
     idx = next(i for i, entry in enumerate(log) if entry["turn_id"] == turn_id)
@@ -228,11 +233,15 @@ def _rollback_to_turn(record: dict, turn_id: str) -> str:
         {"op": "remove_edge", "edge_id": e["edge_id"]}
         for e in record["graph"]["edges"] if cutoff_ids & set(e.get("source_turn_ids", []))
     ]
-    record["graph"] = graph_ops.apply_ops(record["graph"], remove_ops)
+    if "graph_before" in log[idx]:
+        record["graph"] = copy.deepcopy(log[idx]["graph_before"])
+    else:
+        record["graph"] = graph_ops.apply_ops(record["graph"], remove_ops)
 
     turn_positions = {t["turn_id"]: i for i, t in enumerate(record["turns"])}
     pos = turn_positions[turn_id]
-    original_question = record["turns"][pos - 1]["text"] if pos > 0 else "好，我们重新梳理这一步。"
+    original_turn = (record["turns"][pos - 1] if pos > 0
+                     else {"text": "好，我们重新梳理这一步。", "question": "好，我们重新梳理这一步。"})
 
     # Everything from the rolled-back turn onward is truncated -- including the correction/
     # confirm/pick meta-turns that led here, since their content genuinely doesn't belong to
@@ -244,7 +253,7 @@ def _rollback_to_turn(record: dict, turn_id: str) -> str:
     record["_guide_state"] = state_before
     record["stage"] = state_before["stage"]
     record["case_context"] = state_before.get("pending", {}).get("case_context")
-    return original_question
+    return original_turn
 
 
 @router.post("/{workflow_id}/turns", response_model=TurnResponse)
@@ -257,6 +266,8 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
 
     state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
     expert_turn_id = uuid.uuid4().hex[:8]
+    history = list(record["turns"])
+    graph_before = copy.deepcopy(record["graph"])
     record["turns"].append({"turn_id": expert_turn_id, "role": "expert", "text": req.text})
 
     if state["stage"] == "awaiting_turn_selection":
@@ -268,7 +279,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         options = state.get("pending", {}).get("_correction_options", {})
         picked = req.text.strip()
         if picked not in options:
-            assistant_reply = "麻烦从上面列出的选项里选一个，我才知道要回退到哪一步。"
+            assistant_reply = "麻烦从下面的选项里选一个，我才知道要回退到哪一步。"
             next_question = {"target": "correction_turn_pick", "priority": "P0", "question": assistant_reply,
                               "chips": list(options.keys())}
             new_state, ops = state, []
@@ -281,27 +292,34 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             correction = state["pending"]["_correction"]
             restored_state = {"stage": correction["original_stage"], "cursor": correction["original_cursor"],
                                "pending": correction["original_pending"]}
-            record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": restored_state})
+            record.setdefault("_turn_state_log", []).append(
+                {"turn_id": expert_turn_id, "state_before": restored_state, "graph_before": graph_before})
             assistant_reply, ops, next_question, new_state = guide_service.handle_turn(
                 restored_state, correction["original_text"], turn_id=expert_turn_id, skip_correction_check=True,
+                graph=record["graph"], history=history,
             )
             record["graph"] = graph_ops.apply_ops(record["graph"], ops)
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
             record["case_context"] = new_state.get("pending", {}).get("case_context")
         else:
-            original_question = _rollback_to_turn(record, options[picked])
-            assistant_reply = f"好，已经回退。{original_question}"
+            original_turn = _rollback_to_turn(record, options[picked])
+            original_question = original_turn.get("question") or original_turn["text"]
+            assistant_reply = f"好，已经回退到那一步。{original_question}"
             new_state = record["_guide_state"]
             next_question = {"target": new_state["stage"], "priority": "P0", "question": original_question,
-                              "chips": None}
+                              "chips": original_turn.get("chips"), "chip_mode": original_turn.get("chip_mode"),
+                              "ack": "好，已经回退到那一步。", "why": original_turn.get("why")}
             ops = []
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
             record["case_context"] = new_state.get("pending", {}).get("case_context")
     else:
-        record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": state})
-        assistant_reply, ops, next_question, new_state = guide_service.handle_turn(state, req.text, turn_id=expert_turn_id)
+        record.setdefault("_turn_state_log", []).append(
+            {"turn_id": expert_turn_id, "state_before": state, "graph_before": graph_before})
+        assistant_reply, ops, next_question, new_state = guide_service.handle_turn(
+            state, req.text, turn_id=expert_turn_id, graph=record["graph"], history=history,
+        )
         record["graph"] = graph_ops.apply_ops(record["graph"], ops)
         record["_guide_state"] = new_state
         record["stage"] = new_state["stage"]
@@ -322,8 +340,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
 
-    assistant_turn_id = uuid.uuid4().hex[:8]
-    record["turns"].append({"turn_id": assistant_turn_id, "role": "assistant", "text": assistant_reply})
+    record["turns"].append(_assistant_turn(assistant_reply, next_question))
 
     issues = graph_validator.validate(record["graph"])
     score = _completion_score(record)

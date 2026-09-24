@@ -1,8 +1,9 @@
 // PRD 4.2/4.3: mobile session page = default home. Minimal top bar (hamburger + name + info),
 // message list identical to desktop, capsule input row with mic (PRD 4.3.1).
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
+import { mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 
 interface Props {
@@ -17,11 +18,15 @@ interface Props {
 
 export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged }: Props) {
   const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
   const nextQuestion = active?.unresolved[0] ?? null;
 
-  function handleChip(chip: string) {
-    setDraft(chip);
+  // Same rule as desktop: chips prefill an editable draft (appending to anything the expert
+  // already typed), never auto-send. Multi-select is handled inside the shared QuickReplies.
+  function handleChip(pick: string) {
+    setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   function handleSend(text?: string) {
@@ -68,42 +73,26 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
       )}
 
       {active ? (
-        <MessageList turns={active.turns} />
+        <MessageList
+          turns={active.turns}
+          graph={active.graph}
+          activeQuestion={confirmed ? null : nextQuestion}
+          onChipPick={handleChip}
+          sending={sending}
+        />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
           点击左上角「☰」新建一个流程开始讲述
         </div>
       )}
 
-      {nextQuestion?.chips && !confirmed && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "0 14px 8px" }}>
-          {nextQuestion.chips.map((chip) => (
-            <button
-              key={chip}
-              onClick={() => handleChip(chip)}
-              style={{
-                border: "1.3px solid #2a78d6",
-                color: "#2a78d6",
-                background: "#eef4fc",
-                borderRadius: 999,
-                padding: "8px 14px",
-                fontSize: 13,
-                cursor: "pointer",
-                minHeight: 44,
-              }}
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderTop: "1px solid #e5e7eb" }}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", background: "#f1f3f5", borderRadius: 999, padding: "4px 6px 4px 16px" }}>
           <input
+            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSend()}
             disabled={confirmed || !active}
             placeholder={confirmed ? "该会话已确认提交" : "点击气泡快速填入，或打字/语音输入"}
             style={{ flex: 1, border: "none", background: "none", outline: "none", fontSize: 14, minWidth: 0 }}
