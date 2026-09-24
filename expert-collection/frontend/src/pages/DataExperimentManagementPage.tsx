@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import type { DatasetVersionSummary, Settings, SourceType } from "../api/types";
 import { ImportPanel } from "../components/ImportPanel";
 import { PillTabs, UnderlineTabs } from "../components/TabBar";
+import { TipIcon } from "../components/TipIcon";
 
 type MainTab = "dataset" | "experiment";
 type DatasetSubTab = "import_export" | "quality_params";
@@ -130,14 +131,40 @@ export function DataExperimentManagementPage() {
               <section style={sectionCard}>
                 <div style={sectionTitle}>质量评分与发布参数</div>
                 <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
-                  这些参数真实生效——改动只影响下一次发布/计算，不会补算历史分数（PRD 17.4）。
+                  前两项真实生效——改动只影响下一次发布/计算，不会补算历史分数（PRD 17.4）。后三项（Completion Score 完成门槛、发布提示阈值）目前只是存起来，还没有接到任何实际判断逻辑上，属于预留参数。
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <NumberField label="小样本评分阈值（条）" value={settings.quality_params.min_sample_size} onSave={(v) => saveQualityParams({ min_sample_size: v })} />
-                  <NumberField label="近重复文本相似度阈值" value={settings.quality_params.near_dup_text_threshold} step={0.01} onSave={(v) => saveQualityParams({ near_dup_text_threshold: v })} />
-                  <NumberField label="Completion Score 完成门槛" value={settings.quality_params.completion_threshold} onSave={(v) => saveQualityParams({ completion_threshold: v })} />
-                  <NumberField label="数据集发布提示阈值（新增条数）" value={settings.quality_params.publish_prompt_count} onSave={(v) => saveQualityParams({ publish_prompt_count: v })} />
-                  <NumberField label="数据集发布提示阈值（天数）" value={settings.quality_params.publish_prompt_days} onSave={(v) => saveQualityParams({ publish_prompt_days: v })} />
+                  <NumberField
+                    label="小样本评分阈值（条）"
+                    value={settings.quality_params.min_sample_size}
+                    tip="数据集记录数低于这个数量时，Dashboard 不计算总体质量分——样本太少时分数波动大，容易误导判断，这时会诚实显示「样本量不足，暂不评分」。"
+                    onSave={(v) => saveQualityParams({ min_sample_size: v })}
+                  />
+                  <NumberField
+                    label="近重复文本相似度阈值"
+                    value={settings.quality_params.near_dup_text_threshold}
+                    step={0.01}
+                    tip="导入公共集时，两条记录的触发场景描述文本相似度（Jaccard）超过这个阈值（0~1，越接近 1 要求越像）就会被标记为疑似近重复，提示人工复核，但不会自动拦截导入。"
+                    onSave={(v) => saveQualityParams({ near_dup_text_threshold: v })}
+                  />
+                  <NumberField
+                    label="Completion Score 完成门槛"
+                    value={settings.quality_params.completion_threshold}
+                    tip="预留参数：按命名意图，本应是专家采集会话完成度分数（0~100）的达标门槛。当前会话能否确认实际由采集流程的 review 阶段和 Graph 结构校验决定，不读这个数字——改这里暂时不会影响任何行为。"
+                    onSave={(v) => saveQualityParams({ completion_threshold: v })}
+                  />
+                  <NumberField
+                    label="数据集发布提示阈值（新增条数）"
+                    value={settings.quality_params.publish_prompt_count}
+                    tip="预留参数：按命名意图，本应是草稿池新增记录数达到这个条数时提醒「可以发布新版本了」。当前界面还没有实现这个提醒，改这里暂时不会影响任何行为。"
+                    onSave={(v) => saveQualityParams({ publish_prompt_count: v })}
+                  />
+                  <NumberField
+                    label="数据集发布提示阈值（天数）"
+                    value={settings.quality_params.publish_prompt_days}
+                    tip="预留参数：按命名意图，本应是距上次发布超过这个天数就提醒该发布新版本了。当前界面还没有实现这个提醒，改这里暂时不会影响任何行为。"
+                    onSave={(v) => saveQualityParams({ publish_prompt_days: v })}
+                  />
                 </div>
               </section>
             )}
@@ -147,9 +174,22 @@ export function DataExperimentManagementPage() {
         {mainTab === "experiment" && settings && (
           <section style={sectionCard}>
             <div style={sectionTitle}>实验运行参数</div>
+            <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
+              这两项目前只是存起来，还没有接到实验执行逻辑上（当前实验是同步顺序执行，没有并发调度，也没有超时强制终止），属于预留参数。
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <NumberField label="并发实验数上限" value={settings.run_params.max_concurrent_experiments} onSave={(v) => saveRunParams({ max_concurrent_experiments: v })} />
-              <NumberField label="单次 Run 超时时间（秒）" value={settings.run_params.run_timeout_seconds} onSave={(v) => saveRunParams({ run_timeout_seconds: v })} />
+              <NumberField
+                label="并发实验数上限"
+                value={settings.run_params.max_concurrent_experiments}
+                tip="预留参数：按命名意图，本应限制系统同时执行的实验 Run 数量。当前实验是逐个同步执行的，没有并发调度，改这里暂时不会影响任何行为。"
+                onSave={(v) => saveRunParams({ max_concurrent_experiments: v })}
+              />
+              <NumberField
+                label="单次 Run 超时时间（秒）"
+                value={settings.run_params.run_timeout_seconds}
+                tip="预留参数：按命名意图，本应是单次实验运行超过这个秒数就强制标记失败。当前没有超时强制终止逻辑，改这里暂时不会影响任何行为。"
+                onSave={(v) => saveRunParams({ run_timeout_seconds: v })}
+              />
             </div>
           </section>
         )}
@@ -164,10 +204,13 @@ export function DataExperimentManagementPage() {
   );
 }
 
-function NumberField({ label, value, step, onSave }: { label: string; value: number; step?: number; onSave: (v: number) => void }) {
+function NumberField({ label, value, step, tip, onSave }: { label: string; value: number; step?: number; tip?: string; onSave: (v: number) => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      <div style={{ width: 200, fontSize: 12.5, color: "#374151", fontWeight: 600, flexShrink: 0 }}>{label}</div>
+      <div style={{ width: 200, fontSize: 12.5, color: "#374151", fontWeight: 600, flexShrink: 0, display: "flex", alignItems: "center" }}>
+        {label}
+        {tip && <TipIcon text={tip} />}
+      </div>
       <input type="number" step={step ?? 1} defaultValue={value} onBlur={(e) => onSave(Number(e.target.value))} style={inputStyle} />
     </div>
   );

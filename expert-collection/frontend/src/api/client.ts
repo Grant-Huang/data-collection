@@ -60,6 +60,10 @@ export const api = {
     req<DatasetVersionSummary>("POST", "/api/datasets/publish", { source_type: sourceType, actor_role: actorRole }),
   archiveDatasetVersion: (versionId: string) =>
     req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/archive`),
+  renameDatasetVersion: (versionId: string, name: string, actorRole?: string) =>
+    req<DatasetVersionSummary>("POST", `/api/datasets/versions/${versionId}/rename`, { name, actor_role: actorRole }),
+  deleteDatasetVersion: (versionId: string, actorRole?: string) =>
+    req<{ ok: boolean }>("DELETE", `/api/datasets/versions/${versionId}?actor_role=${encodeURIComponent(actorRole ?? "unknown")}`),
   markDatasetVersionGold: (versionId: string, isGold: boolean, actorRole?: string) =>
     req<DatasetVersionSummary>(
       "POST",

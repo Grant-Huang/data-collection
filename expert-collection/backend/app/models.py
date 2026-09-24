@@ -255,6 +255,7 @@ class DatasetReadiness(BaseModel):
 class DatasetVersionSummary(BaseModel):
     id: str
     source_type: SourceType
+    name: str
     version_number: int
     workflow_count: int
     total_steps: int
@@ -268,6 +269,11 @@ class DatasetVersionSummary(BaseModel):
 class PublishDatasetRequest(BaseModel):
     source_type: SourceType = "expert_collected"
     name: Optional[str] = None
+    actor_role: Optional[str] = None
+
+
+class RenameDatasetVersionRequest(BaseModel):
+    name: str
     actor_role: Optional[str] = None
 
 

@@ -19,6 +19,7 @@ from ..models import (
     DuplicateMatch,
     ImportConfirmRequest,
     PublishDatasetRequest,
+    RenameDatasetVersionRequest,
 )
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -96,6 +97,7 @@ def _to_summary(version: dict) -> DatasetVersionSummary:
     return DatasetVersionSummary(
         id=version["id"],
         source_type=version["source_type"],
+        name=version.get("name") or version["source_type"],
         version_number=version["version_number"],
         workflow_count=version["workflow_count"],
         total_steps=version["total_steps"],
@@ -162,6 +164,44 @@ def archive_version(version_id: str, actor_role: str = "unknown") -> DatasetVers
     audit.log(actor_role, "dataset_archive", {"dataset_version_id": version_id})
 
     return _to_summary(version)
+
+
+@router.post("/versions/{version_id}/rename", response_model=DatasetVersionSummary)
+def rename_version(version_id: str, req: RenameDatasetVersionRequest) -> DatasetVersionSummary:
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="名称不能为空")
+    db.rename_dataset_version(version_id, name)
+    version["name"] = name
+
+    audit.log(req.actor_role or "unknown", "dataset_rename", {"dataset_version_id": version_id, "name": name})
+
+    return _to_summary(version)
+
+
+@router.delete("/versions/{version_id}")
+def delete_version(version_id: str, actor_role: str = "unknown") -> dict:
+    """Hard delete -- unlike archive (reversible-in-spirit, just hidden from the default
+    list), this permanently removes the version row and its prior annotations. Scoped to
+    public_extracted in the frontend (each import is its own standalone dataset there,
+    unlike expert_collected's single continuously-published version), but not enforced here
+    since there's no real permission system yet (same honest gap as every other admin
+    action in this codebase).
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    db.delete_dataset_version(version_id)
+
+    audit.log(actor_role, "dataset_delete", {
+        "dataset_version_id": version_id, "source_type": version["source_type"],
+        "version_number": version["version_number"], "name": version.get("name"),
+    })
+
+    return {"ok": True}
 
 
 @router.post("/versions/{version_id}/mark-gold", response_model=DatasetVersionSummary)

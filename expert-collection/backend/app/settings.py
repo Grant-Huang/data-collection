@@ -61,7 +61,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # than guide_service's one-sentence parse, so it defaults to C_standard, not L.
         "graph_regenerate": {"level": "C_standard", "enabled": True, "temperature": 0.1},
     },
-    "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime"},
+    "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime", "api_key": ""},
     "quality_params": {
         "min_sample_size": 20,
         "near_dup_text_threshold": 0.85,
@@ -145,13 +145,28 @@ def _mask_key(value: str) -> str:
 
 
 def mask_for_display(settings: dict) -> dict:
-    """Never echo API keys back in plaintext (PRD 17.2). Only llm_levels carry a key now --
-    llm_slots have nothing secret in them (level reference + enabled + temperature).
+    """Never echo secrets back in plaintext (PRD 17.2): API keys for every llm_level and the
+    voice service, plus the "L" level's endpoint -- for a local model that's a filesystem
+    path/internal address, not something that should show up in plaintext on screen either.
+    C_standard/C_flagship's endpoint is a public API URL, not a local path, so it's left as-is.
     """
     masked = {**settings, "llm_levels": {}}
     for level, cfg in settings.get("llm_levels", {}).items():
-        masked["llm_levels"][level] = {
+        level_out = {
             **cfg, "api_key": _mask_key(cfg.get("api_key", "")), "api_key_set": bool(cfg.get("api_key")),
         }
-        del masked["llm_levels"][level]["api_key"]
+        del level_out["api_key"]
+        if level == "L":
+            # Fully hidden, not partially revealed like _mask_key does for API keys: a local
+            # file path's tail characters (extension, folder name) are still identifying
+            # information, and the frontend only needs the boolean to decide what to show.
+            level_out["endpoint"] = ""
+            level_out["endpoint_set"] = bool(cfg.get("endpoint"))
+        masked["llm_levels"][level] = level_out
+
+    voice = dict(settings.get("voice", {}))
+    voice["api_key_set"] = bool(voice.get("api_key"))
+    voice.pop("api_key", None)
+    masked["voice"] = voice
+
     return masked

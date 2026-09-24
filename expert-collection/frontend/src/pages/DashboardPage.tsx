@@ -111,6 +111,27 @@ export function DashboardPage({ role }: { role: Role }) {
     }
   }
 
+  async function handleRename(versionId: string, name: string) {
+    setError(null);
+    try {
+      await api.renameDatasetVersion(versionId, name, role);
+      await refresh(sourceType);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleDelete(versionId: string, name: string) {
+    if (!window.confirm(`确定要永久删除数据集「${name}」吗？此操作不可恢复，会一并删除它下面的标注记录。`)) return;
+    setError(null);
+    try {
+      await api.deleteDatasetVersion(versionId, role);
+      await refresh(sourceType);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   const latest = versions[0] ?? null;
   const readiness = latest?.readiness ?? null;
 
@@ -140,6 +161,24 @@ export function DashboardPage({ role }: { role: Role }) {
             {latest ? `最近更新: ${new Date(latest.created_at).toLocaleString("zh-CN")}` : "尚未发布任何版本"}
           </div>
         </div>
+
+        {sourceType === "public_extracted" && versions.length > 0 && (
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 20px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>公共集数据集</div>
+            <div>
+              {versions.map((v) => (
+                <PublicDatasetRow
+                  key={v.id}
+                  version={v}
+                  isLatest={v.id === latest?.id}
+                  canManage={role === "admin"}
+                  onRename={(name) => handleRename(v.id, name)}
+                  onDelete={() => handleDelete(v.id, v.name)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {priorRecords.length > 0 && (
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
@@ -385,6 +424,76 @@ export function DashboardPage({ role }: { role: Role }) {
           onClose={() => setAnnotatingRecordId(null)}
           onSaved={() => refresh(sourceType)}
         />
+      )}
+    </div>
+  );
+}
+
+// Each public_extracted import is its own standalone dataset (unlike expert_collected's
+// single continuously-published version), so it gets per-row rename/delete here rather than
+// the archive-current-version flow above. Rename/delete are admin-only actions, same as
+// archive and Gold marking elsewhere on this page.
+function PublicDatasetRow({
+  version, isLatest, canManage, onRename, onDelete,
+}: {
+  version: DatasetVersionSummary; isLatest: boolean; canManage: boolean;
+  onRename: (name: string) => void; onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(version.name);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, minWidth: 0 }}>
+        {editing ? (
+          <>
+            <input
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              style={{ border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 8px", fontSize: 12.5 }}
+              autoFocus
+            />
+            <button
+              onClick={() => { if (draftName.trim()) { onRename(draftName.trim()); setEditing(false); } }}
+              style={{ border: "none", background: "#2a78d6", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}
+            >
+              保存
+            </button>
+            <button
+              onClick={() => { setDraftName(version.name); setEditing(false); }}
+              style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}
+            >
+              取消
+            </button>
+          </>
+        ) : (
+          <>
+            <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version.name}</span>
+            <span style={{ color: "#94a3b8", flexShrink: 0 }}>
+              v{version.version_number} · {version.workflow_count} 条 · {new Date(version.created_at).toLocaleDateString("zh-CN")}
+            </span>
+            {isLatest && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2a78d6", border: "1px solid #bfdbfe", borderRadius: 999, padding: "1px 8px", flexShrink: 0 }}>
+                当前
+              </span>
+            )}
+            {version.is_gold && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", flexShrink: 0 }}>
+                ★ Gold
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {canManage && !editing && (
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setEditing(true)} style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}>
+            改名
+          </button>
+          <button onClick={onDelete} style={{ border: "1px solid #fecaca", background: "#fff", color: "#d03b3b", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}>
+            删除
+          </button>
+        </div>
       )}
     </div>
   );

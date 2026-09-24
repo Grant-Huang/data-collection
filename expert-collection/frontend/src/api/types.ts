@@ -232,6 +232,7 @@ export interface DatasetReadiness {
 export interface DatasetVersionSummary {
   id: string;
   source_type: SourceType;
+  name: string;
   version_number: number;
   workflow_count: number;
   total_steps: number;
@@ -411,6 +412,10 @@ export interface ComparisonResult {
 // the same endpoint/model/key into every slot that happens to use the same connection.
 export interface LlmLevelConfig {
   endpoint?: string;
+  // Only set (true/false) for level "L": its endpoint is a local file path/internal address,
+  // masked the same way api_key is -- see settings.py's mask_for_display. Other levels' endpoint
+  // is a public API URL and is returned in plaintext.
+  endpoint_set?: boolean;
   model_name?: string;
   api_key_set: boolean;
 }
@@ -424,7 +429,7 @@ export interface LlmSlotConfig {
 export interface Settings {
   llm_levels: Record<string, LlmLevelConfig>;
   llm_slots: Record<string, LlmSlotConfig>;
-  voice: { workspace_id: string; realtime_model: string };
+  voice: { workspace_id: string; realtime_model: string; api_key_set: boolean };
   quality_params: {
     min_sample_size: number;
     near_dup_text_threshold: number;

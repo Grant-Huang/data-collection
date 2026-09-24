@@ -7,6 +7,13 @@ import { api } from "../api/client";
 import { LLM_LEVEL_LABELS, LLM_SLOT_LABELS } from "../api/types";
 import type { AuditLogEntry, LlmLevelConfig, LlmSlotConfig, Settings } from "../api/types";
 import { PillTabs, UnderlineTabs } from "../components/TabBar";
+import { TipIcon } from "../components/TipIcon";
+
+const LEVEL_TIPS: Record<string, string> = {
+  L: "本地部署的小模型：免费、响应快，但能力有限。适合「专家采集会话引导」这类高频、低风险的辅助任务。",
+  C_standard: "云端 API 模型，标准档：能力强于 L，按量计费。适合 Error Analysis 归纳这类中等复杂度的任务。",
+  C_flagship: "云端 API 模型，旗舰档：能力最强，成本也最高。适合实验结果解读这类对质量要求更高的任务。",
+};
 
 type MainTab = "model" | "permissions" | "system";
 type ModelSubTab = "config" | "reference" | "params";
@@ -25,6 +32,7 @@ const MODEL_SUB_TABS: { key: ModelSubTab; label: string }[] = [
 
 const ACTION_LABELS: Record<string, string> = {
   dataset_publish: "数据集发布", dataset_archive: "数据集归档", dataset_import: "数据集导入",
+  dataset_rename: "数据集改名", dataset_delete: "数据集删除",
   dataset_mark_gold: "标记 Gold 版本", dataset_unmark_gold: "取消 Gold 标记", experiment_create: "创建实验",
 };
 
@@ -124,18 +132,24 @@ export function SystemManagementPage() {
                 <section style={sectionCard}>
                   <h2 style={sectionTitle}>语音识别配置</h2>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <FieldRow label="Workspace ID">
+                    <FieldRow label="Workspace ID" tip="阿里云百炼的业务空间 ID（不是账号 ID），用来拼接语音服务的专属域名。格式类似 llm-sa1qz61xz9dg5dd3，在百炼控制台右上角用户菜单里能看到。">
                       <input
                         defaultValue={settings.voice.workspace_id}
                         onBlur={(e) => api.updateSettings({ voice: { workspace_id: e.target.value } }).then(setSettings)}
                         style={inputStyle}
                       />
                     </FieldRow>
-                    <FieldRow label="Realtime 模型">
+                    <FieldRow label="Realtime 模型" tip="调用的语音识别/对话模型名称，例如 qwen3.5-omni-flash-realtime。不同模型的响应速度、能力和价格不同。">
                       <input
                         defaultValue={settings.voice.realtime_model}
                         onBlur={(e) => api.updateSettings({ voice: { realtime_model: e.target.value } }).then(setSettings)}
                         style={inputStyle}
+                      />
+                    </FieldRow>
+                    <FieldRow label="API Key" tip="连接语音服务需要的密钥（跟大模型的 API Key 是两回事，两边都要各自配置）。已设置后这里不会回显明文，留空保存即代表不改动。">
+                      <VoiceApiKeyField
+                        keySet={settings.voice.api_key_set}
+                        onSave={(apiKey) => api.updateSettings({ voice: { api_key: apiKey } }).then(setSettings)}
                       />
                     </FieldRow>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>
@@ -190,15 +204,20 @@ export function SystemManagementPage() {
           <>
             <section style={sectionCard}>
               <h2 style={sectionTitle}>系统运行参数</h2>
+              <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
+                这两项目前只是存起来，还没有接到实际的清理/超时逻辑上，属于预留参数——下面的审计日志表目前不会自动清理，移动端会话也没有自动过期。
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <NumberField
                   label="审计日志保留期限（天）"
                   value={settings.run_params.audit_log_retention_days}
+                  tip="预留参数：按命名意图，本应是超过这个天数的审计日志会被清理。当前没有清理任务，日志会一直保留，改这里暂时不会影响任何行为。"
                   onSave={(v) => saveRunParams({ audit_log_retention_days: v })}
                 />
                 <NumberField
                   label="移动端会话超时（分钟，0=不限制）"
                   value={settings.run_params.mobile_session_timeout_minutes ?? 0}
+                  tip="预留参数：按命名意图，本应是手机端会话闲置超过这个时长自动结束。当前没有会话过期逻辑，改这里暂时不会影响任何行为。"
                   onSave={(v) => saveRunParams({ mobile_session_timeout_minutes: v || null })}
                 />
               </div>
@@ -249,15 +268,28 @@ export function SystemManagementPage() {
 }
 
 function LlmLevelCard({ level, cfg, onSave, onTest, testResult }: { level: string; cfg: LlmLevelConfig; onSave: (patch: Partial<LlmLevelConfig> & { api_key?: string }) => void; onTest: () => void; testResult?: string }) {
-  const [endpoint, setEndpoint] = useState(cfg.endpoint ?? "");
+  const isLocal = level === "L";
+  // "L"'s endpoint is a local model's actual file path/internal address, masked by the
+  // backend the same way an API key is (see settings.py's mask_for_display) -- never start
+  // this field pre-filled with a real path, only send a new value if the admin typed one.
+  const [endpoint, setEndpoint] = useState(isLocal ? "" : cfg.endpoint ?? "");
   const [modelName, setModelName] = useState(cfg.model_name ?? "");
   const [apiKey, setApiKey] = useState("");
 
   return (
     <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 14 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{LLM_LEVEL_LABELS[level] ?? level}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center" }}>
+        {LLM_LEVEL_LABELS[level] ?? level}
+        {LEVEL_TIPS[level] && <TipIcon text={LEVEL_TIPS[level]} />}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input placeholder={level === "L" ? "内网服务地址" : "API 端点"} value={endpoint} onChange={(e) => setEndpoint(e.target.value)} style={inputStyle} />
+        <input
+          placeholder={isLocal ? (cfg.endpoint_set ? "已设置（留空保持不变）" : "内网服务地址 / 模型文件路径") : "API 端点"}
+          type={isLocal ? "password" : "text"}
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          style={inputStyle}
+        />
         <input placeholder="模型名称" value={modelName} onChange={(e) => setModelName(e.target.value)} style={inputStyle} />
         {level !== "L" && (
           <input placeholder={cfg.api_key_set ? "已设置（留空保持不变）" : "API Key"} type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} style={inputStyle} />
@@ -265,7 +297,7 @@ function LlmLevelCard({ level, cfg, onSave, onTest, testResult }: { level: strin
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
         <button
-          onClick={() => onSave({ endpoint, model_name: modelName, ...(apiKey ? { api_key: apiKey } : {}) })}
+          onClick={() => onSave({ ...(isLocal ? (endpoint ? { endpoint } : {}) : { endpoint }), model_name: modelName, ...(apiKey ? { api_key: apiKey } : {}) })}
           style={primaryBtnSmall}
         >
           保存
@@ -288,7 +320,10 @@ function LlmSlotRow({ slot, cfg, levels, onSave }: { slot: string; cfg: LlmSlotC
       <select value={level} onChange={(e) => setLevel(e.target.value)} style={{ ...inputStyle, width: 140 }}>
         {levels.map((l) => <option key={l} value={l}>{LLM_LEVEL_LABELS[l] ?? l}</option>)}
       </select>
-      <input type="number" step={0.1} value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} style={{ ...inputStyle, width: 80 }} title="temperature" />
+      <span style={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <input type="number" step={0.1} value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} style={{ ...inputStyle, width: 80 }} title="temperature" />
+        <TipIcon text="Temperature（发散程度）：越接近 0 回答越严谨保守、可复现；越接近 1 回答越随机多样。0.0~0.2 适合需要精确结构化输出的任务，0.3 以上适合需要归纳/解读的文字生成任务。" />
+      </span>
       <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#374151" }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         启用
@@ -298,18 +333,35 @@ function LlmSlotRow({ slot, cfg, levels, onSave }: { slot: string; cfg: LlmSlotC
   );
 }
 
-function FieldRow({ label, children }: { label: string; children: ReactNode }) {
+function VoiceApiKeyField({ keySet, onSave }: { keySet: boolean; onSave: (apiKey: string) => void }) {
+  const [value, setValue] = useState("");
+  return (
+    <input
+      type="password"
+      placeholder={keySet ? "已设置（留空保持不变）" : "API Key"}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => { if (value) { onSave(value); setValue(""); } }}
+      style={inputStyle}
+    />
+  );
+}
+
+function FieldRow({ label, tip, children }: { label: string; tip?: string; children: ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      <div style={{ width: 140, fontSize: 12.5, color: "#374151", fontWeight: 600, flexShrink: 0 }}>{label}</div>
+      <div style={{ width: 140, fontSize: 12.5, color: "#374151", fontWeight: 600, flexShrink: 0, display: "flex", alignItems: "center" }}>
+        {label}
+        {tip && <TipIcon text={tip} />}
+      </div>
       {children}
     </div>
   );
 }
 
-function NumberField({ label, value, step, onSave }: { label: string; value: number; step?: number; onSave: (v: number) => void }) {
+function NumberField({ label, value, step, tip, onSave }: { label: string; value: number; step?: number; tip?: string; onSave: (v: number) => void }) {
   return (
-    <FieldRow label={label}>
+    <FieldRow label={label} tip={tip}>
       <input type="number" step={step ?? 1} defaultValue={value} onBlur={(e) => onSave(Number(e.target.value))} style={inputStyle} />
     </FieldRow>
   );
