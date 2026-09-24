@@ -335,8 +335,7 @@ export const IMPLEMENTED_METHODS: ExperimentMethod[] = ["consensus_dfg", "pm4py_
 
 export interface CreateExperimentRequest {
   name: string;
-  source_type: SourceType;
-  dataset_version_id: string;
+  dataset_version_ids: string[];
   input_version: InputVersion;
   representation: Representation;
   method: ExperimentMethod;
@@ -355,8 +354,9 @@ export interface CreateExperimentRequest {
 export interface ExperimentSummary {
   id: string;
   name: string;
-  dataset_version_id: string;
+  dataset_version_ids: string[];
   dataset_label: string;
+  source_types: SourceType[];
   method: ExperimentMethod;
   model_name: string | null;
   status: ExperimentStatus;
@@ -372,6 +372,7 @@ export interface ErrorCase {
   edge_f1: number;
   structural_match: number;
   group: string;
+  source_type?: SourceType;
 }
 
 export interface ErrorCluster {
@@ -381,7 +382,6 @@ export interface ErrorCluster {
 }
 
 export interface ExperimentDetail extends ExperimentSummary {
-  source_type: SourceType;
   input_version: InputVersion;
   representation: Representation;
   prompt_version: string | null;
@@ -390,7 +390,10 @@ export interface ExperimentDetail extends ExperimentSummary {
   train_split: number;
   train_count: number | null;
   test_count: number | null;
+  train_count_by_source: Partial<Record<SourceType, number>>;
+  test_count_by_source: Partial<Record<SourceType, number>>;
   metrics: Record<string, number>;
+  metrics_by_source: Partial<Record<SourceType, Record<string, number>>>;
   explanation: string | null;
   explanation_edited: boolean;
   consensus_graph: Graph | null;

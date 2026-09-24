@@ -464,6 +464,21 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 **已验证**：真实 HTTP 联调，自建 OpenAI 兼容 stub 服务器模拟 5 种场景——① 完全没填 endpoint/model_name → `not_configured` 提示；② 填了一个真实拒绝连接的地址（`127.0.0.1:1`）→ `timeout` 提示，带上真实的 `Connection refused` 系统错误；③ stub 返回 401 → `http_error` 提示；④ stub 返回不是合法 JSON 的内容 → `bad_response` 提示；⑤ stub 正常返回 `{"choices":[{"message":{"content":"ok"}}]}` → `ok=True`，消息里带着模型的真实回复 `'ok'`。五种结果都是真实调用的产物，不是分支硬编码出来的。测试完成后把设置里的测试配置清空，关闭了 stub 服务器和测试后端进程。
 
+### §14.1 实验支持多数据集 + Combined Train + 按来源分别报告
+
+跟用户讨论"实验能不能选多个数据集"时，先查代码确认了实验中心的现状（不是先设计再实现）：**实验执行引擎当时只认专家采集集，选 `public_extracted` 版本会静默产出空的训练/测试集**——`routers/experiments.py::_run_experiment` 直接 `db.get(workflow_id)` 查 `workflows` 表，这张表只有 `expert_collected` 的记录；公共集记录整批存成 JSON 塞在 `dataset_versions.records` 里，压根查不到。这不是本轮引入的新 bug，是长期存在但没人跑过公共集实验所以没暴露的问题。
+
+进一步查 PRD 第 14.1 节确认"多数据集"不是随便设计的产品需求，原文写了硬性规则：**"两类数据必须分开跑：Public 单独实验、Expert 单独实验；允许 Combined Train，但 Test 仍必须分别报告，禁止只给一个混合总分"**，跟第 14.4 节"结果页 Dataset Slice"里的"Public vs Expert 切片"维度对应。所以做的不是一个通用的"合并数据集"功能，是这条具体规则：**训练集可以合并（可跨来源多选），测试集必须按来源单独持出、单独算指标，整体指标之外必须同时提供分来源指标**。
+
+**实现**：
+- `CreateExperimentRequest.dataset_version_id: str` → `dataset_version_ids: list[str]`（至少一个），删掉不再有意义的顶层 `source_type` 字段——每个版本自己的 `source_type` 才是权威来源，多选之后一个顶层字段已经描述不了这个请求了。
+- `routers/experiments.py::_run_experiment`：改用 `dataset_records.records_for_export()` 读每个选中的版本（顺带修好了"公共集实验产出空集"这个 bug），按 `version["source_type"]` 分组，**每组各自做一次 `split_train_test`**（保证测试集里每个来源都有代表，不是先合并再整体切一刀），所有来源的训练集合并进同一个训练池，测试集保留来源标签、不合并。重复记录去重（数据集版本是累积快照，多选 v1+v2 可能选到同一条记录，按 `record_id` 只算一次）。
+- `experiments.py`（挖掘引擎）：`run_consensus_dfg`/`run_pm4py_method` 新增可选的 `test_source_types` 参数，返回值新增 `metrics_by_source`——不是重新跑一遍挖掘（挖掘只做一次，用合并后的训练池），是用同一个挖掘出的共识结构/模型，对测试集的不同来源子集分别做一次一致性检验。`_build_event_log` 原来用 `name` 做 case 分组，两条记录名字凑巧相同就会互相污染统计——改成按 graph 在列表里的下标分组，避免这个隐患。Error Analysis 里每条失败案例也带上 `source_type`。
+- `models.py`：`ExperimentDetail` 新增 `metrics_by_source`/`train_count_by_source`/`test_count_by_source`；`ExperimentSummary` 的 `dataset_version_id`/`dataset_label` 改成 `dataset_version_ids`（列表）+ 新增 `source_types`（这次实验用到的所有来源）。
+- 前端：新建实验表单的"数据源"单选 + "数据集版本"单选，改成两个分组的复选框列表（专家集/公共集各一组，可跨组多选）；实验详情页 Summary 卡片下面新增"按数据源分别报告"表格（每个来源一行：Node F1/Edge F1/Graph Structural F1/结构特征匹配率/Train / Test 条数）；Error Analysis 表格新增"数据源"列。
+
+**已验证**：真实 HTTP 联调——① 构造 6 条专家集工作流 + 导入 6 条公共集记录，分别发布/导入成两个版本；② 单独用专家集版本跑实验（回归检查，确认没破坏原有单数据源行为）；③ 单独用公共集版本跑实验（复现并确认修好了那个"静默产出空集"的 bug——现在 `train_count`/`test_count` 是真实非零数字，不再需要靠猜）；④ 同时选两个版本跑 Combined Train 实验，确认 `train_count=8`（4+4 合并）、`test_count_by_source` 分别是 `{expert_collected: 2, public_extracted: 2}`、`metrics_by_source` 里两个来源的数字确实不同（不是复制一份整体指标应付了事，pm4py 方法下 graph_structural_f1 分别是 0.75 和 0.722）；⑤ 引用不存在的数据集版本 id 正确返回 404，不是静默产出空实验。`/compare` 接口和实验列表页在新 schema 下也正常工作。headless Chromium 截图确认新建表单的分组复选框、详情页"按数据源分别报告"表格都正确渲染。前端 `tsc -b` 通过。测试完成后清理了全部测试工作流/数据集版本/实验记录，关闭了测试用的后端/前端进程。
+
 ### 不用动的
 
 - §15.2-⑥ 角色归一化：PRD 原文虽然建议 L+规则兜底，但规则+同义词典已经够用，不强制换模型
