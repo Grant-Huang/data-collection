@@ -1,5 +1,5 @@
 """Gold status / annotation stage computation -- IMPLEMENTATION_PLAN.md section 9, §9 Phase C-2,
-extended with the Rework loop (section 15). Shared between routers/annotations.py
+extended with the Rework loop (section 16). Shared between routers/annotations.py
 (per-record status, submission validation) and routers/datasets.py (the live
 annotation_readiness dimension) so the two never compute it differently.
 

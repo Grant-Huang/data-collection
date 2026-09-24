@@ -1,4 +1,5 @@
-// Annotation work queue on the Dashboard (IMPLEMENTATION_PLAN.md section 15). Replaces the flat
+// Annotation work queue, rendered by DatasetRecordList (数据标注 tab and Dashboard
+// "查看全部 -> 查看"), IMPLEMENTATION_PLAN.md section 16. Replaces the flat
 // "every record + 去标注" list with:
 // - filters by stage, defaulting to "我可处理" (what *this* annotator can act on right now,
 //   decided from the round's participant names before any work is done);
@@ -8,8 +9,8 @@
 //   "提交并下一条" / ←→ walk a stable sequence even as statuses change underneath.
 // Only settled outcomes are shown per record -- an in-progress verdict here would leak into
 // the next independent annotator's view (the blind-review flaw this replaces).
-import { useMemo, useState } from "react";
-import type { AnnotationStage, AnnotationSummary, PriorRecordSummary, ReasonTag, Role, SourceType } from "../api/types";
+import { useMemo, useState, type ReactNode } from "react";
+import type { AnnotationStage, AnnotationSummary, PriorRecordSummary, ReasonTag, Role } from "../api/types";
 import { GOLD_STATUS_LABELS, REASON_TAG_LABELS, STAGE_LABELS, VERDICT_LABELS } from "../api/types";
 import { useAnnotatorName } from "../hooks/useAnnotatorName";
 import { accessFor } from "../utils/annotationAccess";
@@ -28,9 +29,9 @@ const STAGE_COLOR: Record<AnnotationStage, { bg: string; fg: string }> = {
 };
 
 export function AnnotationQueue({
-  sourceType, versionId, records, summary, role, onChanged,
+  title, versionId, records, summary, role, onChanged,
 }: {
-  sourceType: SourceType;
+  title?: ReactNode;
   versionId: string;
   records: PriorRecordSummary[];
   summary: AnnotationSummary | null;
@@ -75,7 +76,7 @@ export function AnnotationQueue({
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>
-          {sourceType === "public_extracted" ? "Prior / Gold 标注（双人独立盲标 → 分歧仲裁 → 需要修改则返工）" : "专家复核（双人独立盲标 → 分歧仲裁 → 需要修改则返工 → Gold）"}
+          {title ?? "标注（双人独立盲标 → 分歧仲裁 → 需要修改则返工 → Gold）"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12, color: "#667085" }}>我是</span>

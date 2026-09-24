@@ -88,7 +88,7 @@ def _connect() -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_prior_annotations_lookup ON prior_annotations (version_id, record_id, annotated_at)"
     )
-    # Rework revisions (IMPLEMENTATION_PLAN.md section 15): each row is one corrected graph
+    # Rework revisions (IMPLEMENTATION_PLAN.md section 16): each row is one corrected graph
     # produced after a round of annotation settled on "needs_revision". Like prior_annotations,
     # scoped to (version_id, record_id) so the published dataset_versions row stays immutable --
     # a record's current graph is its latest revision's graph, or the original if none.
@@ -193,6 +193,33 @@ def archive_dataset_version(version_id: str) -> None:
             "UPDATE dataset_versions SET archived = 1, data = ? WHERE id = ?",
             (json.dumps(version, ensure_ascii=False), version_id),
         )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def rename_dataset_version(version_id: str, name: str) -> None:
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT data FROM dataset_versions WHERE id = ?", (version_id,)).fetchone()
+        if not row:
+            return
+        version = json.loads(row[0])
+        version["name"] = name
+        conn.execute(
+            "UPDATE dataset_versions SET data = ? WHERE id = ?",
+            (json.dumps(version, ensure_ascii=False), version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_dataset_version(version_id: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM dataset_versions WHERE id = ?", (version_id,))
+        conn.execute("DELETE FROM prior_annotations WHERE version_id = ?", (version_id,))
         conn.commit()
     finally:
         conn.close()

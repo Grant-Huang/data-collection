@@ -1,4 +1,4 @@
-// Rework step (IMPLEMENTATION_PLAN.md section 15, decision 9): a round settled on "需要修改",
+// Rework step (IMPLEMENTATION_PLAN.md section 16, decision 9): a round settled on "需要修改",
 // so someone turns the annotators' suggestions into an actual corrected graph. The reworker
 // starts from one annotator's node verdicts (or the arbitrator's), adjusts on the graph
 // (delete / merge into a real predecessor / rename / insert a missing step), watches a live

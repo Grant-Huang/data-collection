@@ -1,6 +1,6 @@
 """Prior + Gold annotation endpoints -- design/case_context_and_prior_annotation_draft.md
 section 2, IMPLEMENTATION_PLAN.md section 9.2 (Prior, Phase 7), section 9 §9 Phase C-2 (Gold)
-and section 15 (blind review, structured reasons, Rework loop). Layers on the same data:
+and section 16 (blind review, structured reasons, Rework loop). Layers on the same data:
 
 - **Prior** (`prior_status`): "Public/LLM-derived Prior" becomes "Expert-annotated Prior" the
   moment ANY annotation exists.

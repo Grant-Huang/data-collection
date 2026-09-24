@@ -1,4 +1,4 @@
-"""Machine-generated signals for the annotation panel (IMPLEMENTATION_PLAN.md section 15,
+"""Machine-generated signals for the annotation panel (IMPLEMENTATION_PLAN.md section 16,
 closing section 10's open item "标注面板本身还没读取这个信号").
 
 Three sources, all rule-based and reproducible (no LLM):

@@ -198,8 +198,17 @@ export function PriorAnnotationPanel({
           background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 12px 40px rgba(0,0,0,0.25)", boxSizing: "border-box",
         }}
       >
-        {/* Top bar: queue navigation + who I am */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {/* Top bar: queue navigation + who I am + close. Sticky, because the panel body scrolls
+            (graph + annotation controls are often taller than the viewport) and the close button
+            must stay reachable -- carried over from main's PriorAnnotationPanel fix. */}
+        <div
+          style={{
+            position: "sticky", top: -24, zIndex: 2, background: "#fff",
+            marginLeft: -24, marginRight: -24, marginTop: -24, padding: "16px 24px 10px",
+            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap",
+            borderBottom: "1px solid #f1f3f5",
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button disabled={!prevId} onClick={() => prevId && onNavigate(prevId)} style={navBtn(!!prevId)}>← 上一条</button>
             <span style={{ fontSize: 12, color: "#94a3b8" }}>{idx >= 0 ? `${idx + 1} / ${queue.length}` : "不在当前列表中"}</span>
@@ -213,7 +222,16 @@ export function PriorAnnotationPanel({
               placeholder="你的姓名（会记住）"
               style={{ width: 140, border: `1px solid ${annotatorName.trim() ? "#d0d5dd" : "#f59e0b"}`, borderRadius: 6, padding: "4px 8px", fontSize: 12 }}
             />
-            <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer", marginLeft: 4 }} title="关闭（Esc）">
+            <button
+              onClick={onClose}
+              aria-label="关闭"
+              title="关闭（Esc）"
+              style={{
+                border: "none", background: "#f1f5f9", color: "#475569", borderRadius: 999, marginLeft: 4,
+                width: 28, height: 28, fontSize: 15, lineHeight: 1, cursor: "pointer", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+            >
               ✕
             </button>
           </div>

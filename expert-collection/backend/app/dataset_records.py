@@ -9,6 +9,35 @@ from __future__ import annotations
 from . import db
 
 
+def published_workflow_ids() -> set[str]:
+    """Every workflow id referenced by any dataset_version, archived versions included --
+    an archived version is still a published snapshot someone may have exported or run an
+    experiment on, so its records count as "已录入数据集" too.
+    """
+    ids: set[str] = set()
+    for version in db.list_dataset_versions():
+        ids.update(version.get("workflow_ids", []))
+    return ids
+
+
+def versions_containing(workflow_id: str) -> list[dict]:
+    """The dataset_versions that reference `workflow_id`, newest first. Used to block
+    graph regeneration: expert_collected versions don't snapshot the graph, they read it
+    back live through `records_for_export` below, so rewriting a published workflow's graph
+    would silently change an already-published (supposedly immutable) version.
+    """
+    return [
+        {
+            "id": v["id"],
+            "source_type": v["source_type"],
+            "version_number": v["version_number"],
+            "archived": bool(v.get("archived", False)),
+        }
+        for v in db.list_dataset_versions()
+        if workflow_id in v.get("workflow_ids", [])
+    ]
+
+
 def records_for_export(version: dict) -> list[dict]:
     if version["source_type"] == "public_extracted":
         return version.get("records", [])
