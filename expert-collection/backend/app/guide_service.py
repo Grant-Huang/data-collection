@@ -142,6 +142,46 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
     return reply, out.ops, nq, out.state
 
 
+# Which sweep a mid-sweep stage belongs to (used when the graph is refreshed mid-answer).
+_SWEEP_KIND_BY_STAGE = {
+    "sweep_branch_pick": "branch", "branch_cond_a": "branch", "branch_cond_b": "branch",
+    "branch_b_steps": "branch", "branch_b_rejoin": "branch",
+    "sweep_parallel_pick": "parallel",
+    "sweep_approval_pick": "approval", "approval_who": "approval",
+    "sweep_retry_pick": "retry", "retry_target": "retry",
+    "experience": "experience", "experience_detail": "experience",
+}
+
+
+def state_after_regeneration(state: dict[str, Any], graph: dict) -> tuple[str, dict | None, dict[str, Any]]:
+    """Reset the interview after the whole graph was replaced by 「刷新工作流图」.
+
+    Every node id the old state pointed at (cursor, sweep chip options, pending branch /
+    compound / correction scratch) belongs to the discarded graph, so none of it may survive.
+    The regenerated graph always passed validation (it has a start and an end), so instead of
+    starting the interview over, continue from the structural sweeps on the *new* graph --
+    their chips are rebuilt from the new step labels. Sweeps the expert already answered
+    before the refresh aren't asked again; if none are left, go straight to final review.
+    Background (case_context), cue memory and the chosen category are kept.
+
+    Returns (assistant_reply, next_question_or_None, new_state).
+    """
+    pending = state.get("pending", {})
+    kept = {k: v for k, v in pending.items() if k in ("case_context", "category", "cues", "sweeps_done")}
+    # A sweep counts as "done" as soon as it is asked. One that was still mid-answer when the
+    # graph was refreshed never got its answer applied to the new graph -- ask it again.
+    in_flight = _SWEEP_KIND_BY_STAGE.get(state.get("stage", ""))
+    if in_flight:
+        kept["sweeps_done"] = [k for k in kept.get("sweeps_done", []) if k != in_flight]
+    out = _next_sweep("流程图已经按整段对话重新整理好了，我们在新图的基础上接着确认几处细节。", kept, [], graph)
+    if out.nq is None:
+        out.ack = "流程图已经按整段对话重新整理好了。"
+    labels = [n["label"] for n in graph.get("nodes", [])]
+    reply, nq = guide_phrasing.finalize(out.ack, out.nq, last_expert_message="",
+                                        known_labels=labels, closing_text=out.closing)
+    return reply, nq, out.state
+
+
 def progress(state: dict[str, Any], graph: dict) -> float:
     """Plain, explainable completion estimate shown to the expert: background ~15%, the
     step-by-step narration up to 60%, then each structural sweep, 100% at final review."""
