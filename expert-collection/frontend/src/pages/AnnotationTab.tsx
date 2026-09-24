@@ -8,35 +8,19 @@
 // 做，两个来源、全部记录对当前身份一样可见。
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import { GOLD_STATUS_LABELS, VERDICT_LABELS } from "../api/types";
-import type { AnnotationSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
-import { PriorAnnotationPanel } from "../components/PriorAnnotationPanel";
+import type { Role, SourceType } from "../api/types";
+import { DatasetRecordList } from "../components/DatasetRecordList";
 
 export function AnnotationTab({ role }: { role: Role }) {
   const [sourceType, setSourceType] = useState<SourceType>("expert_collected");
   const [latestVersionId, setLatestVersionId] = useState<string | null>(null);
-  const [priorRecords, setPriorRecords] = useState<PriorRecordSummary[]>([]);
-  const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
-  const [annotatingRecordId, setAnnotatingRecordId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async (st: SourceType) => {
     setError(null);
     try {
       const versions = await api.listDatasetVersions(st);
-      const latestId = versions[0]?.id ?? null;
-      setLatestVersionId(latestId);
-      if (latestId) {
-        const [records, summary] = await Promise.all([
-          api.listPriorRecords(latestId),
-          api.getAnnotationSummary(latestId),
-        ]);
-        setPriorRecords(records);
-        setAnnotationSummary(summary);
-      } else {
-        setPriorRecords([]);
-        setAnnotationSummary(null);
-      }
+      setLatestVersionId(versions[0]?.id ?? null);
     } catch (e) {
       setError(String(e));
     }
@@ -72,70 +56,13 @@ export function AnnotationTab({ role }: { role: Role }) {
           <div style={{ background: "#fff", border: "1px dashed #d0d5dd", borderRadius: 10, padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
             {sourceType === "expert_collected" ? "还没有发布过版本，先在「专家录入」完成并确认几条会话，发布后再回来标注。" : "还没有导入过公有集数据。"}
           </div>
-        ) : priorRecords.length === 0 ? (
-          <div style={{ background: "#fff", border: "1px dashed #d0d5dd", borderRadius: 10, padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-            当前最新版本没有可标注的记录。
-          </div>
         ) : (
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>
-                {sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
-              </div>
-              {annotationSummary && (
-                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
-                  标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
-                  {annotationSummary.annotated_records > 0 && (
-                    <span>
-                      {" "}
-                      （{(["accepted", "needs_revision", "rejected"] as const)
-                        .filter((v) => annotationSummary.verdict_counts[v])
-                        .map((v) => `${VERDICT_LABELS[v]} ${annotationSummary.verdict_counts[v]}`)
-                        .join("，")}
-                      ）
-                    </span>
-                  )}
-                  {" ・ "}Gold {annotationSummary.gold_counts.gold ?? 0} 条
-                  {annotationSummary.agreement_kappa !== null && ` ・ 一致性 κ=${annotationSummary.agreement_kappa}`}
-                </div>
-              )}
-            </div>
-            <div>
-              {priorRecords.map((r) => (
-                <div key={r.record_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5" }}>
-                  <div style={{ fontSize: 12.5 }}>
-                    {r.name} <span style={{ color: "#94a3b8" }}>（{r.node_count} 节点）</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.prior_status === "expert_annotated" ? "#eafaea" : "#f1f5f9",
-                        color: r.prior_status === "expert_annotated" ? "#0ca30c" : "#667085",
-                      }}
-                    >
-                      {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
-                        color: r.gold_status === "gold" ? "#b45309" : "#667085",
-                      }}
-                    >
-                      {GOLD_STATUS_LABELS[r.gold_status]}
-                    </span>
-                    <button
-                      onClick={() => setAnnotatingRecordId(r.record_id)}
-                      style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 11.5, cursor: "pointer" }}
-                    >
-                      去标注
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <DatasetRecordList
+            versionId={latestVersionId}
+            role={role}
+            title={sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
+            emptyMessage="当前最新版本没有可标注的记录。"
+          />
         )}
 
         {error && (
@@ -144,16 +71,6 @@ export function AnnotationTab({ role }: { role: Role }) {
           </div>
         )}
       </div>
-
-      {annotatingRecordId && latestVersionId && (
-        <PriorAnnotationPanel
-          versionId={latestVersionId}
-          recordId={annotatingRecordId}
-          role={role}
-          onClose={() => setAnnotatingRecordId(null)}
-          onSaved={() => refresh(sourceType)}
-        />
-      )}
     </div>
   );
 }
