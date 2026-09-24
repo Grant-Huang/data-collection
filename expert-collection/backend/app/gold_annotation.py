@@ -1,33 +1,100 @@
-"""Gold status computation -- IMPLEMENTATION_PLAN.md section 9, §9 Phase C-2. Shared between
-routers/annotations.py (per-record status, submission validation) and routers/datasets.py
-(the live annotation_readiness dimension, which needs the same status computed across every
-record in a version) so the two never compute it differently.
+"""Gold status / annotation stage computation -- IMPLEMENTATION_PLAN.md section 9, §9 Phase C-2,
+extended with the Rework loop (section 16). Shared between routers/annotations.py
+(per-record status, submission validation) and routers/datasets.py (the live
+annotation_readiness dimension) so the two never compute it differently.
+
+A record moves through *rounds*. Round 1 reviews the original graph; each Rework submission
+(a row in `record_revisions`) produces a corrected graph and opens the next round. Within a
+round, the rules are unchanged from Phase C-2: two independent annotations, a third person's
+arbitration if they disagree. What changed is what a round's *outcome* means:
+
+- accepted     -> done, Gold
+- rejected     -> done, not Gold (discarded)
+- needs_revision -> Rework: someone produces the corrected graph, then a new round starts
+  (previously this was a dead end: "not Gold" with the suggested fixes never applied).
+
+Stages (what the record is waiting for) drive the annotation queue in the UI:
+first_review / second_review / arbitration / rework / done.
 """
 from __future__ import annotations
 
+from typing import Optional
 
-def compute_gold_status(history: list[dict]) -> str:
-    """See IMPLEMENTATION_PLAN.md section 9's four confirmed decisions. Only the first two
-    independent annotations (by submission order) decide agreement/disagreement -- a third
-    independent annotation isn't part of this design (disagreement goes to arbitration, not a
-    running vote), so any independent entries beyond the first two are ignored here (the
-    create-annotation endpoint already refuses to accept them).
+
+def _round_of(a: dict) -> int:
+    # Annotations written before rounds existed have no `round` key -- they're round 1.
+    return int(a.get("round") or 1)
+
+
+def _independents(annotations: list[dict]) -> list[dict]:
+    return [a for a in annotations if a.get("role_in_process", "independent") == "independent"]
+
+
+def _arbitrations(annotations: list[dict]) -> list[dict]:
+    return [a for a in annotations if a.get("role_in_process") == "arbitration"]
+
+
+def round_outcome(round_annotations: list[dict]) -> Optional[str]:
+    """The verdict a round settled on, or None while it's still open. Only the first two
+    independent annotations count (disagreement goes to arbitration, not a running vote).
     """
-    independents = [a for a in history if a.get("role_in_process", "independent") == "independent"]
-    arbitrations = [a for a in history if a.get("role_in_process") == "arbitration"]
+    arbitrations = _arbitrations(round_annotations)
     if arbitrations:
-        return "gold" if arbitrations[-1]["verdict"] == "accepted" else "not_gold"
-    if len(independents) < 2:
-        return "pending_second_review" if independents else "not_gold"
-    a, b = independents[0], independents[1]
-    if a["verdict"] != b["verdict"]:
-        return "disputed_pending_arbitration"
-    return "gold" if a["verdict"] == "accepted" else "not_gold"
+        return arbitrations[-1]["verdict"]
+    independents = _independents(round_annotations)
+    if len(independents) >= 2 and independents[0]["verdict"] == independents[1]["verdict"]:
+        return independents[0]["verdict"]
+    return None
+
+
+def compute_state(history: list[dict], revisions: list[dict]) -> dict:
+    """history: every annotation for the record (any round, oldest first); revisions: every
+    rework revision (oldest first). Returns {round, stage, gold_status, outcome,
+    round_annotations}.
+    """
+    current_round = len(revisions) + 1
+    in_round = [a for a in history if _round_of(a) == current_round]
+    independents = _independents(in_round)
+    outcome = round_outcome(in_round)
+
+    if outcome == "accepted":
+        stage, gold = "done", "gold"
+    elif outcome == "rejected":
+        stage, gold = "done", "not_gold"
+    elif outcome == "needs_revision":
+        stage, gold = "rework", "needs_rework"
+    elif len(independents) >= 2:
+        stage, gold = "arbitration", "disputed_pending_arbitration"
+    elif len(independents) == 1:
+        stage, gold = "second_review", "pending_second_review"
+    else:
+        stage, gold = "first_review", "not_gold"
+    return {
+        "round": current_round, "stage": stage, "gold_status": gold,
+        "outcome": outcome, "round_annotations": in_round,
+    }
+
+
+def compute_gold_status(history: list[dict], revisions: list[dict] | None = None) -> str:
+    return compute_state(history, revisions or [])["gold_status"]
+
+
+def kappa_pairs(history: list[dict]) -> list[tuple[str, str]]:
+    """One (first, second) independent-verdict pair per round that has two independent
+    annotations -- every such round is a genuine two-rater observation, including rounds that
+    later went to arbitration or rework.
+    """
+    pairs = []
+    for r in sorted({_round_of(a) for a in history}):
+        ind = _independents([a for a in history if _round_of(a) == r])
+        if len(ind) >= 2:
+            pairs.append((ind[0]["verdict"], ind[1]["verdict"]))
+    return pairs
 
 
 def cohens_kappa(pairs: list[tuple[str, str]]) -> float | None:
     """Standard two-rater Cohen's kappa over (annotator_1_verdict, annotator_2_verdict)
-    pairs -- computed for real (not a placeholder) across every record with two independent
+    pairs -- computed for real (not a placeholder) across every round with two independent
     annotations, regardless of whether it went on to arbitration.
     """
     n = len(pairs)

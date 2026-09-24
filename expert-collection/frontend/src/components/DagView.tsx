@@ -31,14 +31,38 @@ const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill"
   handoff: { fill: "#fff7ed", stroke: "#f97316", shape: "rect" },
 };
 
-function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean; highlighted?: boolean } }) {
-  const style = NODE_STYLE[data.nodeType];
+// Optional per-node overlay (annotation panel: node verdict colors, arbitration diff
+// highlight, selected node). Purely visual -- doesn't affect layout.
+export interface NodeDecoration {
+  border?: string; // replaces the node-type stroke color
+  badge?: string; // small tag rendered above the node, e.g. "删除"
+  badgeColor?: string;
+  faded?: boolean; // e.g. a node marked for deletion
+  selected?: boolean;
+}
+
+interface WorkflowNodeData {
+  label: string;
+  nodeType: NodeType;
+  confirmed: boolean;
+  hasRetry: boolean;
+  highlighted?: boolean; // hovering a chat message's "图上 +N" tag
+  decoration?: NodeDecoration;
+  clickable?: boolean;
+}
+
+function WorkflowNode({ data }: { data: WorkflowNodeData }) {
+  const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
+  const deco = data.decoration;
   return (
     <div
       style={{
         background: style.fill,
-        border: `1.6px solid ${style.stroke}`,
+        border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px solid ${deco?.selected ? "#2a78d6" : deco?.border ?? style.stroke}`,
+        opacity: deco?.faded ? 0.5 : 1,
+        textDecoration: deco?.faded ? "line-through" : undefined,
+        cursor: data.clickable ? "pointer" : undefined,
         borderRadius: radius,
         padding: "10px 16px",
         minWidth: 120,
@@ -58,6 +82,17 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      {deco?.badge && (
+        <div
+          style={{
+            position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", whiteSpace: "nowrap",
+            background: deco.badgeColor ?? "#2a78d6", color: "#fff", borderRadius: 999, padding: "1px 8px",
+            fontSize: 10.5, fontWeight: 700, textDecoration: "none",
+          }}
+        >
+          {deco.badge}
+        </div>
+      )}
       {data.label}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
@@ -135,9 +170,10 @@ interface DagViewProps {
   // Nodes to emphasize (e.g. what the latest conversation turn added). Display-only; does
   // not trigger a re-layout.
   highlightNodeIds?: string[] | null;
+  nodeDecorations?: Record<string, NodeDecoration>;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -147,7 +183,9 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
 
   // Re-layout whenever the graph's content changes. Counts alone are not enough: the guide's
   // structural questions rewire existing edges and fill in branch conditions / approver
-  // labels without changing how many nodes or edges there are.
+  // labels without changing how many nodes or edges there are, and a rework preview can
+  // merge one node and insert another. Decorations are applied in `displayNodes` below
+  // without re-running ELK.
   const layoutKey = useMemo(
     () =>
       [
@@ -202,6 +240,19 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollable, fitZoom, containerWidth, size.width, layoutKey]);
 
+  const displayNodes = useMemo(() => {
+    const byId = new Map(graph.nodes.map((n) => [n.node_id, n]));
+    return nodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        label: byId.get(n.id)?.label ?? n.data.label,
+        decoration: nodeDecorations?.[n.id],
+        clickable: !!onNodeTap,
+      },
+    }));
+  }, [nodes, graph, nodeDecorations, onNodeTap]);
+
   if (nodeCount === 0) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
@@ -212,7 +263,7 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
 
   const flow = (
     <ReactFlow
-      nodes={nodes}
+      nodes={displayNodes}
       edges={edges}
       nodeTypes={nodeTypes}
       fitView={!scrollable}

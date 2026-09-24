@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
 import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, SLICEABLE_FIELDS } from "../api/types";
-import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
+import type { AnnotationSummary, DatasetVersionSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { TrendChart } from "../components/TrendChart";
@@ -116,6 +116,26 @@ export function DashboardPage({ role }: { role: Role }) {
   }
 
   const latest = selectedVersion ?? versions[0] ?? null;
+
+  // Annotation stats for the version on screen -- feeds the "Gold 数量" / "待复核" cards
+  // (these used to be hard-coded 0 from before the annotation pipeline existed).
+  const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
+  const latestId = latest?.id ?? null;
+  useEffect(() => {
+    setAnnotationSummary(null);
+    if (!latestId) return;
+    let cancelled = false;
+    api.getAnnotationSummary(latestId)
+      .then((s) => {
+        if (!cancelled) setAnnotationSummary(s);
+      })
+      .catch(() => {
+        // Stats cards fall back to "—"; not worth an error banner on the dashboard.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [latestId]);
   const readiness = latest?.readiness ?? null;
 
   return (
@@ -244,8 +264,16 @@ export function DashboardPage({ role }: { role: Role }) {
               <MetricCard label="步骤总数" value={latest.total_steps} tip="所有工作流的节点总数之和，衡量数据集的体量，不只是条数。" />
               <MetricCard label="微工作流识别数" value="待实现" placeholder tip="跨 3 条及以上工作流复用、结构相似度超过阈值的可复用子图数量。识别算法（结构化子图挖掘）尚未实现，先诚实占位，不编造数字。" />
               <MetricCard label="专家数" value="待实现" placeholder tip="贡献过采集记录的专家人数。当前系统还没有真实的专家身份认证（见假设 1），暂无法统计。" />
-              <MetricCard label="Gold 数量" value={0} tip="经过人工标注确认的 Gold 样本数。标注体系尚未实现，固定为 0。" />
-              <MetricCard label="待复核" value={0} tip="被标记为需要人工复核的记录数。复核流程尚未实现，固定为 0。" />
+              <MetricCard
+                label="Gold 数量"
+                value={annotationSummary ? annotationSummary.gold_counts.gold ?? 0 : "—"}
+                tip="当前版本中达到 Gold 的记录数：同一轮两位独立标注人都判定「采纳」，或分歧后经第三人仲裁判定「采纳」（含返工后重新标注通过的）。"
+              />
+              <MetricCard
+                label="待复核"
+                value={annotationSummary ? annotationSummary.total_records - (annotationSummary.stage_counts.done ?? 0) : "—"}
+                tip="当前版本中还没有最终结论的记录数（待第一人标注 / 待第二人复核 / 分歧待仲裁 / 待返工）。"
+              />
             </div>
 
             <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16 }}>
