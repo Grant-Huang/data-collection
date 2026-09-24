@@ -140,19 +140,6 @@ body {
 .chip.frozen.picked { opacity: 1; font-weight: 600; background: var(--chat-accent-soft); border-style: solid; border-color: var(--chat-accent); color: var(--chat-accent); }
 .chip.frozen.picked::before { content: "✓"; margin-right: 4px; }
 
-.chip-confirm {
-  border: none;
-  border-radius: 8px;
-  padding: 6px 14px;
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  background: var(--chat-ok);
-  color: #fff;
-  cursor: pointer;
-}
-.chip-confirm:disabled { background: var(--chat-line); color: #94a3b8; cursor: default; }
-
 .chat-typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
 .chat-typing span {
   width: 6px;

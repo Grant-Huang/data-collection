@@ -15,11 +15,15 @@ export function isFallbackChip(chip: string): boolean {
 // Chips never auto-send (PRD 18.4) -- they go into the draft. If the draft is empty or is
 // itself just an earlier chip pick, the new pick replaces it; if the expert already typed
 // something of their own, the pick is appended instead of wiping what they wrote.
+//
+// An empty `pick` means a multi-select was toggled down to nothing: clear the draft if it only
+// held earlier picks, otherwise leave the expert's own text alone.
 export function mergeChipIntoDraft(draft: string, pick: string, chips: string[]): string {
   const current = draft.trim();
   if (!current) return pick;
   const draftIsOnlyChips = current.split("、").every((part) => chips.includes(part.trim()));
   if (draftIsOnlyChips) return pick;
+  if (!pick) return current;
   if (current.includes(pick)) return current;
   return `${current}，${pick}`;
 }

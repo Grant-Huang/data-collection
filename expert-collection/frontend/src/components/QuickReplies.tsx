@@ -3,7 +3,9 @@
 // multi-select the same way.
 //
 // PRD 18.4: a chip only ever fills the draft -- the expert still reviews/edits and presses
-// send themselves. multi_select: chips toggle, "确认选择" puts the joined picks in the draft.
+// send themselves. multi_select: chips toggle, and every toggle immediately re-joins the picks
+// with "、" into the draft (no separate "confirm selection" step), so the expert sees the
+// selection building up as they go.
 import { useEffect, useState } from "react";
 import type { NextQuestion } from "../api/types";
 import { isFallbackChip } from "../utils/chips";
@@ -27,11 +29,13 @@ export function QuickReplies({ question, onPick }: Props) {
 
   function toggle(chip: string) {
     // "无" is exclusive with every other pick.
-    setSelected((prev) => {
-      if (prev.includes(chip)) return prev.filter((c) => c !== chip);
-      if (chip === "无") return ["无"];
-      return [...prev.filter((c) => c !== "无"), chip];
-    });
+    const next = selected.includes(chip)
+      ? selected.filter((c) => c !== chip)
+      : chip === "无"
+        ? ["无"]
+        : [...selected.filter((c) => c !== "无"), chip];
+    setSelected(next);
+    onPick(next.join("、"));
   }
 
   return (
@@ -51,16 +55,6 @@ export function QuickReplies({ question, onPick }: Props) {
           </button>
         );
       })}
-      {multi && (
-        <button
-          type="button"
-          className="chip-confirm"
-          disabled={selected.length === 0}
-          onClick={() => onPick(selected.join("、"))}
-        >
-          确认选择（{selected.length}）
-        </button>
-      )}
     </div>
   );
 }

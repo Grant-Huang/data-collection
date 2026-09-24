@@ -10,11 +10,13 @@ import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { TrendChart } from "../components/TrendChart";
 import { DatasetVersionListPage } from "../components/DatasetVersionListPage";
+import { DatasetRecordList } from "../components/DatasetRecordList";
 
-// 专家标注/Prior 标注功能已经挪到「数据录入与标注 → 数据标注」tab 去了（见
-// pages/AnnotationTab.tsx），Dashboard 现在只管发布/评分/导出，不再嵌一份标注 UI。
+// 专家标注/Prior 标注的入口 tab 已经挪到「数据录入与标注 → 数据标注」（见 pages/AnnotationTab.tsx），
+// Dashboard 首屏只管发布/评分/导出；但「全部数据集版本 -> 查看」需要看某个（可能是历史）版本
+// 具体有哪些记录，于是复用同一份 <DatasetRecordList> 组件（见该文件顶部注释），不是重新嵌一套。
 
-type Screen = "dashboard" | "all_versions";
+type Screen = "dashboard" | "all_versions" | "version_records";
 type Tab = "quality" | "completeness" | "leakage" | "trend" | "slice";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -36,9 +38,11 @@ export function DashboardPage({ role }: { role: Role }) {
   const [tab, setTab] = useState<Tab>("quality");
   const [publishing, setPublishing] = useState(false);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
-  // 点「查看全部」进列表、从列表里点「查看」选中某个具体版本时设置；null 代表看最新版本
-  // （首屏默认行为）。
+  // null 代表首屏默认行为：看最新版本的质量评分。
   const [selectedVersion, setSelectedVersion] = useState<DatasetVersionSummary | null>(null);
+  // 「全部数据集版本」列表里点「查看」时设置，切到 "version_records" 屏显示这个版本的具体
+  // 记录清单（不是回到首屏的质量评分汇总——那不是「查看」这个版本该去的地方）。
+  const [viewingVersion, setViewingVersion] = useState<DatasetVersionSummary | null>(null);
   const [sliceField, setSliceField] = useState<string>(SLICEABLE_FIELDS[0].field);
   const [sliceBuckets, setSliceBuckets] = useState<{ value: string; count: number; pct: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +65,7 @@ export function DashboardPage({ role }: { role: Role }) {
   useEffect(() => {
     refresh(sourceType);
     setSelectedVersion(null);
+    setViewingVersion(null);
     setScreen("dashboard");
   }, [sourceType, refresh]);
 
@@ -157,11 +162,26 @@ export function DashboardPage({ role }: { role: Role }) {
             actorRole={role}
             onBack={() => setScreen("dashboard")}
             onSelectVersion={(v) => {
-              setSelectedVersion(v);
-              setScreen("dashboard");
+              setViewingVersion(v);
+              setScreen("version_records");
             }}
             onChanged={() => refresh(sourceType)}
           />
+        ) : screen === "version_records" && viewingVersion ? (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <button
+                onClick={() => setScreen("all_versions")}
+                style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#475569", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}
+              >
+                ← 返回
+              </button>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                v{viewingVersion.version_number} {viewingVersion.name}
+              </div>
+            </div>
+            <DatasetRecordList versionId={viewingVersion.id} role={role} />
+          </div>
         ) : (
         <>
 
