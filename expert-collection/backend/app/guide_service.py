@@ -258,6 +258,14 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
     exact same stage could flag it as a correction again and loop.
     """
     reply, ops, nq, new_state = _dispatch_turn(state, text, skip_correction_check=skip_correction_check)
+    # "opening" is excluded: its reply already personalizes itself around `text` directly
+    # (quotes the category back), so a second bolted-on acknowledgment would just be
+    # redundant, not more natural. Every other stage's reply is a plain fixed template --
+    # see _natural_reply's docstring for what it will and won't change about it.
+    if state["stage"] != "opening":
+        reply = _natural_reply(reply, text)
+        if nq is not None:
+            nq = {**nq, "question": reply}
     if turn_id:
         for op in ops:
             if op.get("op") == "add_node":
@@ -729,6 +737,93 @@ def _understand_step_and_check_correction(text: str) -> dict:
     clauses = _extract_step_clauses(text)
     relationship = "ambiguous" if _needs_parallel_clarify(text) else "serial"
     return {"clauses": clauses, "relationship": relationship, "is_correction": False}
+
+
+# --- Natural phrasing (IMPLEMENTATION_PLAN.md follow-up to §15.1-①(b); PRD 15.1's "专家采集
+# 会话引导" row lists "复述、澄清、生成下一条追问" as part of the L model's job, not just
+# clause extraction) -----------------------------------------------------------------------
+#
+# Deliberately narrow in what it's allowed to change, for the same reason `_understand_step`
+# needs `_clauses_are_grounded`: an LLM asked to freely rewrite a question can just as easily
+# invent content in the *question* as it can in extracted clauses (this is exactly how the
+# "设备检查"/"工艺检查" bug happened -- a fabricated example baked into a hardcoded question).
+# So this never rewrites the fixed question itself -- every `reply = "..."` string elsewhere
+# in this module stays byte-for-byte the literal text a reviewer can read and audit. All the
+# model is allowed to do is prepend one short, grounded acknowledgment of what the expert just
+# said, so the turn doesn't read like a form letter. If it can't produce something grounded,
+# the fixed question goes out alone, exactly as before this existed.
+_ACK_SYSTEM_PROMPT = """你是制造业专家访谈助手的一部分，负责在系统问下一个固定问题之前，先用一句很短的话回应/复述专家刚说的内容，让专家感觉到系统听懂了，而不是在自说自话。
+
+严格规则：
+- 只输出这一句回应，不超过 20 个字，不要输出引号或其他任何解释文字。
+- 只能复述/概括专家刚说的这段话里已经出现的信息，不能补充专家没说过的任何具体内容（人名、系统名、数值、原因、判断），不能提出新问题，不能给建议或评价。
+- 如果这段话很短、很难复述（比如只是一个词或一个选项），就只输出一个极简的确认词，比如"明白。"或"好的。"。
+
+只输出这一句话本身。"""
+
+# A short paraphrase legitimately reuses connective/function characters that don't appear in
+# the source ("先"/"再"/"是"/"的"/punctuation...) -- exempting them from the groundedness
+# check below is what keeps it from rejecting every normal paraphrase, while still catching
+# the failure mode that matters: the model inventing *content* (nouns/verbs describing things
+# that were never said) instead of restating what was.
+_ACK_EXEMPT_CHARS = set("，。！？、,.!?～~的了是就在和与或及这那也还都才又再不没被把让给对于你我他"
+                         "先后再已经明白好收到嗯啊呢吧一二三四五六七八九十")
+
+
+def _is_loosely_grounded(candidate: str, source: str, threshold: float = 0.6) -> bool:
+    """Unlike `_clauses_are_grounded`'s strict ordered-subsequence check (used for content
+    that becomes graph data and must be traceably sourced, not just similar), this is a
+    softer, ratio-based check appropriate for a natural-language acknowledgment: at least
+    `threshold` of its non-filler characters must appear somewhere in `source` (order not
+    required, since paraphrase legitimately reorders words) -- a coincidental hallucination
+    with near-zero character overlap with `source` fails this easily, while an honest
+    restatement passes.
+    """
+    content_chars = [c for c in candidate if c not in _ACK_EXEMPT_CHARS]
+    if not content_chars:
+        return True
+    source_chars = set(source)
+    hits = sum(1 for c in content_chars if c in source_chars)
+    return (hits / len(content_chars)) >= threshold
+
+
+def _llm_acknowledge(text: str, slot_config: dict) -> str | None:
+    """Returns None on ANY failure (not configured, network/timeout, empty/oversized output,
+    or output that isn't grounded in `text`) so the caller just uses the fixed question alone
+    -- never raises, same contract as every other LLM helper in this module.
+    """
+    try:
+        result = llm_client.chat_completion(slot_config, [
+            {"role": "system", "content": _ACK_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ])
+    except llm_client.LLMError:
+        return None
+    ack = result.content.strip().strip("\"'“”‘’ \n")
+    if not ack or len(ack) > 40:
+        return None
+    if not _is_loosely_grounded(ack, text):
+        return None
+    return ack
+
+
+def _natural_reply(fixed_question: str, expert_text: str) -> str:
+    """Prepends a short LLM-generated acknowledgment of `expert_text` to `fixed_question`
+    when the `guide_service` slot is enabled and configured; returns `fixed_question`
+    unchanged on any failure or when the slot isn't set up, so this is a pure enhancement --
+    the FSM's actual question text and decision logic never depend on it.
+    """
+    slot_config = app_settings.resolve_slot_for_call(app_settings.get_effective_settings(), "guide_service")
+    if not (slot_config.get("enabled") and slot_config.get("endpoint") and slot_config.get("model_name")):
+        return fixed_question
+    if not expert_text.strip():
+        return fixed_question
+    ack = _llm_acknowledge(expert_text, slot_config)
+    if not ack:
+        return fixed_question
+    if ack[-1] not in "。！？.!?":
+        ack += "。"
+    return f"{ack}{fixed_question}"
 
 
 def _start_correction_pick(stage: str, cursor: str | None, pending: dict, text: str
