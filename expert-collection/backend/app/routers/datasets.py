@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Response
 
 from .. import anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
 from ..models import (
+    DatasetVersionListResponse,
     DatasetVersionSummary,
     DuplicateCheckRequest,
     DuplicateCheckResult,
@@ -228,6 +229,44 @@ def list_versions(source_type: str = "expert_collected", include_archived: bool 
     if not include_archived:
         versions = [v for v in versions if not v.get("archived")]
     return [_to_summary(v) for v in versions]
+
+
+def _version_matches_query(version: dict, query: str) -> bool:
+    """Substring match against name and version number -- "v3"/"3" both hit version_number 3,
+    so searching either the way a version is labeled in the UI ("v3") or the bare number works.
+    """
+    name = (version.get("name") or "").lower()
+    number = version["version_number"]
+    return query in name or query in f"v{number}" or query == str(number)
+
+
+@router.get("/versions/search", response_model=DatasetVersionListResponse)
+def search_versions(
+    source_type: str = "expert_collected",
+    query: str = "",
+    page: int = 1,
+    page_size: int = 20,
+    include_archived: bool = False,
+) -> DatasetVersionListResponse:
+    """Dashboard「全部」入口：进入某个来源（专家集/公有集）的 Dashboard 后默认只看最新版本，
+    点「查看全部」才翻到这个分页 + 可查询的完整版本列表，而不是把所有版本一次性堆在 Dashboard
+    首屏里。`query` 匹配版本名称或版本号（"v3" 或 "3" 都能命中第 3 版）。
+    """
+    versions = db.list_dataset_versions(source_type)
+    if not include_archived:
+        versions = [v for v in versions if not v.get("archived")]
+    q = query.strip().lower()
+    if q:
+        versions = [v for v in versions if _version_matches_query(v, q)]
+
+    total = len(versions)
+    page = max(page, 1)
+    page_size = max(1, min(page_size, 100))
+    start = (page - 1) * page_size
+    page_items = versions[start:start + page_size]
+    return DatasetVersionListResponse(
+        items=[_to_summary(v) for v in page_items], total=total, page=page, page_size=page_size,
+    )
 
 
 @router.get("/versions/{version_id}", response_model=DatasetVersionSummary)

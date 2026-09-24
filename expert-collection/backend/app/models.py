@@ -266,6 +266,18 @@ class DatasetVersionSummary(BaseModel):
     is_gold: bool = False
 
 
+class DatasetVersionListResponse(BaseModel):
+    """Dashboard's「全部」数据集列表 -- paginated + searchable, distinct from the plain
+    `list[DatasetVersionSummary]` `/versions` already returns (that one stays a flat list
+    since existing callers -- the per-sourceType "latest version" read on the Dashboard
+    landing view, the experiment center's version picker -- just want everything, unpaginated).
+    """
+    items: list[DatasetVersionSummary]
+    total: int
+    page: int
+    page_size: int
+
+
 class PublishDatasetRequest(BaseModel):
     source_type: SourceType = "expert_collected"
     name: Optional[str] = None

@@ -4,13 +4,17 @@
 // is implemented -- see the "slice" tab below.
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
-import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, GOLD_STATUS_LABELS, SLICEABLE_FIELDS, VERDICT_LABELS } from "../api/types";
-import type { AnnotationSummary, DatasetVersionSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
+import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, SLICEABLE_FIELDS } from "../api/types";
+import type { DatasetVersionSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { TrendChart } from "../components/TrendChart";
-import { PriorAnnotationPanel } from "../components/PriorAnnotationPanel";
+import { DatasetVersionListPage } from "../components/DatasetVersionListPage";
 
+// 专家标注/Prior 标注功能已经挪到「数据录入与标注 → 数据标注」tab 去了（见
+// pages/AnnotationTab.tsx），Dashboard 现在只管发布/评分/导出，不再嵌一份标注 UI。
+
+type Screen = "dashboard" | "all_versions";
 type Tab = "quality" | "completeness" | "leakage" | "trend" | "slice";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -26,14 +30,15 @@ const BAND_LABEL: Record<string, string> = { good: "良好", warning: "待改善
 
 export function DashboardPage({ role }: { role: Role }) {
   const [sourceType, setSourceType] = useState<SourceType>("expert_collected");
+  const [screen, setScreen] = useState<Screen>("dashboard");
   const [versions, setVersions] = useState<DatasetVersionSummary[]>([]);
   const [draftCount, setDraftCount] = useState(0);
   const [tab, setTab] = useState<Tab>("quality");
   const [publishing, setPublishing] = useState(false);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const [priorRecords, setPriorRecords] = useState<PriorRecordSummary[]>([]);
-  const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
-  const [annotatingRecordId, setAnnotatingRecordId] = useState<string | null>(null);
+  // 点「查看全部」进列表、从列表里点「查看」选中某个具体版本时设置；null 代表看最新版本
+  // （首屏默认行为）。
+  const [selectedVersion, setSelectedVersion] = useState<DatasetVersionSummary | null>(null);
   const [sliceField, setSliceField] = useState<string>(SLICEABLE_FIELDS[0].field);
   const [sliceBuckets, setSliceBuckets] = useState<{ value: string; count: number; pct: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -48,19 +53,6 @@ export function DashboardPage({ role }: { role: Role }) {
       setVersions(vs);
       setDraftCount(pool.count);
       setTrend(trendRes.points);
-
-      const latestId = vs[0]?.id;
-      if (latestId) {
-        const [records, summary] = await Promise.all([
-          api.listPriorRecords(latestId),
-          api.getAnnotationSummary(latestId),
-        ]);
-        setPriorRecords(records);
-        setAnnotationSummary(summary);
-      } else {
-        setPriorRecords([]);
-        setAnnotationSummary(null);
-      }
     } catch (e) {
       setError(String(e));
     }
@@ -68,6 +60,8 @@ export function DashboardPage({ role }: { role: Role }) {
 
   useEffect(() => {
     refresh(sourceType);
+    setSelectedVersion(null);
+    setScreen("dashboard");
   }, [sourceType, refresh]);
 
   useEffect(() => {
@@ -83,6 +77,7 @@ export function DashboardPage({ role }: { role: Role }) {
     setError(null);
     try {
       await api.publishDataset(sourceType, role);
+      setSelectedVersion(null); // 发布完新版本，回到看最新版本
       await refresh(sourceType);
     } catch (e) {
       setError(String(e));
@@ -91,10 +86,13 @@ export function DashboardPage({ role }: { role: Role }) {
     }
   }
 
+  // 归档/标 Gold 之后，如果当前正看着的就是被改的这个版本（可能是从「全部」列表选进来的，
+  // 不一定是最新版本），把它也刷新一遍，不然界面上的归档/Gold 状态会跟后端脱节。
   async function handleArchive(versionId: string) {
     setError(null);
     try {
-      await api.archiveDatasetVersion(versionId);
+      const updated = await api.archiveDatasetVersion(versionId);
+      if (selectedVersion?.id === versionId) setSelectedVersion(updated);
       await refresh(sourceType);
     } catch (e) {
       setError(String(e));
@@ -104,35 +102,15 @@ export function DashboardPage({ role }: { role: Role }) {
   async function handleToggleGold(versionId: string, nextIsGold: boolean) {
     setError(null);
     try {
-      await api.markDatasetVersionGold(versionId, nextIsGold, role);
+      const updated = await api.markDatasetVersionGold(versionId, nextIsGold, role);
+      if (selectedVersion?.id === versionId) setSelectedVersion(updated);
       await refresh(sourceType);
     } catch (e) {
       setError(String(e));
     }
   }
 
-  async function handleRename(versionId: string, name: string) {
-    setError(null);
-    try {
-      await api.renameDatasetVersion(versionId, name, role);
-      await refresh(sourceType);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function handleDelete(versionId: string, name: string) {
-    if (!window.confirm(`确定要永久删除数据集「${name}」吗？此操作不可恢复，会一并删除它下面的标注记录。`)) return;
-    setError(null);
-    try {
-      await api.deleteDatasetVersion(versionId, role);
-      await refresh(sourceType);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  const latest = versions[0] ?? null;
+  const latest = selectedVersion ?? versions[0] ?? null;
   const readiness = latest?.readiness ?? null;
 
   return (
@@ -152,95 +130,40 @@ export function DashboardPage({ role }: { role: Role }) {
                     color: sourceType === st ? "#fff" : "#475569", fontWeight: 600,
                   }}
                 >
-                  {st === "expert_collected" ? "专家集" : "公共集"}
+                  {st === "expert_collected" ? "专家集" : "公有集"}
                 </button>
               ))}
             </div>
           </div>
-          <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
-            {latest ? `最近更新: ${new Date(latest.created_at).toLocaleString("zh-CN")}` : "尚未发布任何版本"}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
+              {latest ? `最近更新: ${new Date(latest.created_at).toLocaleString("zh-CN")}` : "尚未发布任何版本"}
+            </div>
+            {screen === "dashboard" && (
+              <button
+                onClick={() => setScreen("all_versions")}
+                style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#475569", borderRadius: 6, padding: "5px 12px", fontSize: 12, cursor: "pointer" }}
+              >
+                查看全部 →
+              </button>
+            )}
           </div>
         </div>
 
-        {sourceType === "public_extracted" && versions.length > 0 && (
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 20px", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>公共集数据集</div>
-            <div>
-              {versions.map((v) => (
-                <PublicDatasetRow
-                  key={v.id}
-                  version={v}
-                  isLatest={v.id === latest?.id}
-                  canManage={role === "admin"}
-                  onRename={(name) => handleRename(v.id, name)}
-                  onDelete={() => handleDelete(v.id, v.name)}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {priorRecords.length > 0 && (
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>
-                {sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
-              </div>
-              {annotationSummary && (
-                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
-                  标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
-                  {annotationSummary.annotated_records > 0 && (
-                    <span>
-                      {" "}
-                      （{(["accepted", "needs_revision", "rejected"] as const)
-                        .filter((v) => annotationSummary.verdict_counts[v])
-                        .map((v) => `${VERDICT_LABELS[v]} ${annotationSummary.verdict_counts[v]}`)
-                        .join("，")}
-                      ）
-                    </span>
-                  )}
-                  {" ・ "}Gold {annotationSummary.gold_counts.gold ?? 0} 条
-                  {annotationSummary.agreement_kappa !== null && ` ・ 一致性 κ=${annotationSummary.agreement_kappa}`}
-                </div>
-              )}
-            </div>
-            <div>
-              {priorRecords.map((r) => (
-                <div key={r.record_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5" }}>
-                  <div style={{ fontSize: 12.5 }}>
-                    {r.name} <span style={{ color: "#94a3b8" }}>（{r.node_count} 节点）</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.prior_status === "expert_annotated" ? "#eafaea" : "#f1f5f9",
-                        color: r.prior_status === "expert_annotated" ? "#0ca30c" : "#667085",
-                      }}
-                    >
-                      {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
-                        color: r.gold_status === "gold" ? "#b45309" : "#667085",
-                      }}
-                    >
-                      {GOLD_STATUS_LABELS[r.gold_status]}
-                    </span>
-                    <button
-                      onClick={() => setAnnotatingRecordId(r.record_id)}
-                      style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 11.5, cursor: "pointer" }}
-                    >
-                      去标注
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {screen === "all_versions" ? (
+          <DatasetVersionListPage
+            sourceType={sourceType}
+            canManage={role === "admin"}
+            actorRole={role}
+            onBack={() => setScreen("dashboard")}
+            onSelectVersion={(v) => {
+              setSelectedVersion(v);
+              setScreen("dashboard");
+            }}
+            onChanged={() => refresh(sourceType)}
+          />
+        ) : (
+        <>
 
         {sourceType === "expert_collected" && (
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -274,7 +197,7 @@ export function DashboardPage({ role }: { role: Role }) {
 
         {!latest ? (
           <div style={{ background: "#fff", border: "1px dashed #d0d5dd", borderRadius: 10, padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-            {sourceType === "expert_collected" ? "还没有发布过版本，先在专家采集页完成并确认几条会话，再回来发布。" : "还没有导入过公共集数据，请前往「数据与实验管理」的导入/导出面板导入。"}
+            {sourceType === "expert_collected" ? "还没有发布过版本，先在「数据录入与标注 → 专家录入」完成并确认几条会话，再回来发布。" : "还没有导入过公有集数据，请前往「数据与实验管理」的导入/导出面板导入。"}
           </div>
         ) : (
           <>
@@ -358,7 +281,7 @@ export function DashboardPage({ role }: { role: Role }) {
             )}
             {tab === "leakage" && (
               <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, fontSize: 13, color: "#94a3b8" }}>
-                当前"低泄漏风险"维度只用触发描述完全重复作为粗粒度信号（见"质量评分"Tab）。导入公共集时的近重复检测（文本 Jaccard 相似度 + 结构类型集合相似度）会在预检报告里展示更详细的成对比较结果。
+                当前"低泄漏风险"维度只用触发描述完全重复作为粗粒度信号（见"质量评分"Tab）。导入公有集时的近重复检测（文本 Jaccard 相似度 + 结构类型集合相似度）会在预检报告里展示更详细的成对比较结果。
               </div>
             )}
             {tab === "trend" && (
@@ -402,7 +325,7 @@ export function DashboardPage({ role }: { role: Role }) {
                   </div>
                 )}
                 <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12 }}>
-                  切片依据每条记录的 manufacturing_context（导入公共集时已随记录一起校验；专家采集的工作流可在会话页顶部补填）。"未填写"是诚实的空值分组，不是缺陷。
+                  切片依据每条记录的 manufacturing_context（导入公有集时已随记录一起校验；专家录入的工作流可在会话页顶部补填）。"未填写"是诚实的空值分组，不是缺陷。
                 </div>
               </div>
             )}
@@ -414,87 +337,9 @@ export function DashboardPage({ role }: { role: Role }) {
             {error}
           </div>
         )}
-      </div>
-
-      {annotatingRecordId && latest && (
-        <PriorAnnotationPanel
-          versionId={latest.id}
-          recordId={annotatingRecordId}
-          role={role}
-          onClose={() => setAnnotatingRecordId(null)}
-          onSaved={() => refresh(sourceType)}
-        />
-      )}
-    </div>
-  );
-}
-
-// Each public_extracted import is its own standalone dataset (unlike expert_collected's
-// single continuously-published version), so it gets per-row rename/delete here rather than
-// the archive-current-version flow above. Rename/delete are admin-only actions, same as
-// archive and Gold marking elsewhere on this page.
-function PublicDatasetRow({
-  version, isLatest, canManage, onRename, onDelete,
-}: {
-  version: DatasetVersionSummary; isLatest: boolean; canManage: boolean;
-  onRename: (name: string) => void; onDelete: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState(version.name);
-
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, minWidth: 0 }}>
-        {editing ? (
-          <>
-            <input
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              style={{ border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 8px", fontSize: 12.5 }}
-              autoFocus
-            />
-            <button
-              onClick={() => { if (draftName.trim()) { onRename(draftName.trim()); setEditing(false); } }}
-              style={{ border: "none", background: "#2a78d6", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}
-            >
-              保存
-            </button>
-            <button
-              onClick={() => { setDraftName(version.name); setEditing(false); }}
-              style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}
-            >
-              取消
-            </button>
-          </>
-        ) : (
-          <>
-            <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version.name}</span>
-            <span style={{ color: "#94a3b8", flexShrink: 0 }}>
-              v{version.version_number} · {version.workflow_count} 条 · {new Date(version.created_at).toLocaleDateString("zh-CN")}
-            </span>
-            {isLatest && (
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2a78d6", border: "1px solid #bfdbfe", borderRadius: 999, padding: "1px 8px", flexShrink: 0 }}>
-                当前
-              </span>
-            )}
-            {version.is_gold && (
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 8px", flexShrink: 0 }}>
-                ★ Gold
-              </span>
-            )}
-          </>
+        </>
         )}
       </div>
-      {canManage && !editing && (
-        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-          <button onClick={() => setEditing(true)} style={{ border: "1px solid #d0d5dd", background: "#fff", color: "#667085", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}>
-            改名
-          </button>
-          <button onClick={onDelete} style={{ border: "1px solid #fecaca", background: "#fff", color: "#d03b3b", borderRadius: 6, padding: "4px 10px", fontSize: 11.5, cursor: "pointer" }}>
-            删除
-          </button>
-        </div>
-      )}
     </div>
   );
 }
