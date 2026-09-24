@@ -428,7 +428,8 @@ def regenerate_check(workflow_id: str) -> RegenerateGraphCheck:
 
 @router.post("/{workflow_id}/regenerate-graph", response_model=WorkflowRecord)
 def regenerate_graph(workflow_id: str) -> WorkflowRecord:
-    """用大模型把整段会话重新整理成一张流程图，整体替换当前 graph。前置校验见
+    """用大模型把整段会话重新整理成一张流程图，整体替换当前 graph，并同时重置对话进度
+    （见 guide_service.state_after_regeneration：从新图的结构补问继续，已问过的不重复）。前置校验见
     `_regenerate_check`；LLM 调用失败时（未配置/超时/输出格式不对）原有 graph 保持不动，只
     把错误原样返回给前端，绝不用半成品或猜测的内容覆盖专家已经确认过的图。
     """
@@ -453,15 +454,27 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
 
     record["graph"] = new_graph
     record["validation"] = issues
+
+    # Reset the conversation progress to match the new graph: the old guide state (cursor,
+    # sweep chip options, pending branch/correction scratch) points at node ids that no longer
+    # exist. guide_service picks up from the structural sweeps on the new graph instead.
+    old_state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
+    reply, next_question, new_state = guide_service.state_after_regeneration(old_state, new_graph)
+    record["_guide_state"] = new_state
+    record["stage"] = new_state["stage"]
+    record["case_context"] = new_state.get("pending", {}).get("case_context")
+    record["unresolved"] = [next_question] if next_question else []
+    record["turns"].append(_assistant_turn(reply, next_question))
+    # Per-turn rollback snapshots hold pre-refresh graphs -- rolling back across the refresh
+    # would silently swap the old graph back in, so the correction picker starts fresh here.
+    record["_turn_state_log"] = []
+
     # A regenerated graph is unconfirmed by construction -- even if the workflow was already
-    # expert_confirmed, the expert hasn't looked at *this* graph yet, so drop it back to
-    # needs_confirmation for another review pass rather than silently keeping the old
-    # confirmed status on new content.
-    if record["status"] == "expert_confirmed":
-        record["status"] = "needs_confirmation"
-    record["completion"] = {"score": record["completion"]["score"], "ready_for_confirmation": not any(
-        i["level"] == "error" for i in issues
-    )}
+    # expert_confirmed, the expert hasn't looked at *this* graph yet. Ready for confirmation
+    # only once the remaining questions are done (same rule as post_turn).
+    ready = new_state["stage"] == "review" and not any(i["level"] == "error" for i in issues)
+    record["completion"] = {"score": _completion_score(record), "ready_for_confirmation": ready}
+    record["status"] = "needs_confirmation" if ready else "collecting"
     record["updated_at"] = _now()
     db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
