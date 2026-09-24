@@ -14,6 +14,7 @@ import type { Role } from "../api/types";
 import { DagView } from "../components/DagView";
 
 const STATUS_LABEL: Record<string, string> = { queued: "排队中", running: "运行中", completed: "已完成", failed: "失败" };
+const SOURCE_LABEL: Record<string, string> = { expert_collected: "专家集", public_extracted: "公共集" };
 const STATUS_COLOR: Record<string, string> = { queued: "#94a3b8", running: "#2a78d6", completed: "#0ca30c", failed: "#d03b3b" };
 
 type View = { kind: "list" } | { kind: "create" } | { kind: "detail"; id: string } | { kind: "compare"; ids: string[] };
@@ -157,9 +158,10 @@ const thStyle: CSSProperties = { padding: "10px 12px", fontWeight: 700, color: "
 const tdStyle: CSSProperties = { padding: "10px 12px", color: "#1f2937" };
 
 function CreateExperimentForm({ role, onCreated, onCancel }: { role: Role; onCreated: (id: string) => void; onCancel: () => void }) {
-  const [versions, setVersions] = useState<DatasetVersionSummary[]>([]);
+  const [expertVersions, setExpertVersions] = useState<DatasetVersionSummary[]>([]);
+  const [publicVersions, setPublicVersions] = useState<DatasetVersionSummary[]>([]);
   const [name, setName] = useState("");
-  const [datasetVersionId, setDatasetVersionId] = useState("");
+  const [selectedVersionIds, setSelectedVersionIds] = useState<Set<string>>(new Set());
   const [method, setMethod] = useState<ExperimentMethod>("consensus_dfg");
   const [seed, setSeed] = useState(42);
   const [trainSplit, setTrainSplit] = useState(0.7);
@@ -169,21 +171,31 @@ function CreateExperimentForm({ role, onCreated, onCancel }: { role: Role; onCre
 
   useEffect(() => {
     api.listDatasetVersions("expert_collected").then((vs) => {
-      setVersions(vs);
-      if (vs[0]) setDatasetVersionId(vs[0].id);
+      setExpertVersions(vs);
+      if (vs[0]) setSelectedVersionIds((prev) => new Set(prev).add(vs[0].id));
     });
+    api.listDatasetVersions("public_extracted").then(setPublicVersions);
   }, []);
 
+  function toggleVersion(id: string) {
+    setSelectedVersionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   async function handleSubmit() {
-    if (!name.trim() || !datasetVersionId) {
-      setError("请填写实验名称并选择数据集版本");
+    if (!name.trim() || selectedVersionIds.size === 0) {
+      setError("请填写实验名称并至少选择一个数据集版本");
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
       const exp = await api.createExperiment({
-        name, source_type: "expert_collected", dataset_version_id: datasetVersionId,
+        name, dataset_version_ids: [...selectedVersionIds],
         input_version: "raw", representation: "node_edge_graph", method,
         model_name: method === "llm_extractor" ? modelName : null,
         seed, train_split: trainSplit,
@@ -210,16 +222,14 @@ function CreateExperimentForm({ role, onCreated, onCancel }: { role: Role; onCre
           <Field label="实验名称">
             <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} placeholder="例如：consensus baseline v1" />
           </Field>
-          <Field label="数据源">
-            <input disabled value="Expert（专家采集）" style={{ ...inputStyle, color: "#94a3b8" }} />
-          </Field>
-          <Field label="数据集版本">
-            <select value={datasetVersionId} onChange={(e) => setDatasetVersionId(e.target.value)} style={inputStyle}>
-              {versions.map((v) => (
-                <option key={v.id} value={v.id}>v{v.version_number}（{v.workflow_count} 条工作流）</option>
-              ))}
-            </select>
-            {versions.length === 0 && <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>还没有已发布的数据集版本，请先在 Dashboard 发布一个。</div>}
+          <Field label="训练数据集（可多选，可跨数据源——PRD §14.1：Combined Train 允许，但 Test 会按来源分别报告，不会只给一个混合总分）">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <VersionChecklist sourceLabel="专家集" versions={expertVersions} selectedIds={selectedVersionIds} onToggle={toggleVersion} />
+              <VersionChecklist sourceLabel="公共集" versions={publicVersions} selectedIds={selectedVersionIds} onToggle={toggleVersion} />
+            </div>
+            {expertVersions.length === 0 && publicVersions.length === 0 && (
+              <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>还没有已发布的数据集版本，请先在 Dashboard 发布一个。</div>
+            )}
           </Field>
           <Field label="表示方式">
             <input disabled value="Node-Edge Graph" style={{ ...inputStyle, color: "#94a3b8" }} />
@@ -266,6 +276,28 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {label}
       {children}
     </label>
+  );
+}
+
+function VersionChecklist({
+  sourceLabel, versions, selectedIds, onToggle,
+}: {
+  sourceLabel: string;
+  versions: DatasetVersionSummary[];
+  selectedIds: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  if (versions.length === 0) return null;
+  return (
+    <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#667085", marginBottom: 6 }}>{sourceLabel}</div>
+      {versions.map((v) => (
+        <label key={v.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 400, padding: "3px 0", cursor: "pointer" }}>
+          <input type="checkbox" checked={selectedIds.has(v.id)} onChange={() => onToggle(v.id)} />
+          v{v.version_number}（{v.workflow_count} 条工作流）
+        </label>
+      ))}
+    </div>
   );
 }
 
@@ -351,6 +383,41 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
               </div>
             </section>
 
+            {Object.keys(exp.metrics_by_source).length > 0 && (
+              <section style={sectionCard}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>按数据源分别报告</div>
+                <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 10 }}>
+                  PRD §14.1：训练集可以跨数据源合并（Combined Train），但测试结果必须按来源分别报告，不能只给一个混合总分——上面的 Summary 是整体指标，这里是每个来源各自的指标。
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+                      <th style={thStyle}>数据源</th>
+                      <th style={thStyle}>Node F1</th>
+                      <th style={thStyle}>Edge F1</th>
+                      <th style={thStyle}>Graph Structural F1</th>
+                      <th style={thStyle}>结构特征匹配率</th>
+                      <th style={thStyle}>Train / Test</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(exp.metrics_by_source).map(([source, m]) => (
+                      <tr key={source} style={{ borderTop: "1px solid #f1f3f5" }}>
+                        <td style={tdStyle}>{SOURCE_LABEL[source] ?? source}</td>
+                        <td style={tdStyle}>{m.node_f1 ?? "—"}</td>
+                        <td style={tdStyle}>{m.edge_f1 ?? "—"}</td>
+                        <td style={tdStyle}>{m.graph_structural_f1 ?? "—"}</td>
+                        <td style={tdStyle}>{m.structural_match_rate ?? "—"}</td>
+                        <td style={tdStyle}>
+                          {exp.train_count_by_source[source as keyof typeof exp.train_count_by_source] ?? "—"} / {exp.test_count_by_source[source as keyof typeof exp.test_count_by_source] ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+            )}
+
             <section style={sectionCard}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Graph（挖出来的共识结构）</div>
               <div style={{ height: 320, border: "1px solid #f1f3f5", borderRadius: 8, overflow: "hidden" }}>
@@ -366,13 +433,15 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ textAlign: "left", color: "#667085" }}>
-                      <th style={thStyle}>工作流</th><th style={thStyle}>结构类型</th><th style={thStyle}>Node F1</th><th style={thStyle}>Edge F1</th>
+                      <th style={thStyle}>工作流</th><th style={thStyle}>数据源</th><th style={thStyle}>结构类型</th><th style={thStyle}>Node F1</th><th style={thStyle}>Edge F1</th>
                     </tr>
                   </thead>
                   <tbody>
                     {exp.error_analysis.map((c, i) => (
                       <tr key={i} style={{ borderTop: "1px solid #f1f3f5" }}>
-                        <td style={tdStyle}>{c.workflow_name}</td><td style={tdStyle}>{c.group}</td>
+                        <td style={tdStyle}>{c.workflow_name}</td>
+                        <td style={tdStyle}>{c.source_type ? (SOURCE_LABEL[c.source_type] ?? c.source_type) : "—"}</td>
+                        <td style={tdStyle}>{c.group}</td>
                         <td style={tdStyle}>{c.node_f1}</td><td style={tdStyle}>{c.edge_f1}</td>
                       </tr>
                     ))}
@@ -395,7 +464,7 @@ function ExperimentDetailView({ id, onBack }: { id: string; onBack: () => void }
             </section>
 
             <section style={{ ...sectionCard, color: "#94a3b8", fontSize: 12.5 }}>
-              按行业/制造模式/场景对 Error Analysis 做切片本轮未实现——分类字段（manufacturing_context）本身已经接上了，Dashboard 的"行业/场景切片"Tab 能看，只是还没有把这个筛选条件接进实验详情页的失败案例分析。
+              PRD §14.4 的 Dataset Slice 里"Public vs Expert"这一轴已经实现（见上面"按数据源分别报告"和这张表的"数据源"列）；按行业/制造模式/场景对 Error Analysis 做切片仍未实现——分类字段（manufacturing_context）本身已经接上了，Dashboard 的"行业/场景切片"Tab 能看，只是还没有把这个筛选条件接进实验详情页的失败案例分析。
             </section>
           </>
         )}

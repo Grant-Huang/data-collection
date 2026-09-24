@@ -413,9 +413,16 @@ InputVersion = Literal["raw", "anonymized", "role_normalized"]
 
 
 class CreateExperimentRequest(BaseModel):
+    """No `source_type` field -- IMPLEMENTATION_PLAN.md's Combined Train design (PRD §14.1:
+    "允许 Combined Train，Test 仍必须分别报告") means a single experiment's training pool can
+    span multiple dataset versions across both source types, so a single top-level source_type
+    would no longer describe the request. Each version's own `source_type` (read from
+    `db.get_dataset_version`) is what the run actually groups train/test by; the frontend's
+    "先筛一遍" source picker (PRD §12.0) is purely a UI convenience for narrowing the version
+    checklist, not a field the backend needs.
+    """
     name: str
-    source_type: SourceType = "expert_collected"
-    dataset_version_id: str
+    dataset_version_ids: list[str] = Field(min_length=1)
     input_version: InputVersion = "raw"
     representation: Representation = "node_edge_graph"
     method: ExperimentMethod = "consensus_dfg"
@@ -434,8 +441,9 @@ class CreateExperimentRequest(BaseModel):
 class ExperimentSummary(BaseModel):
     id: str
     name: str
-    dataset_version_id: str
+    dataset_version_ids: list[str]
     dataset_label: str
+    source_types: list[SourceType]
     method: ExperimentMethod
     model_name: Optional[str] = None
     status: ExperimentStatus
@@ -446,7 +454,6 @@ class ExperimentSummary(BaseModel):
 
 
 class ExperimentDetail(ExperimentSummary):
-    source_type: SourceType
     input_version: InputVersion
     representation: Representation
     prompt_version: Optional[str] = None
@@ -455,7 +462,10 @@ class ExperimentDetail(ExperimentSummary):
     train_split: float
     train_count: Optional[int] = None
     test_count: Optional[int] = None
+    train_count_by_source: dict = Field(default_factory=dict)
+    test_count_by_source: dict = Field(default_factory=dict)
     metrics: dict = Field(default_factory=dict)
+    metrics_by_source: dict = Field(default_factory=dict)
     explanation: Optional[str] = None
     explanation_edited: bool = False
     consensus_graph: Optional[Graph] = None
