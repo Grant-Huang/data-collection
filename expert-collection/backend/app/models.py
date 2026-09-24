@@ -67,7 +67,17 @@ class Graph(BaseModel):
 class ConversationTurn(BaseModel):
     turn_id: str
     role: Literal["expert", "assistant"]
+    # Full plain text of the message -- what exports/anonymization/older records read.
     text: str
+    # Assistant turns only, all optional (older records don't have them): the same message
+    # split into layers so the chat bubble can render them separately -- a short restatement
+    # of what was just recorded, the one question being asked, a one-line "why ask this",
+    # and the chips that were offered with it (kept so the history shows what was picked).
+    ack: Optional[str] = None
+    question: Optional[str] = None
+    why: Optional[str] = None
+    chips: Optional[list[str]] = None
+    chip_mode: Optional[Literal["prefill", "multi_select"]] = None
 
 
 class NextQuestion(BaseModel):
@@ -81,6 +91,10 @@ class NextQuestion(BaseModel):
     # selection before it goes into the draft box (IMPLEMENTATION_PLAN.md section 9.1,
     # Case Context B-group). Never auto-sends either way -- PRD section 18 still applies.
     chip_mode: Optional[Literal["prefill", "multi_select"]] = None
+    # Restatement of what was just recorded, and a one-line reason for asking (see
+    # guide_phrasing.py). Both optional -- rendered as separate layers of the bubble.
+    ack: Optional[str] = None
+    why: Optional[str] = None
 
 
 class ValidationIssue(BaseModel):
@@ -149,6 +163,8 @@ class CaseContext(BaseModel):
     unknown_info: Optional[str] = None
     constraints: Optional[str] = None
     available_resources: Optional[str] = None
+    # PRD 18.2 P6: where the expert relied on experience rather than written rules.
+    experience_notes: Optional[str] = None
     # A-group: which fields the expert answered in "brief" vs "detailed" mode.
     detail_level: dict[str, str] = Field(default_factory=dict)
     # B-group: which fields the expert skipped by picking the "无" chip.
