@@ -30,7 +30,7 @@ export function SessionPage() {
     const warning = check.will_reset_confirmation
       ? "\n\n注意：这个会话已经确认过，重新生成后会变回「待确认」，需要重新确认一遍。"
       : "";
-    if (!window.confirm(`刷新工作流图会用大模型根据当前会话内容重新生成，重绘之前的工作流图。${warning}\n\n确定要继续吗？`)) {
+    if (!window.confirm(`刷新工作流图会用大模型根据当前会话内容重新生成，重绘之前的工作流图。对话会在新图的基础上继续，之前未答完的问题会作废，也不能再回退到刷新之前。${warning}\n\n确定要继续吗？`)) {
       return;
     }
     await regenerateGraph();

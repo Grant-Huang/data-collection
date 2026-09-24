@@ -225,3 +225,74 @@ def test_finalize_uses_valid_llm_output_and_falls_back_on_invalid(monkeypatch):
     fallback_nq = {**chip_nq, "rephrasable": True}
     reply, out = guide_phrasing.finalize("记下了：「停机」。", fallback_nq, last_expert_message="班组长先停机")
     assert out["question"] == "「停机」之后还有别的事吗？" and "rephrasable" not in out
+
+
+# --- 「刷新工作流图」 resets conversation progress --------------------------------------------
+
+def _regenerated_graph():
+    nodes = [
+        {"node_id": "s", "node_type": "start", "label": "开始"},
+        {"node_id": "a", "node_type": "activity", "label": "停机检查"},
+        {"node_id": "b", "node_type": "activity", "label": "更换刀具"},
+        {"node_id": "e", "node_type": "end", "label": "恢复生产"},
+    ]
+    edges = [
+        {"edge_id": "e1", "from": "s", "to": "a", "edge_type": "normal"},
+        {"edge_id": "e2", "from": "a", "to": "b", "edge_type": "normal"},
+        {"edge_id": "e3", "from": "b", "to": "e", "edge_type": "normal"},
+    ]
+    for n in nodes:
+        n.update({"actor_roles": [], "decision_question": None, "confidence": 0.6,
+                  "expert_confirmed": False, "source_turn_ids": []})
+    for e in edges:
+        e.update({"condition": None, "confidence": 0.6, "expert_confirmed": False, "source_turn_ids": []})
+    return {"graph_type": "dag", "start_node_ids": ["s"], "end_node_ids": ["e"], "nodes": nodes, "edges": edges}
+
+
+def test_regenerate_resets_progress_mid_main_path(client, monkeypatch):
+    wid = client.post("/api/expert-workflows", json={}).json()["id"]
+    _through_background(client, wid)
+    _turn(client, wid, "班组长先停机")
+    _turn(client, wid, "质检员复测尺寸")          # stage main_path, cursor on an old node id
+    monkeypatch.setattr(guide_service, "regenerate_graph_from_transcript", lambda turns: _regenerated_graph())
+
+    r = client.post(f"/api/expert-workflows/{wid}/regenerate-graph")
+    assert r.status_code == 200, r.text
+    rec = r.json()
+    nq = rec["unresolved"][0]
+    # Continues from the structural sweeps, with chips rebuilt from the *new* graph's steps.
+    assert rec["stage"] == "sweep_branch_pick" and nq["target"] == "branch_discovery"
+    assert "停机检查" in nq["chips"] and "班组长先停机" not in nq["chips"]
+    assert rec["turns"][-1]["role"] == "assistant" and "重新整理" in rec["turns"][-1]["ack"]
+    assert rec["status"] == "collecting" and rec["completion"]["ready_for_confirmation"] is False
+
+    # Answering a sweep acts on the new graph and keeps it valid.
+    r = _turn(client, wid, "停机检查")
+    assert "什么情况下会接着做「更换刀具」" in r["next_question"]["question"]
+    assert graph_validator.is_valid(r["current_dag"]) is False  # decision waits for its 2nd branch
+    _turn(client, wid, "刀具磨损")
+    r = _turn(client, wid, "刀具正常，调整参数")
+    assert r["next_question"]["target"] == "branch_rejoin"
+
+
+def test_regenerate_skips_answered_sweeps_and_clears_rollback_log(client, monkeypatch):
+    wid = client.post("/api/expert-workflows", json={}).json()["id"]
+    _through_background(client, wid)
+    for step in ["停机", "复测尺寸"]:
+        _turn(client, wid, step)
+    _turn(client, wid, END_CHIP)
+    _turn(client, wid, "产线恢复")
+    _turn(client, wid, "没有，一直是这么处理")         # branch sweep answered
+    _turn(client, wid, NO_PARALLEL_CHIP)                # parallel sweep answered
+    monkeypatch.setattr(guide_service, "regenerate_graph_from_transcript", lambda turns: _regenerated_graph())
+
+    rec = client.post(f"/api/expert-workflows/{wid}/regenerate-graph").json()
+    assert rec["unresolved"][0]["target"] == "approval_discovery"   # branch/parallel not repeated
+    from app import db
+    assert db.get(wid)["_turn_state_log"] == []
+
+    # Finish the remaining sweeps -> final review, confirmable.
+    _turn(client, wid, "没有需要等人确认的")
+    _turn(client, wid, "没有返工的情况")
+    r = _turn(client, wid, "没有特别靠经验的地方")
+    assert r["next_question"] is None and r["completion"]["ready_for_confirmation"] is True
