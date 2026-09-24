@@ -4,6 +4,16 @@ and `pm4py_heuristics` actually execute (see experiments.py), `llm_extractor` do
 (needs its own input/output protocol design, not just a metrics swap).
 Runs go through a real async transition (queued -> running -> completed/failed) via FastAPI
 BackgroundTasks, not a fake progress bar.
+
+Multi-dataset / Combined Train (PRD §14.1): `CreateExperimentRequest.dataset_version_ids` is a
+list, not a single id, and can span both source_types. Fixed two things at once doing this:
+(1) the old code read every record via `db.get(workflow_id)`, which only has rows for
+`expert_collected` -- a `public_extracted` version silently produced an empty train/test set
+instead of an honest error; both now go through `dataset_records.records_for_export()`, which
+already normalizes both source types. (2) Train pools across every selected version, but PRD
+§14.1's hard rule ("允许 Combined Train，Test 仍必须分别报告，禁止只给一个混合总分") means the
+train/test split happens per source_type *before* pooling, and every experiment carries both
+an overall `metrics` and a per-source `metrics_by_source` -- never only a blended total.
 """
 from __future__ import annotations
 
@@ -12,7 +22,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from .. import audit, db, experiments as engine, explain
+from .. import audit, dataset_records, db, experiments as engine, explain
 from ..models import (
     ComparisonRequest,
     ComparisonResult,
@@ -32,8 +42,9 @@ def _now() -> str:
 def _to_summary(exp: dict) -> ExperimentSummary:
     metrics = exp.get("metrics") or {}
     return ExperimentSummary(
-        id=exp["id"], name=exp["name"], dataset_version_id=exp["dataset_version_id"],
-        dataset_label=exp["dataset_label"], method=exp["method"], model_name=exp.get("model_name"),
+        id=exp["id"], name=exp["name"], dataset_version_ids=exp["dataset_version_ids"],
+        dataset_label=exp["dataset_label"], source_types=exp["source_types"],
+        method=exp["method"], model_name=exp.get("model_name"),
         status=exp["status"], created_by=exp["created_by"], created_at=exp["created_at"],
         node_f1=metrics.get("node_f1"), graph_structural_f1=metrics.get("graph_structural_f1"),
     )
@@ -54,22 +65,54 @@ def _run_experiment(exp_id: str) -> None:
         if exp["method"] not in engine.IMPLEMENTED_METHODS:
             raise RuntimeError(f"方法 {exp['method']} 本轮未接入真实执行引擎，无法产出结果")
 
-        version = db.get_dataset_version(exp["dataset_version_id"])
-        if not version:
+        versions = [db.get_dataset_version(vid) for vid in exp["dataset_version_ids"]]
+        if any(v is None for v in versions):
             raise RuntimeError("引用的数据集版本不存在")
 
-        train_ids, test_ids = engine.split_train_test(version["workflow_ids"], exp["seed"], exp["train_split"])
-        train_records = [db.get(wid) for wid in train_ids]
-        test_records = [db.get(wid) for wid in test_ids]
-        train_graphs = [r["graph"] for r in train_records if r]
-        test_records = [r for r in test_records if r]
+        # PRD §14.1's hard rule: Combined Train may pool records across every selected version
+        # regardless of source_type, but Test must stay split out per source_type so results
+        # can always be reported separately, never only a blended total -- so the split happens
+        # per source_type BEFORE pooling into one train set, not after a single combined split.
+        # `dataset_records.records_for_export` is what makes this loop source_type-agnostic in
+        # the first place: before this, public_extracted records weren't reachable here at all
+        # (see IMPLEMENTATION_PLAN.md's note on the old direct-`db.get(wid)` bug).
+        seen_ids: set[str] = set()
+        records_by_source: dict[str, list[dict]] = {}
+        for version in versions:
+            for r in dataset_records.records_for_export(version):
+                rid = r.get("record_id")
+                # Dataset versions are cumulative snapshots, so selecting two versions of the
+                # same source (e.g. v1 and v2) can genuinely overlap -- count each record once.
+                if not rid or rid in seen_ids:
+                    continue
+                seen_ids.add(rid)
+                records_by_source.setdefault(version["source_type"], []).append(r)
+
+        train_records: list[dict] = []
+        test_records: list[dict] = []
+        test_source_types: list[str] = []
+        train_count_by_source: dict[str, int] = {}
+        test_count_by_source: dict[str, int] = {}
+        for source_type, records in records_by_source.items():
+            record_ids = [r["record_id"] for r in records]
+            train_ids, test_ids = engine.split_train_test(record_ids, exp["seed"], exp["train_split"])
+            by_id = {r["record_id"]: r for r in records}
+            train_count_by_source[source_type] = len(train_ids)
+            test_count_by_source[source_type] = len(test_ids)
+            for rid in train_ids:
+                train_records.append(by_id[rid])
+            for rid in test_ids:
+                test_records.append(by_id[rid])
+                test_source_types.append(source_type)
+
+        train_graphs = [r["graph"] for r in train_records]
         test_graphs = [r["graph"] for r in test_records]
-        test_names = [r["name"] for r in test_records]
+        test_names = [r.get("scenario", {}).get("scenario_name") or r["record_id"] for r in test_records]
 
         if exp["method"] == "consensus_dfg":
-            result = engine.run_consensus_dfg(train_graphs, test_graphs, test_names)
+            result = engine.run_consensus_dfg(train_graphs, test_graphs, test_names, test_source_types)
         else:
-            result = engine.run_pm4py_method(exp["method"], train_graphs, test_graphs, test_names)
+            result = engine.run_pm4py_method(exp["method"], train_graphs, test_graphs, test_names, test_source_types)
         error_clusters = explain.cluster_error_cases(result["error_analysis"])
         explanation = explain.explain_experiment(
             result["metrics"], result["error_analysis"], len(train_graphs), len(test_graphs)
@@ -79,7 +122,10 @@ def _run_experiment(exp_id: str) -> None:
             "status": "completed",
             "train_count": len(train_graphs),
             "test_count": len(test_graphs),
+            "train_count_by_source": train_count_by_source,
+            "test_count_by_source": test_count_by_source,
             "metrics": result["metrics"],
+            "metrics_by_source": result["metrics_by_source"],
             "consensus_graph": result["consensus_graph"],
             "error_analysis": result["error_analysis"],
             "error_clusters": error_clusters,
@@ -95,17 +141,18 @@ def _run_experiment(exp_id: str) -> None:
 
 @router.post("", response_model=ExperimentDetail)
 def create_experiment(req: CreateExperimentRequest, background_tasks: BackgroundTasks) -> ExperimentDetail:
-    version = db.get_dataset_version(req.dataset_version_id)
-    if not version:
-        raise HTTPException(status_code=404, detail="dataset version not found")
+    versions = [db.get_dataset_version(vid) for vid in req.dataset_version_ids]
+    missing = [vid for vid, v in zip(req.dataset_version_ids, versions) if v is None]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"数据集版本不存在：{', '.join(missing)}")
 
     exp_id = uuid.uuid4().hex[:12]
     exp = {
         "id": exp_id,
         "name": req.name,
-        "source_type": req.source_type,
-        "dataset_version_id": req.dataset_version_id,
-        "dataset_label": f"{version['name']} v{version['version_number']}",
+        "dataset_version_ids": req.dataset_version_ids,
+        "dataset_label": " + ".join(f"{v['name']} v{v['version_number']}" for v in versions),
+        "source_types": sorted({v["source_type"] for v in versions}),
         "input_version": req.input_version,
         "representation": req.representation,
         "method": req.method,
@@ -117,7 +164,9 @@ def create_experiment(req: CreateExperimentRequest, background_tasks: Background
         "status": "queued",
         "created_by": req.actor_role or "unknown",
         "created_at": _now(),
-        "train_count": None, "test_count": None, "metrics": {},
+        "train_count": None, "test_count": None,
+        "train_count_by_source": {}, "test_count_by_source": {},
+        "metrics": {}, "metrics_by_source": {},
         "explanation": None, "explanation_edited": False,
         "consensus_graph": None, "error_analysis": [], "error_clusters": [], "failure_reason": None,
     }
