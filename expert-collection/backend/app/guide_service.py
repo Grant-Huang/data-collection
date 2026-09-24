@@ -606,10 +606,30 @@ _STEP_UNDERSTANDING_SYSTEM_PROMPT = """你是一个制造业专家访谈助手�
 只输出 JSON，不要有任何其他文字。"""
 
 
+def _is_subsequence(needle: str, haystack: str) -> bool:
+    it = iter(haystack)
+    return all(ch in it for ch in needle)
+
+
+def _clauses_are_grounded(clauses: list[str], text: str) -> bool:
+    """The system prompt *tells* the model every clause must be traceable to the expert's own
+    words, but a prompt instruction is not an enforcement mechanism -- a model can (and, on
+    this exact question, has been observed to) answer with a plausible-sounding fabricated
+    example instead of extracting from `text`. This is the same "the model's output must be
+    checked, not trusted" rule `anonymize.py::_is_subsequence` and `explain.py::
+    _no_fabricated_numbers` already apply to their own LLM calls -- this module was the one
+    place that had the honesty claim in its prompt but no code-level check backing it up.
+    Each clause must be a character subsequence of `text` (same characters, same order,
+    filler/background words in between may be skipped -- exactly what "提炼" is supposed to
+    do), not merely returned as similar-sounding invented content.
+    """
+    return all(_is_subsequence(c, text) for c in clauses)
+
+
 def _llm_understand_step(text: str, slot_config: dict) -> dict | None:
     """Returns None on ANY failure (not configured, network/timeout, malformed output, wrong
-    shape) so the caller falls back to the rule-based path -- never raises, per llm_client.py's
-    "must not crash or hang the turn" rule.
+    shape, or a clause that isn't actually grounded in `text`) so the caller falls back to the
+    rule-based path -- never raises, per llm_client.py's "must not crash or hang the turn" rule.
     """
     try:
         parsed = llm_client.chat_completion_json(slot_config, [
@@ -624,6 +644,8 @@ def _llm_understand_step(text: str, slot_config: dict) -> dict | None:
             or not all(isinstance(c, str) and c.strip() for c in clauses)):
         return None
     clauses = [c.strip()[:60] for c in clauses]
+    if not _clauses_are_grounded(clauses, text):
+        return None
 
     relationship = parsed.get("relationship") if len(clauses) >= 2 else "serial"
     if relationship not in ("serial", "parallel", "ambiguous"):
@@ -677,6 +699,8 @@ def _llm_understand_step_and_correction(text: str, slot_config: dict) -> dict | 
             or not all(isinstance(c, str) and c.strip() for c in clauses)):
         return None
     clauses = [c.strip()[:60] for c in clauses]
+    if not _clauses_are_grounded(clauses, text):
+        return None
 
     relationship = parsed.get("relationship") if len(clauses) >= 2 else "serial"
     if relationship not in ("serial", "parallel", "ambiguous"):
