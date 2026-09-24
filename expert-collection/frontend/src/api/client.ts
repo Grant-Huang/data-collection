@@ -7,13 +7,17 @@ import type {
   ExperimentDetail,
   ExperimentSummary,
   ManufacturingContext,
+  Graph,
   NodeVerdicts,
   PriorRecordDetail,
   PriorRecordSummary,
   PriorVerdict,
+  ReasonTag,
+  ReworkEdits,
   Settings,
   SourceType,
   TurnResponse,
+  ValidationIssue,
   WorkflowRecord,
   WorkflowSummary,
 } from "./types";
@@ -106,15 +110,25 @@ export const api = {
   submitAnnotation: (
     versionId: string,
     recordId: string,
-    verdict: PriorVerdict,
-    nodeVerdicts: NodeVerdicts,
-    note: string | null,
-    annotatorName: string,
-    actorRole?: string,
-  ) =>
-    req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/annotations`, {
-      verdict, node_verdicts: nodeVerdicts, note, annotator_name: annotatorName, actor_role: actorRole,
-    }),
+    body: {
+      verdict: PriorVerdict;
+      node_verdicts: NodeVerdicts;
+      reason_tags: ReasonTag[];
+      note: string | null;
+      annotator_name: string;
+      actor_role?: string;
+      round: number; // round the annotator was looking at -- backend answers 409 if it moved on
+    },
+  ) => req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/annotations`, body),
+  previewRework: (versionId: string, recordId: string, edits: ReworkEdits) =>
+    req<{ graph: Graph; issues: ValidationIssue[] }>(
+      "POST", `/api/datasets/versions/${versionId}/records/${recordId}/rework/preview`, edits,
+    ),
+  submitRework: (
+    versionId: string,
+    recordId: string,
+    body: { edits: ReworkEdits; reworker_name: string; note: string | null; actor_role?: string; round: number },
+  ) => req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/rework`, body),
   getAnnotationSummary: (versionId: string) =>
     req<AnnotationSummary>("GET", `/api/datasets/versions/${versionId}/annotation-summary`),
 };
@@ -138,4 +152,21 @@ export interface TrendPoint {
   created_at: string;
   overall: number | null;
   dimensions: Record<string, number | null>;
+}
+
+// Turns a req() error into the backend's human-readable `detail` when there is one (all the
+// annotation endpoints return Chinese messages meant to be shown as-is), falling back to the
+// raw text for anything else.
+export function apiErrorMessage(e: unknown): string {
+  const text = e instanceof Error ? e.message : String(e);
+  const jsonStart = text.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const detail = JSON.parse(text.slice(jsonStart)).detail;
+      if (typeof detail === "string") return detail;
+    } catch {
+      // not JSON -- fall through
+    }
+  }
+  return text;
 }

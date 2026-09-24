@@ -4,13 +4,13 @@
 // is implemented -- see the "slice" tab below.
 import { useCallback, useEffect, useState } from "react";
 import { api, type TrendPoint } from "../api/client";
-import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, GOLD_STATUS_LABELS, SLICEABLE_FIELDS, VERDICT_LABELS } from "../api/types";
+import { DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS, SLICEABLE_FIELDS } from "../api/types";
 import type { AnnotationSummary, DatasetVersionSummary, PriorRecordSummary, Role, SourceType } from "../api/types";
 import { MetricCard } from "../components/MetricCard";
 import { ScoreBar } from "../components/ScoreBar";
 import { ImportPanel } from "../components/ImportPanel";
 import { TrendChart } from "../components/TrendChart";
-import { PriorAnnotationPanel } from "../components/PriorAnnotationPanel";
+import { AnnotationQueue } from "../components/AnnotationQueue";
 
 type Tab = "quality" | "completeness" | "leakage" | "trend" | "slice";
 
@@ -37,7 +37,6 @@ export function DashboardPage({ role }: { role: Role }) {
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [priorRecords, setPriorRecords] = useState<PriorRecordSummary[]>([]);
   const [annotationSummary, setAnnotationSummary] = useState<AnnotationSummary | null>(null);
-  const [annotatingRecordId, setAnnotatingRecordId] = useState<string | null>(null);
   const [sliceField, setSliceField] = useState<string>(SLICEABLE_FIELDS[0].field);
   const [sliceBuckets, setSliceBuckets] = useState<{ value: string; count: number; pct: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -151,66 +150,15 @@ export function DashboardPage({ role }: { role: Role }) {
           </div>
         )}
 
-        {priorRecords.length > 0 && (
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>
-                {sourceType === "public_extracted" ? "Prior 标注（Public/LLM-derived Prior → Expert-annotated Prior）" : "专家复核（独立第二人确认 → Gold）"}
-              </div>
-              {annotationSummary && (
-                <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
-                  标注覆盖率 {annotationSummary.annotated_records}/{annotationSummary.total_records}
-                  {annotationSummary.annotated_records > 0 && (
-                    <span>
-                      {" "}
-                      （{(["accepted", "needs_revision", "rejected"] as const)
-                        .filter((v) => annotationSummary.verdict_counts[v])
-                        .map((v) => `${VERDICT_LABELS[v]} ${annotationSummary.verdict_counts[v]}`)
-                        .join("，")}
-                      ）
-                    </span>
-                  )}
-                  {" ・ "}Gold {annotationSummary.gold_counts.gold ?? 0} 条
-                  {annotationSummary.agreement_kappa !== null && ` ・ 一致性 κ=${annotationSummary.agreement_kappa}`}
-                </div>
-              )}
-            </div>
-            <div>
-              {priorRecords.map((r) => (
-                <div key={r.record_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f3f5" }}>
-                  <div style={{ fontSize: 12.5 }}>
-                    {r.name} <span style={{ color: "#94a3b8" }}>（{r.node_count} 节点）</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.prior_status === "expert_annotated" ? "#eafaea" : "#f1f5f9",
-                        color: r.prior_status === "expert_annotated" ? "#0ca30c" : "#667085",
-                      }}
-                    >
-                      {r.prior_status === "expert_annotated" ? `已标注・${r.latest_verdict ? VERDICT_LABELS[r.latest_verdict] : ""}` : "待标注"}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
-                        background: r.gold_status === "gold" ? "#fff7e6" : "#f1f5f9",
-                        color: r.gold_status === "gold" ? "#b45309" : "#667085",
-                      }}
-                    >
-                      {GOLD_STATUS_LABELS[r.gold_status]}
-                    </span>
-                    <button
-                      onClick={() => setAnnotatingRecordId(r.record_id)}
-                      style={{ border: "1px solid #2a78d6", color: "#2a78d6", background: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 11.5, cursor: "pointer" }}
-                    >
-                      去标注
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+        {priorRecords.length > 0 && versions[0] && (
+          <AnnotationQueue
+            sourceType={sourceType}
+            versionId={versions[0].id}
+            records={priorRecords}
+            summary={annotationSummary}
+            role={role}
+            onChanged={() => refresh(sourceType)}
+          />
         )}
 
         {sourceType === "expert_collected" && (
@@ -284,8 +232,16 @@ export function DashboardPage({ role }: { role: Role }) {
               <MetricCard label="步骤总数" value={latest.total_steps} tip="所有工作流的节点总数之和，衡量数据集的体量，不只是条数。" />
               <MetricCard label="微工作流识别数" value="待实现" placeholder tip="跨 3 条及以上工作流复用、结构相似度超过阈值的可复用子图数量。识别算法（结构化子图挖掘）尚未实现，先诚实占位，不编造数字。" />
               <MetricCard label="专家数" value="待实现" placeholder tip="贡献过采集记录的专家人数。当前系统还没有真实的专家身份认证（见假设 1），暂无法统计。" />
-              <MetricCard label="Gold 数量" value={0} tip="经过人工标注确认的 Gold 样本数。标注体系尚未实现，固定为 0。" />
-              <MetricCard label="待复核" value={0} tip="被标记为需要人工复核的记录数。复核流程尚未实现，固定为 0。" />
+              <MetricCard
+                label="Gold 数量"
+                value={annotationSummary?.gold_counts.gold ?? 0}
+                tip="当前版本中达到 Gold 的记录数：同一轮两位独立标注人都判定「采纳」，或分歧后经第三人仲裁判定「采纳」（含返工后重新标注通过的）。"
+              />
+              <MetricCard
+                label="待复核"
+                value={annotationSummary ? annotationSummary.total_records - (annotationSummary.stage_counts.done ?? 0) : 0}
+                tip="当前版本中还没有最终结论的记录数（待第一人标注 / 待第二人复核 / 分歧待仲裁 / 待返工）。"
+              />
             </div>
 
             <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16 }}>
@@ -399,15 +355,6 @@ export function DashboardPage({ role }: { role: Role }) {
         )}
       </div>
 
-      {annotatingRecordId && latest && (
-        <PriorAnnotationPanel
-          versionId={latest.id}
-          recordId={annotatingRecordId}
-          role={role}
-          onClose={() => setAnnotatingRecordId(null)}
-          onSaved={() => refresh(sourceType)}
-        />
-      )}
     </div>
   );
 }

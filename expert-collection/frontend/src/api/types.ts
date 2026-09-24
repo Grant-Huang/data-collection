@@ -213,18 +213,23 @@ export interface DatasetVersionSummary {
   is_gold: boolean;
 }
 
-// --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2) ---
-// "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this
-// (unchanged since Phase 7). Gold is a stricter status layered on top, requiring two
-// independent annotations that agree, or a third person's arbitration when they don't --
-// see gold_status. Applies to both public_extracted and expert_collected now.
+// --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2,
+// section 15) ---
+// "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this.
+// Gold is layered on top: per round, two independent (blind) annotations that agree, or a
+// third person's arbitration; a round that settles on "needs_revision" goes to Rework, whose
+// corrected graph opens the next round. Applies to both public_extracted and expert_collected.
 
 export type PriorStatus = "raw" | "expert_annotated";
 export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
-export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "gold";
+export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "needs_rework" | "gold";
 export type AnnotationRole = "independent" | "arbitration";
-// node_id -> "keep" | "delete" | "merge_into:<other_node_id>"
+export type AnnotationStage = "first_review" | "second_review" | "arbitration" | "rework" | "done";
+// node_id -> "keep" | "delete" | "merge_into:<predecessor_node_id>"
 export type NodeVerdicts = Record<string, string>;
+export type ReasonTag =
+  | "missing_step" | "extra_step" | "wrong_order" | "duplicate" | "wrong_branch"
+  | "wrong_role" | "unclear_label" | "out_of_scope" | "other";
 
 export interface PriorAnnotation {
   annotation_id: string;
@@ -233,20 +238,62 @@ export interface PriorAnnotation {
   based_on_annotation_id: string | null;
   verdict: PriorVerdict;
   node_verdicts: NodeVerdicts;
+  reason_tags: ReasonTag[];
   note: string | null;
   actor_role: string | null;
   annotator_name: string;
   role_in_process: AnnotationRole;
+  round: number;
   annotated_at: string;
+}
+
+// Rework edits (backend app/rework.py). An annotator's node_verdicts alone is a valid edit
+// set, which is how the reworker starts from a specific annotator's suggestion.
+export interface ReworkEdits {
+  node_verdicts: NodeVerdicts;
+  renames: Record<string, string>;
+  inserts: { after: string; label: string }[];
+}
+
+export interface RecordRevision {
+  revision_id: string;
+  version_id: string;
+  record_id: string;
+  from_round: number;
+  edits: ReworkEdits;
+  graph: Graph; // the corrected graph this revision produced
+  reworker_name: string;
+  note: string | null;
+  actor_role: string | null;
+  created_at: string;
+}
+
+export interface RecordSignal {
+  level: "error" | "warning";
+  code: string;
+  message: string;
+  node_id: string | null;
 }
 
 export interface PriorRecordDetail {
   record_id: string;
   name: string;
-  graph: Graph;
+  graph: Graph; // current graph: latest rework revision, else the original
+  original_graph: Graph;
   prior_status: PriorStatus;
   gold_status: GoldStatus;
-  annotations: PriorAnnotation[]; // oldest first
+  stage: AnnotationStage;
+  round: number;
+  // Blind review: during first/second_review the backend returns no verdicts/notes at all,
+  // only who has already annotated this round and who did the rework.
+  blind: boolean;
+  round_annotator_names: string[];
+  round_reworker_name: string | null;
+  annotation_count: number;
+  annotations: PriorAnnotation[]; // oldest first; empty when blind
+  revisions: RecordRevision[]; // oldest first; empty when blind
+  final_verdict: PriorVerdict | null;
+  signals: RecordSignal[];
 }
 
 export interface PriorRecordSummary {
@@ -254,28 +301,59 @@ export interface PriorRecordSummary {
   name: string;
   node_count: number;
   prior_status: PriorStatus;
-  latest_verdict: PriorVerdict | null;
+  final_verdict: PriorVerdict | null; // only once stage === "done"
   gold_status: GoldStatus;
+  stage: AnnotationStage;
+  round: number;
+  round_annotator_names: string[];
+  round_reworker_name: string | null;
+  signal_error_count: number;
+  signal_warning_count: number;
 }
 
 export interface AnnotationSummary {
   version_id: string;
   total_records: number;
   annotated_records: number;
-  verdict_counts: Partial<Record<PriorVerdict, number>>;
+  verdict_counts: Partial<Record<PriorVerdict, number>>; // settled rounds only
   gold_counts: Partial<Record<GoldStatus, number>>;
+  stage_counts: Partial<Record<AnnotationStage, number>>;
+  reason_tag_counts: Partial<Record<ReasonTag, number>>;
   agreement_kappa: number | null;
+  rework_count: number;
 }
 
 export const GOLD_STATUS_LABELS: Record<GoldStatus, string> = {
   not_gold: "非 Gold",
   pending_second_review: "待第二人复核",
   disputed_pending_arbitration: "分歧待仲裁",
+  needs_rework: "待返工",
   gold: "★ Gold",
+};
+
+export const STAGE_LABELS: Record<AnnotationStage, string> = {
+  first_review: "待第一人标注",
+  second_review: "待第二人复核",
+  arbitration: "分歧待仲裁",
+  rework: "待返工",
+  done: "已完成",
 };
 
 export const VERDICT_LABELS: Record<PriorVerdict, string> = {
   accepted: "采纳", needs_revision: "需要修改", rejected: "丢弃",
+};
+
+// Structured reasons (decision 10). Order here is the order the chips render in.
+export const REASON_TAG_LABELS: Record<ReasonTag, string> = {
+  missing_step: "步骤缺失",
+  extra_step: "多余步骤",
+  wrong_order: "顺序错误",
+  duplicate: "重复",
+  wrong_branch: "分支/条件错误",
+  wrong_role: "角色错误",
+  unclear_label: "描述不清",
+  out_of_scope: "不属于该场景",
+  other: "其他（需备注）",
 };
 
 // --- Experiment Center (PRD 14) ---

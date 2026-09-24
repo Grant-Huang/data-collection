@@ -88,6 +88,24 @@ def _connect() -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_prior_annotations_lookup ON prior_annotations (version_id, record_id, annotated_at)"
     )
+    # Rework revisions (IMPLEMENTATION_PLAN.md section 15): each row is one corrected graph
+    # produced after a round of annotation settled on "needs_revision". Like prior_annotations,
+    # scoped to (version_id, record_id) so the published dataset_versions row stays immutable --
+    # a record's current graph is its latest revision's graph, or the original if none.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS record_revisions (
+            id TEXT PRIMARY KEY,
+            version_id TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_record_revisions_lookup ON record_revisions (version_id, record_id, created_at)"
+    )
     # dataset_versions predates the `archived` column; add it for DBs created before this change.
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
@@ -300,32 +318,60 @@ def list_annotations(version_id: str, record_id: str) -> list[dict]:
         conn.close()
 
 
-def latest_annotation(version_id: str, record_id: str) -> Optional[dict]:
+def list_annotations_by_record(version_id: str) -> dict[str, list[dict]]:
+    """Every annotation in a version, grouped by record_id (each list oldest first) -- one
+    query instead of one per record for the annotation list / readiness computation.
+    """
     conn = _connect()
     try:
-        row = conn.execute(
-            "SELECT data FROM prior_annotations WHERE version_id = ? AND record_id = ? ORDER BY annotated_at DESC LIMIT 1",
-            (version_id, record_id),
-        ).fetchone()
-        return json.loads(row[0]) if row else None
+        rows = conn.execute(
+            "SELECT record_id, data FROM prior_annotations WHERE version_id = ? ORDER BY annotated_at ASC",
+            (version_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[str, list[dict]] = {}
+    for record_id, data in rows:
+        out.setdefault(record_id, []).append(json.loads(data))
+    return out
+
+
+def save_revision(entry: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO record_revisions (id, version_id, record_id, data, created_at) VALUES (?, ?, ?, ?, ?)",
+            (entry["revision_id"], entry["version_id"], entry["record_id"],
+             json.dumps(entry, ensure_ascii=False), entry["created_at"]),
+        )
+        conn.commit()
     finally:
         conn.close()
 
 
-def list_annotations_for_version(version_id: str) -> list[dict]:
-    """One row per (version_id, record_id): the latest annotation only, for coverage stats."""
+def list_revisions(version_id: str, record_id: str) -> list[dict]:
+    """Oldest first."""
     conn = _connect()
     try:
         rows = conn.execute(
-            """
-            SELECT data FROM prior_annotations p1
-            WHERE version_id = ? AND annotated_at = (
-                SELECT MAX(annotated_at) FROM prior_annotations p2
-                WHERE p2.version_id = p1.version_id AND p2.record_id = p1.record_id
-            )
-            """,
-            (version_id,),
+            "SELECT data FROM record_revisions WHERE version_id = ? AND record_id = ? ORDER BY created_at ASC",
+            (version_id, record_id),
         ).fetchall()
         return [json.loads(r[0]) for r in rows]
     finally:
         conn.close()
+
+
+def list_revisions_by_record(version_id: str) -> dict[str, list[dict]]:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT record_id, data FROM record_revisions WHERE version_id = ? ORDER BY created_at ASC",
+            (version_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[str, list[dict]] = {}
+    for record_id, data in rows:
+        out.setdefault(record_id, []).append(json.loads(data))
+    return out

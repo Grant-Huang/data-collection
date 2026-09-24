@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
+from .. import annotation_signals, anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
 from ..models import (
     DatasetVersionSummary,
     DuplicateCheckRequest,
@@ -52,16 +52,21 @@ def _live_annotation_readiness(version: dict) -> dict:
     instead of frozen at publish -- see quality.compute_annotation_readiness's docstring.
     """
     records = dataset_records.records_for_export(version)
+    annotations = db.list_annotations_by_record(version["id"])
+    revisions = db.list_revisions_by_record(version["id"])
     gold_count = double_count = arbitrated_count = 0
     kappa_pairs: list[tuple[str, str]] = []
     for r in records:
-        history = db.list_annotations(version["id"], r["record_id"])
-        if gold_annotation.compute_gold_status(history) == "gold":
+        history = annotations.get(r["record_id"], [])
+        if gold_annotation.compute_gold_status(history, revisions.get(r["record_id"], [])) == "gold":
             gold_count += 1
-        independents = [a for a in history if a.get("role_in_process", "independent") == "independent"]
-        if len(independents) >= 2:
+        # Rounds (IMPLEMENTATION_PLAN.md section 15): a record counts as double-annotated
+        # once any of its rounds has two independent annotations; every such round
+        # contributes one pair to kappa.
+        pairs = gold_annotation.kappa_pairs(history)
+        if pairs:
             double_count += 1
-            kappa_pairs.append((independents[0]["verdict"], independents[1]["verdict"]))
+            kappa_pairs.extend(pairs)
         if any(a.get("role_in_process") == "arbitration" for a in history):
             arbitrated_count += 1
 
@@ -296,6 +301,15 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
         "created_at": _now(),
         "archived": False,
         "records": records,  # public_extracted has no separate `workflows` table row per record
+        # Cross-version precheck matches, kept so the annotation panel can show them later
+        # (annotation_signals.py) -- within-batch matches and graph issues are recomputed live.
+        "precheck_issues": {
+            rid: [
+                {"code": i["code"], "message": i["message"]} for i in report["issues"]
+                if i.get("record_id") == rid and i["code"].startswith(annotation_signals.STORED_CODE_PREFIXES)
+            ]
+            for rid in importable_ids
+        },
     }
     db.save_dataset_version(version)
 

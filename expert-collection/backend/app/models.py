@@ -277,21 +277,37 @@ class DuplicateCheckResult(BaseModel):
 
 PriorStatus = Literal["raw", "expert_annotated"]
 PriorVerdict = Literal["accepted", "needs_revision", "rejected"]
-GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "gold"]
+# "needs_rework" (IMPLEMENTATION_PLAN.md section 15): the round settled on "needs_revision"
+# and is waiting for someone to produce the corrected graph.
+GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "needs_rework", "gold"]
 AnnotationRole = Literal["independent", "arbitration"]
-# Per-node judgement string: "keep" / "delete" / "merge_into:<other_node_id>".
+# What a record is waiting for -- drives the annotation queue/filters (gold_annotation.py).
+AnnotationStage = Literal["first_review", "second_review", "arbitration", "rework", "done"]
+# Per-node judgement string: "keep" / "delete" / "merge_into:<predecessor_node_id>".
 NodeVerdicts = dict[str, str]
+# Structured reasons for "needs_revision"/"rejected" (decision 10: fixed tags so the
+# distribution can be counted, instead of free text only). Labels live in the frontend's
+# REASON_TAG_LABELS; `note` stays as an optional free-text supplement ("other" requires it).
+ReasonTag = Literal[
+    "missing_step", "extra_step", "wrong_order", "duplicate", "wrong_branch",
+    "wrong_role", "unclear_label", "out_of_scope", "other",
+]
 
 
 class CreateAnnotationRequest(BaseModel):
     verdict: PriorVerdict
     node_verdicts: NodeVerdicts = Field(default_factory=dict)
+    reason_tags: list[ReasonTag] = Field(default_factory=list)
     note: Optional[str] = None
     actor_role: Optional[str] = None
     # Required (not just an audit nicety): without a real account system, this is the only
     # signal routers/annotations.py has to tell two independent annotators apart -- see
     # IMPLEMENTATION_PLAN.md section 9's note on this limitation.
     annotator_name: str
+    # The round the annotator was looking at. When set and the record has since moved on
+    # (someone else finished the round / submitted a rework), the submission is refused
+    # with 409 instead of being silently attributed to a graph the annotator never saw.
+    round: Optional[int] = None
 
 
 class PriorAnnotation(BaseModel):
@@ -301,27 +317,94 @@ class PriorAnnotation(BaseModel):
     based_on_annotation_id: Optional[str] = None
     verdict: PriorVerdict
     node_verdicts: NodeVerdicts = Field(default_factory=dict)
+    reason_tags: list[ReasonTag] = Field(default_factory=list)
     note: Optional[str] = None
     actor_role: Optional[str] = None
     annotator_name: str
     role_in_process: AnnotationRole = "independent"
+    round: int = 1
     annotated_at: str
+
+
+class ReworkInsert(BaseModel):
+    after: str
+    label: str
+
+
+class ReworkEdits(BaseModel):
+    """See app/rework.py for semantics. An annotator's node_verdicts is a valid ReworkEdits on
+    its own, which is how the reworker starts from a specific annotator's suggestion.
+    """
+    node_verdicts: NodeVerdicts = Field(default_factory=dict)
+    renames: dict[str, str] = Field(default_factory=dict)
+    inserts: list[ReworkInsert] = Field(default_factory=list)
+
+
+class ReworkPreviewResponse(BaseModel):
+    graph: dict
+    issues: list[dict]  # graph_validator issues on the resulting graph
+
+
+class CreateReworkRequest(BaseModel):
+    edits: ReworkEdits
+    reworker_name: str
+    note: Optional[str] = None
+    actor_role: Optional[str] = None
+    round: Optional[int] = None  # same staleness guard as CreateAnnotationRequest.round
+
+
+class RecordRevision(BaseModel):
+    revision_id: str
+    version_id: str
+    record_id: str
+    from_round: int  # the round whose "needs_revision" outcome this revision answers
+    edits: ReworkEdits
+    graph: dict  # the corrected graph this revision produced (what round from_round+1 reviews)
+    reworker_name: str
+    note: Optional[str] = None
+    actor_role: Optional[str] = None
+    created_at: str
+
+
+class RecordSignal(BaseModel):
+    """Machine-generated hint shown in the annotation panel (graph validator findings,
+    near-duplicate / micro-workflow-reuse matches from import precheck). Not a human verdict,
+    so it's visible even during blind independent review.
+    """
+    level: Literal["error", "warning"]
+    code: str
+    message: str
+    node_id: Optional[str] = None
 
 
 class PriorRecordDetail(BaseModel):
     record_id: str
     name: str
-    # Loosely typed, not `Graph`: public_extracted records (this model's only use case) are
-    # treated as raw dicts everywhere else in the codebase too (import_pipeline.py,
-    # datasets.py's _records_for_export) because imported data can carry a graph_type the
-    # strict internal Graph model doesn't accept (e.g. the sample data's "directed_graph"
-    # vs. the model's "dag") -- graph_validator.py already validates structure without
-    # requiring that literal match, so re-imposing it here would reject data the rest of
-    # the import pipeline already accepted.
+    # Loosely typed, not `Graph`: public_extracted records are treated as raw dicts everywhere
+    # else in the codebase too (import_pipeline.py, dataset_records.py) because imported data
+    # can carry a graph_type the strict internal Graph model doesn't accept (e.g. the sample
+    # data's "directed_graph" vs. the model's "dag") -- graph_validator.py already validates
+    # structure without requiring that literal match.
+    # This is the record's *current* graph: the latest rework revision's, else the original.
     graph: dict
+    original_graph: dict
     prior_status: PriorStatus
     gold_status: GoldStatus = "not_gold"
-    annotations: list[PriorAnnotation] = Field(default_factory=list)  # oldest first
+    stage: AnnotationStage = "first_review"
+    round: int = 1
+    # Blind review: while the record is in independent review (first/second_review), other
+    # people's verdicts/notes/node verdicts are NOT returned -- only who has already
+    # annotated this round (needed to stop the same person annotating twice) and the
+    # reworker's name (who may not review their own rework). Everything is returned once the
+    # record reaches arbitration, rework, or done.
+    blind: bool = False
+    round_annotator_names: list[str] = Field(default_factory=list)
+    round_reworker_name: Optional[str] = None
+    annotation_count: int = 0
+    annotations: list[PriorAnnotation] = Field(default_factory=list)  # oldest first; empty when blind
+    revisions: list[RecordRevision] = Field(default_factory=list)  # oldest first; empty when blind
+    final_verdict: Optional[PriorVerdict] = None  # only set when stage == "done"
+    signals: list[RecordSignal] = Field(default_factory=list)
 
 
 class PriorRecordSummary(BaseModel):
@@ -329,17 +412,31 @@ class PriorRecordSummary(BaseModel):
     name: str
     node_count: int
     prior_status: PriorStatus
-    latest_verdict: Optional[PriorVerdict] = None
+    # Only the settled outcome (stage == "done") -- an in-progress verdict would leak into
+    # the next independent annotator's view from the list itself.
+    final_verdict: Optional[PriorVerdict] = None
     gold_status: GoldStatus = "not_gold"
+    stage: AnnotationStage = "first_review"
+    round: int = 1
+    round_annotator_names: list[str] = Field(default_factory=list)
+    round_reworker_name: Optional[str] = None
+    signal_error_count: int = 0
+    signal_warning_count: int = 0
 
 
 class AnnotationSummary(BaseModel):
     version_id: str
     total_records: int
     annotated_records: int
+    # Settled outcomes only (records at stage "done", plus rounds that ended in rework) --
+    # counting in-progress verdicts would reveal them in aggregate on small versions.
     verdict_counts: dict[str, int]
     gold_counts: dict[str, int] = Field(default_factory=dict)
+    stage_counts: dict[str, int] = Field(default_factory=dict)
+    # How often each structured reason was given, across all non-accepted annotations.
+    reason_tag_counts: dict[str, int] = Field(default_factory=dict)
     agreement_kappa: Optional[float] = None
+    rework_count: int = 0
 
 
 # --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---
