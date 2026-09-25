@@ -218,23 +218,25 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
             out.append(f"「{a['label']}」补充了返工说明")
             cats.add("wrong_order")
 
-    def edge_key(e, nodes):
-        return (nodes.get(e["from"], {}).get("label", e["from"]), nodes.get(e["to"], {}).get("label", e["to"]))
+    # Connections are compared by node id (a renamed step keeps its id, so renaming must not
+    # look like rewiring); labels are only used to describe them.
+    def name(i):
+        return (a_nodes.get(i) or b_nodes.get(i) or {}).get("label", i)
 
-    b_edges = {edge_key(e, b_nodes): e for e in before.get("edges", [])}
-    a_edges = {edge_key(e, a_nodes): e for e in after.get("edges", [])}
-    touched = {n["label"] for n in added + removed}
+    b_edges = {(e["from"], e["to"]): e for e in before.get("edges", [])}
+    a_edges = {(e["from"], e["to"]): e for e in after.get("edges", [])}
+    touched = {n["node_id"] for n in added + removed}
     for k, e in a_edges.items():
         if k not in b_edges:
             if k[0] not in touched and k[1] not in touched:
-                out.append(f"「{k[0]}」之后改为接「{k[1]}」")
+                out.append(f"「{name(k[0])}」之后改为接「{name(k[1])}」")
                 cats.add("wrong_order")
         elif (e.get("condition") or "") != (b_edges[k].get("condition") or ""):
-            out.append(f"「{k[0]}」→「{k[1]}」的条件改为「{e.get('condition') or '无'}」")
+            out.append(f"「{name(k[0])}」→「{name(k[1])}」的条件改为「{e.get('condition') or '无'}」")
             cats.add("wrong_branch")
     for k in b_edges:
-        if k not in a_edges and k[0] not in touched and k[1] not in touched and k[0] in {n['label'] for n in a_nodes.values()}:
-            out.append(f"去掉了「{k[0]}」→「{k[1]}」")
+        if k not in a_edges and k[0] not in touched and k[1] not in touched:
+            out.append(f"去掉了「{name(k[0])}」→「{name(k[1])}」")
             cats.add("wrong_order")
     return out, cats
 
@@ -574,7 +576,8 @@ def _final_confirm(state: dict, graph: dict, result: TurnResult, *, rejected: bo
     return result
 
 
-def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tuple[str, str] | None) -> TurnResult:
+def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tuple[str, str] | None,
+                   model_tags: list[str] | None = None) -> TurnResult:
     open_ = review_gaps.open_gaps(state["gaps"])
     if open_ and state["questions_asked"] < state["max_questions"]:
         chosen = next((g for g in open_ if preferred and g["id"] == preferred[0]), open_[0])
@@ -585,7 +588,7 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
         state["phase"] = "review"
         result.question = text
         return result
-    return _final_confirm(state, graph, result)
+    return _final_confirm(state, graph, result, model_tags=model_tags)
 
 
 def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str) -> TurnResult:
@@ -695,22 +698,22 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         # Still confirming; the person asked something that didn't change the graph.
         return _final_confirm(state, new_graph, result, model_tags=model_tags)
     preferred = _valid_question(out.get("question"), {g["id"] for g in offered})
-    return _next_question(state, new_graph, result, preferred)
+    return _next_question(state, new_graph, result, preferred, model_tags=model_tags)
 
 
 def progress(state: dict) -> float:
-    """Explainable completion estimate for the workflow list: nothing before the first draft,
-    then the share of clarification items settled, 100 once confirmed."""
+    """Explainable completion estimate (0..1, same scale as guide_service.progress): nothing
+    before the first draft, then the share of clarification items settled, 1 once confirmed."""
     phase = state.get("phase")
     if phase == "narrative":
         return 0.0
     if phase == "done":
-        return 100.0
+        return 1.0
     if phase == "final_confirm":
-        return 95.0
+        return 0.95
     gaps = state.get("gaps") or []
     settled = sum(1 for g in gaps if g["status"] != "open")
-    return round(40 + 50 * (settled / len(gaps) if gaps else 1), 1)
+    return round(0.4 + 0.5 * (settled / len(gaps) if gaps else 1), 3)
 
 
 def after_regeneration(state: dict, graph: dict) -> TurnResult:

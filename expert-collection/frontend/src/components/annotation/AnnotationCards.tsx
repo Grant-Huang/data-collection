@@ -1,20 +1,16 @@
-// Read-only renderings of annotations and rework revisions -- used by the arbitration
-// side-by-side view, the rework "start from this suggestion" list, and the finished-record
-// history. Never rendered during blind independent review (the backend doesn't even send the
-// data then).
-import type { ReactNode } from "react";
-import type { Graph, PriorAnnotation, PriorRecordDetail, PriorVerdict } from "../../api/types";
+// Read-only renderings of finished annotations (verdict, reasons, what was changed) and the
+// per-round history -- shown once a record reaches arbitration or done. Never rendered during
+// blind independent review (the backend doesn't even send the data then).
+import type { PriorAnnotation, PriorRecordDetail, PriorVerdict } from "../../api/types";
 import { REASON_TAG_LABELS, VERDICT_LABELS } from "../../api/types";
-import { describeVerdict } from "../../utils/annotationAccess";
 
 export const VERDICT_COLOR: Record<PriorVerdict, string> = {
   accepted: "#0ca30c", needs_revision: "#d99400", rejected: "#ec835a",
 };
 
-export function AnnotationCard({ a, graph, footer }: { a: PriorAnnotation; graph: Graph; footer?: ReactNode }) {
-  const nodeEntries = Object.entries(a.node_verdicts).filter(([, v]) => v !== "keep");
+export function AnnotationCard({ a }: { a: PriorAnnotation }) {
   return (
-    <div style={{ flex: 1, minWidth: 0, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 12 }}>
+    <div style={{ flex: 1, minWidth: 220, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
         <span style={{ fontWeight: 700 }}>
           {a.annotator_name}
@@ -31,54 +27,37 @@ export function AnnotationCard({ a, graph, footer }: { a: PriorAnnotation; graph
           ))}
         </div>
       )}
-      {nodeEntries.length > 0 && (
-        <ul style={{ margin: "0 0 6px", paddingLeft: 16, color: "#475569" }}>
-          {nodeEntries.map(([id, v]) => (
-            <li key={id}>
-              「{graph.nodes.find((n) => n.node_id === id)?.label ?? id}」→ {describeVerdict(graph, v)}
-            </li>
-          ))}
+      {a.changes && a.changes.length > 0 ? (
+        <ul style={{ margin: 0, paddingLeft: 16, color: "#475569" }}>
+          {a.changes.map((c, i) => <li key={i}>{c}</li>)}
         </ul>
+      ) : (
+        a.note && <div style={{ color: "#667085" }}>备注：{a.note}</div>
       )}
-      {a.note && <div style={{ color: "#667085" }}>备注：{a.note}</div>}
-      {footer}
     </div>
   );
 }
 
-// Full history, grouped by round, with each rework revision between the rounds it connects.
+// Full history, grouped by round (rounds > 1 only exist for legacy section-16 rework data).
 export function RoundHistory({ detail }: { detail: PriorRecordDetail }) {
-  if (detail.annotations.length === 0 && detail.revisions.length === 0) return null;
+  if (detail.annotations.length === 0) return null;
   const rounds = Array.from({ length: detail.round }, (_, i) => i + 1);
   return (
-    <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#667085", marginBottom: 8 }}>标注与返工历史</div>
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#667085", marginBottom: 8 }}>标注记录</div>
       {rounds.map((r) => {
         const inRound = detail.annotations.filter((a) => (a.round ?? 1) === r);
         const revision = detail.revisions.find((rv) => rv.from_round === r);
-        // Round r was judged on the original graph (r = 1) or on revision r-1's output.
-        const graphForRound = r === 1 ? detail.original_graph : detail.revisions[r - 2]?.graph ?? detail.graph;
+        if (inRound.length === 0 && !revision) return null;
         return (
           <div key={r} style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 4 }}>第 {r} 轮</div>
-            {inRound.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#94a3b8" }}>（本轮还没有标注）</div>
-            ) : (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {inRound.map((a) => (
-                  <AnnotationCard key={a.annotation_id} a={a} graph={graphForRound} />
-                ))}
-              </div>
-            )}
+            {detail.round > 1 && <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 4 }}>第 {r} 轮</div>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {inRound.map((a) => <AnnotationCard key={a.annotation_id} a={a} />)}
+            </div>
             {revision && (
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", background: "#f8fafc", borderRadius: 6, padding: "6px 10px" }}>
-                ↳ 返工（{revision.reworker_name}）：
-                {[
-                  Object.values(revision.edits.node_verdicts).filter((v) => v !== "keep").length && `节点判定 ${Object.values(revision.edits.node_verdicts).filter((v) => v !== "keep").length} 处`,
-                  Object.keys(revision.edits.renames).length && `改名 ${Object.keys(revision.edits.renames).length} 处`,
-                  revision.edits.inserts.length && `插入步骤 ${revision.edits.inserts.length} 个`,
-                ].filter(Boolean).join("，")}
-                {revision.note && `——${revision.note}`}
+                ↳ 返工（{revision.reworker_name}）{revision.note ? `：${revision.note}` : ""}
               </div>
             )}
           </div>

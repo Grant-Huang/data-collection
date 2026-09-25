@@ -30,6 +30,8 @@ export interface GraphNode {
   source_turn_ids: string[];
   retry_semantics: RetrySemantics | null;
   manual_position: { x: number; y: number } | null;
+  // Section 17: verbatim quote(s) from the expert that back this step; empty = unverified.
+  evidence?: string[];
 }
 
 export interface GraphEdge {
@@ -67,6 +69,12 @@ export interface ConversationTurn {
   why?: string | null;
   chips?: string[] | null;
   chip_mode?: "prefill" | "multi_select" | null;
+  // Review-loop assistant turns (IMPLEMENTATION_PLAN.md section 17): the concrete graph
+  // changes made this turn, a multi-line body (read-back / notices), and the sample
+  // narration shown with the opening message.
+  changes?: string[] | null;
+  body?: string | null;
+  sample?: string | null;
 }
 
 export interface NextQuestion {
@@ -268,17 +276,18 @@ export interface DatasetVersionListResponse {
 }
 
 // --- Prior + Gold annotation (IMPLEMENTATION_PLAN.md section 9.2, section 9 §9 Phase C-2,
-// section 16) ---
+// sections 16-17) ---
 // "Public/LLM-derived Prior" -> "Expert-annotated Prior": any single annotation flips this.
-// Gold is layered on top: per round, two independent (blind) annotations that agree, or a
-// third person's arbitration; a round that settles on "needs_revision" goes to Rework, whose
-// corrected graph opens the next round. Applies to both public_extracted and expert_collected.
+// Gold is layered on top: two independent (blind) annotations that agree, or a third person's
+// arbitration. Section 17: annotators review the record in a conversation and correct the
+// graph there, so a "needs_revision" annotation carries the corrected graph -- no separate
+// rework step. Applies to both public_extracted and expert_collected.
 
 export type PriorStatus = "raw" | "expert_annotated";
 export type PriorVerdict = "accepted" | "needs_revision" | "rejected";
-export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "needs_rework" | "gold";
+export type GoldStatus = "not_gold" | "pending_second_review" | "disputed_pending_arbitration" | "gold";
 export type AnnotationRole = "independent" | "arbitration";
-export type AnnotationStage = "first_review" | "second_review" | "arbitration" | "rework" | "done";
+export type AnnotationStage = "first_review" | "second_review" | "arbitration" | "done";
 // node_id -> "keep" | "delete" | "merge_into:<predecessor_node_id>"
 export type NodeVerdicts = Record<string, string>;
 export type ReasonTag =
@@ -299,10 +308,13 @@ export interface PriorAnnotation {
   role_in_process: AnnotationRole;
   round: number;
   annotated_at: string;
+  // Section 17: corrected graph (needs_revision) and plain-language list of changes.
+  revised_graph?: Graph | null;
+  changes?: string[];
+  session_id?: string | null;
 }
 
-// Rework edits (backend app/rework.py). An annotator's node_verdicts alone is a valid edit
-// set, which is how the reworker starts from a specific annotator's suggestion.
+// Section 16 rework edit set -- only present on legacy revisions.
 export interface ReworkEdits {
   node_verdicts: NodeVerdicts;
   renames: Record<string, string>;
@@ -332,8 +344,9 @@ export interface RecordSignal {
 export interface PriorRecordDetail {
   record_id: string;
   name: string;
-  graph: Graph; // current graph: latest rework revision, else the original
+  graph: Graph; // current graph: latest legacy rework revision, else the original
   original_graph: Graph;
+  final_graph: Graph | null; // corrected graph adopted by a settled needs_revision outcome
   prior_status: PriorStatus;
   gold_status: GoldStatus;
   stage: AnnotationStage;
@@ -365,6 +378,24 @@ export interface PriorRecordSummary {
   signal_warning_count: number;
 }
 
+// One annotator's review conversation on one record (section 17.4). Blind: only this
+// annotator's own messages and working copy of the graph.
+export interface ReviewSession {
+  session_id: string;
+  version_id: string;
+  record_id: string;
+  annotator_name: string;
+  role_in_process: AnnotationRole;
+  round: number;
+  phase: string;
+  status: "active" | "submitted" | "stale";
+  graph: Graph;
+  base_graph: Graph;
+  turns: ConversationTurn[];
+  proposal: { verdict: PriorVerdict; reason_tags: ReasonTag[] } | null;
+  annotation_id: string | null;
+}
+
 export interface AnnotationSummary {
   version_id: string;
   total_records: number;
@@ -374,14 +405,13 @@ export interface AnnotationSummary {
   stage_counts: Partial<Record<AnnotationStage, number>>;
   reason_tag_counts: Partial<Record<ReasonTag, number>>;
   agreement_kappa: number | null;
-  rework_count: number;
+  corrected_count: number; // records settled with a corrected graph
 }
 
 export const GOLD_STATUS_LABELS: Record<GoldStatus, string> = {
   not_gold: "非 Gold",
   pending_second_review: "待第二人复核",
   disputed_pending_arbitration: "分歧待仲裁",
-  needs_rework: "待返工",
   gold: "★ Gold",
 };
 
@@ -389,7 +419,6 @@ export const STAGE_LABELS: Record<AnnotationStage, string> = {
   first_review: "待第一人标注",
   second_review: "待第二人复核",
   arbitration: "分歧待仲裁",
-  rework: "待返工",
   done: "已完成",
 };
 
@@ -543,6 +572,8 @@ export interface Settings {
     publish_prompt_count: number;
     publish_prompt_days: number;
   };
+  // Section 17 review loop: how many clarification questions the agent asks on its own.
+  review?: { max_clarify_questions: number };
   run_params: {
     max_concurrent_experiments: number;
     run_timeout_seconds: number;

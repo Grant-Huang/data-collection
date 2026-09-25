@@ -100,6 +100,20 @@ export function useWorkflowSession() {
     }
   }, [active, refreshList]);
 
+  // 「继续修改」(section 17): a confirmed workflow that isn't in a dataset goes back into the
+  // review conversation.
+  const reopenWorkflow = useCallback(async () => {
+    if (!active) return;
+    setError(null);
+    try {
+      const record = await api.reopenWorkflow(active.id);
+      setActive(record);
+      await refreshList();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [active, refreshList]);
+
   const updateManufacturingContext = useCallback(
     async (patch: Partial<ManufacturingContext>) => {
       if (!active) return;
@@ -173,6 +187,7 @@ export function useWorkflowSession() {
     createWorkflow,
     sendTurn,
     confirmWorkflow,
+    reopenWorkflow,
     updateManufacturingContext,
     updateWorkflowMeta,
     checkRegenerateGraph,

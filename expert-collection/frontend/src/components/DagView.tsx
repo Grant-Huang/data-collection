@@ -49,6 +49,10 @@ interface WorkflowNodeData {
   highlighted?: boolean; // hovering a chat message's "图上 +N" tag
   decoration?: NodeDecoration;
   clickable?: boolean;
+  // Section 17 evidence: quotes backing the step; "unverified" = graph built from a
+  // narration but this step's quote wasn't found in what the expert said.
+  evidence?: string[];
+  unverified?: boolean;
 }
 
 function WorkflowNode({ data }: { data: WorkflowNodeData }) {
@@ -57,9 +61,10 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
   const deco = data.decoration;
   return (
     <div
+      title={data.evidence?.length ? `依据原话：「${data.evidence.join("」「")}」` : data.unverified ? "没有在讲述中找到这一步的原话，待确认" : undefined}
       style={{
         background: style.fill,
-        border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px solid ${deco?.selected ? "#2a78d6" : deco?.border ?? style.stroke}`,
+        border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px ${data.unverified && !deco?.border ? "dashed" : "solid"} ${deco?.selected ? "#2a78d6" : deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
         opacity: deco?.faded ? 0.5 : 1,
         textDecoration: deco?.faded ? "line-through" : undefined,
         cursor: data.clickable ? "pointer" : undefined,
@@ -242,15 +247,24 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
 
   const displayNodes = useMemo(() => {
     const byId = new Map(graph.nodes.map((n) => [n.node_id, n]));
-    return nodes.map((n) => ({
+    // Only graphs built by the review loop carry evidence; don't flag every node of an
+    // imported / step-by-step graph as "unverified" just because it has none.
+    const tracksEvidence = graph.nodes.some((n) => (n.evidence?.length ?? 0) > 0);
+    return nodes.map((n) => {
+      const src = byId.get(n.id);
+      const evidence = src?.evidence ?? [];
+      return {
       ...n,
       data: {
         ...n.data,
-        label: byId.get(n.id)?.label ?? n.data.label,
+        evidence,
+        unverified: tracksEvidence && evidence.length === 0 && src?.node_type !== "start" && src?.node_type !== "end",
+        label: src?.label ?? n.data.label,
         decoration: nodeDecorations?.[n.id],
         clickable: !!onNodeTap,
       },
-    }));
+      };
+    });
   }, [nodes, graph, nodeDecorations, onNodeTap]);
 
   if (nodeCount === 0) {

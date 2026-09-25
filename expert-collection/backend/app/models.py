@@ -368,12 +368,11 @@ class DuplicateCheckResult(BaseModel):
 
 PriorStatus = Literal["raw", "expert_annotated"]
 PriorVerdict = Literal["accepted", "needs_revision", "rejected"]
-# "needs_rework" (IMPLEMENTATION_PLAN.md section 16): the round settled on "needs_revision"
-# and is waiting for someone to produce the corrected graph.
-GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "needs_rework", "gold"]
+GoldStatus = Literal["not_gold", "pending_second_review", "disputed_pending_arbitration", "gold"]
 AnnotationRole = Literal["independent", "arbitration"]
 # What a record is waiting for -- drives the annotation queue/filters (gold_annotation.py).
-AnnotationStage = Literal["first_review", "second_review", "arbitration", "rework", "done"]
+# Section 17 removed section 16's separate "rework" stage.
+AnnotationStage = Literal["first_review", "second_review", "arbitration", "done"]
 # Per-node judgement string: "keep" / "delete" / "merge_into:<predecessor_node_id>".
 NodeVerdicts = dict[str, str]
 # Structured reasons for "needs_revision"/"rejected" (decision 10: fixed tags so the
@@ -415,33 +414,18 @@ class PriorAnnotation(BaseModel):
     role_in_process: AnnotationRole = "independent"
     round: int = 1
     annotated_at: str
-
-
-class ReworkInsert(BaseModel):
-    after: str
-    label: str
+    # Section 17: annotations made in the review conversation carry the corrected graph
+    # (needs_revision) and a plain-language list of what was changed.
+    revised_graph: Optional[dict] = None
+    changes: list[str] = Field(default_factory=list)
+    session_id: Optional[str] = None
 
 
 class ReworkEdits(BaseModel):
-    """See app/rework.py for semantics. An annotator's node_verdicts is a valid ReworkEdits on
-    its own, which is how the reworker starts from a specific annotator's suggestion.
-    """
+    """Section 16 rework edit set -- only kept so legacy `record_revisions` rows still load."""
     node_verdicts: NodeVerdicts = Field(default_factory=dict)
     renames: dict[str, str] = Field(default_factory=dict)
-    inserts: list[ReworkInsert] = Field(default_factory=list)
-
-
-class ReworkPreviewResponse(BaseModel):
-    graph: dict
-    issues: list[dict]  # graph_validator issues on the resulting graph
-
-
-class CreateReworkRequest(BaseModel):
-    edits: ReworkEdits
-    reworker_name: str
-    note: Optional[str] = None
-    actor_role: Optional[str] = None
-    round: Optional[int] = None  # same staleness guard as CreateAnnotationRequest.round
+    inserts: list[dict] = Field(default_factory=list)
 
 
 class RecordRevision(BaseModel):
@@ -476,18 +460,19 @@ class PriorRecordDetail(BaseModel):
     # can carry a graph_type the strict internal Graph model doesn't accept (e.g. the sample
     # data's "directed_graph" vs. the model's "dag") -- graph_validator.py already validates
     # structure without requiring that literal match.
-    # This is the record's *current* graph: the latest rework revision's, else the original.
+    # This is the record's *current* graph (the latest legacy rework revision's, else the
+    # original). `final_graph` is the corrected graph a settled needs_revision outcome adopted.
     graph: dict
     original_graph: dict
+    final_graph: Optional[dict] = None
     prior_status: PriorStatus
     gold_status: GoldStatus = "not_gold"
     stage: AnnotationStage = "first_review"
     round: int = 1
     # Blind review: while the record is in independent review (first/second_review), other
-    # people's verdicts/notes/node verdicts are NOT returned -- only who has already
-    # annotated this round (needed to stop the same person annotating twice) and the
-    # reworker's name (who may not review their own rework). Everything is returned once the
-    # record reaches arbitration, rework, or done.
+    # people's verdicts/notes/corrections are NOT returned -- only who has already annotated
+    # this round (needed to stop the same person annotating twice) and, for legacy data, the
+    # reworker's name. Everything is returned once the record reaches arbitration or done.
     blind: bool = False
     round_annotator_names: list[str] = Field(default_factory=list)
     round_reworker_name: Optional[str] = None
@@ -515,6 +500,34 @@ class PriorRecordSummary(BaseModel):
     signal_warning_count: int = 0
 
 
+class StartReviewSessionRequest(BaseModel):
+    annotator_name: str
+    actor_role: Optional[str] = None
+
+
+class ReviewSessionTurnRequest(BaseModel):
+    text: str
+    raw_transcript: Optional[str] = None
+
+
+class ReviewSession(BaseModel):
+    """One annotator's review conversation on one record (section 17.4). Blind: it only
+    contains this annotator's own messages and their own working copy of the graph."""
+    session_id: str
+    version_id: str
+    record_id: str
+    annotator_name: str
+    role_in_process: AnnotationRole
+    round: int
+    phase: str                      # review / final_confirm / done
+    status: Literal["active", "submitted", "stale"]
+    graph: dict                     # the annotator's working copy
+    base_graph: dict                # what they started from
+    turns: list[ConversationTurn] = Field(default_factory=list)
+    proposal: Optional[dict] = None  # {verdict, reason_tags} while confirming
+    annotation_id: Optional[str] = None  # set once submitted
+
+
 class AnnotationSummary(BaseModel):
     version_id: str
     total_records: int
@@ -527,7 +540,8 @@ class AnnotationSummary(BaseModel):
     # How often each structured reason was given, across all non-accepted annotations.
     reason_tag_counts: dict[str, int] = Field(default_factory=dict)
     agreement_kappa: Optional[float] = None
-    rework_count: int = 0
+    # Records settled with a corrected graph (needs_revision adopted), section 17.
+    corrected_count: int = 0
 
 
 # --- Experiment Center (PRD 14, Phase 4 sub-scope -- see IMPLEMENTATION_PLAN.md section 7) ---

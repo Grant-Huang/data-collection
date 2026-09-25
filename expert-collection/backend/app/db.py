@@ -106,6 +106,23 @@ def _connect() -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_record_revisions_lookup ON record_revisions (version_id, record_id, created_at)"
     )
+    # Section 17 annotation review sessions: one annotator's conversation + working graph on
+    # one record. Kept out of prior_annotations (which only gets the final verdict) so an
+    # unfinished conversation never counts as an annotation.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS annotation_sessions (
+            id TEXT PRIMARY KEY,
+            version_id TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            data TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_annotation_sessions_lookup ON annotation_sessions (version_id, record_id)"
+    )
     # dataset_versions predates the `archived` column; add it for DBs created before this change.
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
@@ -402,3 +419,37 @@ def list_revisions_by_record(version_id: str) -> dict[str, list[dict]]:
     for record_id, data in rows:
         out.setdefault(record_id, []).append(json.loads(data))
     return out
+
+
+def save_review_session(session: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO annotation_sessions (id, version_id, record_id, data, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (session["session_id"], session["version_id"], session["record_id"],
+             json.dumps(session, ensure_ascii=False), session["updated_at"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_review_session(session_id: str) -> Optional[dict]:
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT data FROM annotation_sessions WHERE id = ?", (session_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def list_review_sessions(version_id: str, record_id: str) -> list[dict]:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT data FROM annotation_sessions WHERE version_id = ? AND record_id = ? ORDER BY updated_at ASC",
+            (version_id, record_id),
+        ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()

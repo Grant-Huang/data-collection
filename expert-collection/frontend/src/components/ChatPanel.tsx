@@ -4,7 +4,7 @@
 // PRD section 18: chips only ever prefill the input box as an editable draft -- they never
 // auto-send, so the expert always has the chance to correct/qualify before committing, and
 // open recall questions (chips === null) have no chips at all.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
@@ -20,9 +20,15 @@ interface Props {
   sending: boolean;
   confirmed: boolean;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
+  // Review-loop stage ("review_narrative" etc., section 17) -- only changes the input hint.
+  stage?: string;
+  // Text to append to the draft from outside (clicking a node on the graph quotes its name);
+  // `nonce` makes repeated clicks on the same node count.
+  insertText?: { text: string; nonce: number } | null;
+  placeholder?: string;
 }
 
-export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirmed, onHighlightNodes }: Props) {
+export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirmed, onHighlightNodes, stage, insertText, placeholder }: Props) {
   const [draft, setDraft] = useState("");
   // Raw recognizer output for everything dictated into the current draft.
   const [rawPieces, setRawPieces] = useState<string[]>([]);
@@ -39,6 +45,12 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
       }
     });
   }
+
+  useEffect(() => {
+    if (!insertText?.text) return;
+    setDraft((prev) => prev + insertText.text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [insertText?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSend() {
     const text = draft.trim();
@@ -86,11 +98,17 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
           }}
           disabled={confirmed}
           placeholder={
-            confirmed
-              ? "该会话已确认提交，不能再修改"
-              : hasChips
-                ? "点上面的选项快速填入（可修改），或直接输入你的回答"
-                : "按你记得的实际情况说就好，Enter 发送，Shift+Enter 换行"
+            placeholder ?? (confirmed
+              ? stage?.startsWith("review_")
+                ? "已确认提交。要修改的话，点下方的「继续修改」"
+                : "该会话已确认提交，不能再修改"
+              : stage === "review_narrative"
+                ? "把整件事从头到尾讲一遍，可以打字，也可以点 🎤 直接说。Enter 发送，Shift+Enter 换行"
+                : stage?.startsWith("review_")
+                  ? "回答上面的问题，或直接说哪里要改。Enter 发送，Shift+Enter 换行"
+                  : hasChips
+                    ? "点上面的选项快速填入（可修改），或直接输入你的回答"
+                    : "按你记得的实际情况说就好，Enter 发送，Shift+Enter 换行")
           }
           rows={2}
           style={{

@@ -100,7 +100,7 @@ def _mark_confirmed(record: dict) -> None:
     if record.get("_review"):
         record["_review"]["phase"] = "done"
         record["stage"] = "review_done"
-        record["completion"] = {"score": 100.0, "ready_for_confirmation": False}
+        record["completion"] = {"score": 1.0, "ready_for_confirmation": False}
 
 
 @router.post("", response_model=WorkflowRecord)

@@ -3,18 +3,22 @@ extended with the Rework loop (section 16). Shared between routers/annotations.p
 (per-record status, submission validation) and routers/datasets.py (the live
 annotation_readiness dimension) so the two never compute it differently.
 
-A record moves through *rounds*. Round 1 reviews the original graph; each Rework submission
-(a row in `record_revisions`) produces a corrected graph and opens the next round. Within a
-round, the rules are unchanged from Phase C-2: two independent annotations, a third person's
-arbitration if they disagree. What changed is what a round's *outcome* means:
+Within a round the rules are unchanged from Phase C-2: two independent annotations, a third
+person's arbitration if they disagree. Outcomes (section 17):
 
-- accepted     -> done, Gold
-- rejected     -> done, not Gold (discarded)
-- needs_revision -> Rework: someone produces the corrected graph, then a new round starts
-  (previously this was a dead end: "not Gold" with the suggested fixes never applied).
+- accepted       -> done, Gold (the record's graph as is)
+- rejected       -> done, not Gold (discarded)
+- needs_revision -> done, Gold with the corrected graph -- when both annotators produced the
+  same correction, or the arbitrator picked / made one.
+
+Rounds only exist for legacy data: section 16's rework submissions (rows in
+`record_revisions`) each opened a new round on the corrected graph. Section 17 creates no new
+revisions, so current records stay in round 1 (or whatever round their legacy data reached).
 
 Stages (what the record is waiting for) drive the annotation queue in the UI:
-first_review / second_review / arbitration / rework / done.
+first_review / second_review / arbitration / done. Section 17 removed the separate rework
+stage: annotators correct the graph in the review conversation, so a "needs_revision"
+annotation carries its corrected graph and the round settles directly (see round_decision).
 """
 from __future__ import annotations
 
@@ -35,9 +39,8 @@ def _arbitrations(annotations: list[dict]) -> list[dict]:
 
 
 def round_outcome(round_annotations: list[dict]) -> Optional[str]:
-    """The verdict a round settled on, or None while it's still open. Only the first two
-    independent annotations count (disagreement goes to arbitration, not a running vote).
-    """
+    """Section 16 semantics, kept for counting *past* rounds of legacy data (rounds that ended
+    in a rework revision): the verdict a round settled on by arbitration or agreement."""
     arbitrations = _arbitrations(round_annotations)
     if arbitrations:
         return arbitrations[-1]["verdict"]
@@ -47,22 +50,50 @@ def round_outcome(round_annotations: list[dict]) -> Optional[str]:
     return None
 
 
+def _settles(a: dict) -> bool:
+    # "needs_revision" only settles a record when it comes with the corrected graph (section
+    # 17: annotators correct the graph in conversation). Legacy section-16 annotations have
+    # no revised_graph, so they never settle on their own.
+    return a["verdict"] != "needs_revision" or bool(a.get("revised_graph"))
+
+
+def round_decision(round_annotations: list[dict]) -> Optional[dict]:
+    """How the current round was decided, or None if it still needs someone:
+    {"verdict", "graph" (corrected graph for needs_revision, else None), "annotation"}.
+    - a settling arbitration decides;
+    - otherwise two independent annotations that agree decide -- for needs_revision only if
+      both corrected graphs are structurally identical (graph_signature);
+    - anything else (disagreement, two different corrections, legacy corrections without a
+      graph) goes to arbitration."""
+    arbs = [a for a in _arbitrations(round_annotations) if _settles(a)]
+    if arbs:
+        a = arbs[-1]
+        return {"verdict": a["verdict"], "graph": a.get("revised_graph") if a["verdict"] == "needs_revision" else None, "annotation": a}
+    ind = _independents(round_annotations)[:2]
+    if len(ind) == 2 and ind[0]["verdict"] == ind[1]["verdict"]:
+        v = ind[0]["verdict"]
+        if v != "needs_revision":
+            return {"verdict": v, "graph": None, "annotation": ind[0]}
+        g0, g1 = ind[0].get("revised_graph"), ind[1].get("revised_graph")
+        if g0 and g1 and graph_signature(g0) == graph_signature(g1):
+            return {"verdict": v, "graph": g0, "annotation": ind[0]}
+    return None
+
+
 def compute_state(history: list[dict], revisions: list[dict]) -> dict:
-    """history: every annotation for the record (any round, oldest first); revisions: every
-    rework revision (oldest first). Returns {round, stage, gold_status, outcome,
-    round_annotations}.
-    """
+    """history: every annotation for the record (oldest first); revisions: legacy section-16
+    rework revisions (each opened a new round; section 17 creates none). Returns
+    {round, stage, gold_status, outcome, final_graph, round_annotations}. `final_graph` is
+    the corrected graph when the record settled on needs_revision, else None (= the
+    record's current graph)."""
     current_round = len(revisions) + 1
     in_round = [a for a in history if _round_of(a) == current_round]
     independents = _independents(in_round)
-    outcome = round_outcome(in_round)
+    decision = round_decision(in_round)
 
-    if outcome == "accepted":
-        stage, gold = "done", "gold"
-    elif outcome == "rejected":
-        stage, gold = "done", "not_gold"
-    elif outcome == "needs_revision":
-        stage, gold = "rework", "needs_rework"
+    if decision:
+        stage = "done"
+        gold = "not_gold" if decision["verdict"] == "rejected" else "gold"
     elif len(independents) >= 2:
         stage, gold = "arbitration", "disputed_pending_arbitration"
     elif len(independents) == 1:
@@ -71,7 +102,9 @@ def compute_state(history: list[dict], revisions: list[dict]) -> dict:
         stage, gold = "first_review", "not_gold"
     return {
         "round": current_round, "stage": stage, "gold_status": gold,
-        "outcome": outcome, "round_annotations": in_round,
+        "outcome": decision["verdict"] if decision else None,
+        "final_graph": decision["graph"] if decision else None,
+        "round_annotations": in_round,
     }
 
 

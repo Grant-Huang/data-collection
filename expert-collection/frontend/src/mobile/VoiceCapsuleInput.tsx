@@ -39,7 +39,7 @@ export function VoiceCapsuleInput({ onTranscript, disabled, onRecordingChange }:
 
   if (state === "recording") {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "10px 14px", background: "#eef4fc", borderRadius: 999 }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#eef4fc", borderRadius: 999 }}>
         <button
           aria-label="取消录音"
           onClick={() => stopRecognition("cancel")}

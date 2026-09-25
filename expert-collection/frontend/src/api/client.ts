@@ -9,17 +9,13 @@ import type {
   ExperimentSummary,
   ManufacturingContext,
   Graph,
-  NodeVerdicts,
   PriorRecordDetail,
   PriorRecordSummary,
-  PriorVerdict,
-  ReasonTag,
+  ReviewSession,
   RegenerateGraphCheck,
-  ReworkEdits,
   Settings,
   SourceType,
   TurnResponse,
-  ValidationIssue,
   WorkflowMetaUpdate,
   WorkflowRecord,
   WorkflowSummary,
@@ -56,6 +52,8 @@ export const api = {
     req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
   postTurn: (id: string, text: string, rawTranscript?: string) =>
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text, raw_transcript: rawTranscript ?? null }),
+  reopenWorkflow: (id: string) =>
+    req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/reopen`),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
@@ -142,28 +140,15 @@ export const api = {
     req<PriorRecordSummary[]>("GET", `/api/datasets/versions/${versionId}/records`),
   getPriorRecord: (versionId: string, recordId: string) =>
     req<PriorRecordDetail>("GET", `/api/datasets/versions/${versionId}/records/${recordId}`),
-  submitAnnotation: (
-    versionId: string,
-    recordId: string,
-    body: {
-      verdict: PriorVerdict;
-      node_verdicts: NodeVerdicts;
-      reason_tags: ReasonTag[];
-      note: string | null;
-      annotator_name: string;
-      actor_role?: string;
-      round: number; // round the annotator was looking at -- backend answers 409 if it moved on
-    },
-  ) => req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/annotations`, body),
-  previewRework: (versionId: string, recordId: string, edits: ReworkEdits) =>
-    req<{ graph: Graph; issues: ValidationIssue[] }>(
-      "POST", `/api/datasets/versions/${versionId}/records/${recordId}/rework/preview`, edits,
-    ),
-  submitRework: (
-    versionId: string,
-    recordId: string,
-    body: { edits: ReworkEdits; reworker_name: string; note: string | null; actor_role?: string; round: number },
-  ) => req<PriorRecordDetail>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/rework`, body),
+  // Section 17.4: start or resume this annotator's review conversation on a record.
+  startReviewSession: (versionId: string, recordId: string, annotatorName: string, actorRole?: string) =>
+    req<ReviewSession>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/review-session`, {
+      annotator_name: annotatorName, actor_role: actorRole ?? null,
+    }),
+  reviewSessionTurn: (versionId: string, sessionId: string, text: string, rawTranscript?: string) =>
+    req<ReviewSession>("POST", `/api/datasets/versions/${versionId}/review-sessions/${sessionId}/turns`, {
+      text, raw_transcript: rawTranscript ?? null,
+    }),
   getAnnotationSummary: (versionId: string) =>
     req<AnnotationSummary>("GET", `/api/datasets/versions/${versionId}/annotation-summary`),
 };

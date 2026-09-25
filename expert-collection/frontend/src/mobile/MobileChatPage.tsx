@@ -20,6 +20,9 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   const [draft, setDraft] = useState("");
   // Raw recognizer output dictated into the current draft (see ChatPanel).
   const [rawPieces, setRawPieces] = useState<string[]>([]);
+  // While recording, the voice capsule takes the whole input row -- next to the text input it
+  // overflowed a 390px-wide screen and pushed its stop/send buttons off-screen.
+  const [recording, setRecording] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
   const nextQuestion = active?.unresolved[0] ?? null;
@@ -91,20 +94,23 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
       )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderTop: "1px solid #e5e7eb" }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", background: "#f1f3f5", borderRadius: 999, padding: "4px 6px 4px 16px" }}>
+        <div style={{ flex: 1, display: recording ? "none" : "flex", alignItems: "center", background: "#f1f3f5", borderRadius: 999, padding: "4px 6px 4px 16px" }}>
           <input
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSend()}
             disabled={confirmed || !active}
-            placeholder={confirmed ? "该会话已确认提交" : "点击气泡快速填入，或打字/语音输入"}
+            placeholder={confirmed ? "该会话已确认提交" : active?.stage?.startsWith("review_") ? "打字或点麦克风说，Agent 会整理并跟你确认" : "点击气泡快速填入，或打字/语音输入"}
             style={{ flex: 1, border: "none", background: "none", outline: "none", fontSize: 14, minWidth: 0 }}
           />
         </div>
         <VoiceCapsuleInput
           disabled={confirmed || !active}
-          onRecordingChange={recordingChanged}
+          onRecordingChange={(r) => {
+            setRecording(r);
+            recordingChanged?.(r);
+          }}
           onTranscript={(text, mode) => {
             if (mode === "send") handleSend(draft.trim() ? `${draft.trimEnd()}${text}` : text, text);
             else {
@@ -113,6 +119,7 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
             }
           }}
         />
+        {!recording && (
         <button
           aria-label="发送"
           onClick={() => handleSend()}
@@ -130,6 +137,7 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
         >
           ↑
         </button>
+        )}
       </div>
     </div>
   );
