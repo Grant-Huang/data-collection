@@ -109,3 +109,17 @@ def cohens_kappa(pairs: list[tuple[str, str]]) -> float | None:
     if pe >= 1.0:
         return 1.0 if po >= 1.0 else 0.0
     return round((po - pe) / (1 - pe), 3)
+
+
+def graph_signature(graph: dict | None) -> tuple:
+    """Id-independent structural fingerprint: two annotators who independently make the same
+    correction get different node ids for new steps, so graphs are compared by step labels,
+    types, actors, connections and conditions instead (section 17.4)."""
+    if not graph:
+        return ()
+    label = {n["node_id"]: n.get("label", "").strip() for n in graph.get("nodes", [])}
+    nodes = sorted((n.get("label", "").strip(), n.get("node_type"), tuple(sorted(n.get("actor_roles") or [])),
+                    bool((n.get("retry_semantics") or {}).get("enabled"))) for n in graph.get("nodes", []))
+    edges = sorted((label.get(e["from"], e["from"]), label.get(e["to"], e["to"]), e.get("edge_type"),
+                    (e.get("condition") or "").strip()) for e in graph.get("edges", []))
+    return (tuple(nodes), tuple(edges))

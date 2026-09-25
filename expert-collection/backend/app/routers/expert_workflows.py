@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client
+from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -70,11 +70,60 @@ def _assistant_turn(text: str, next_question: dict | None) -> dict:
     return turn
 
 
+def _review_turn(result: review_agent.TurnResult, *, sample: str | None = None) -> dict:
+    """Assistant transcript entry for a review-loop reply (section 17): understanding (ack),
+    the concrete graph changes, a body (read-back / notices) and one question -- no chips."""
+    turn = {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": result.text,
+            "ack": result.ack, "question": result.question, "changes": result.changes or None, "body": result.body}
+    if sample:
+        turn["sample"] = sample
+    return turn
+
+
+def _apply_review_state(record: dict, state: dict) -> None:
+    record["_review"] = state
+    record["stage"] = f"review_{state['phase']}"
+    ready = state["phase"] == "final_confirm" and graph_validator.is_valid(record["graph"])
+    record["completion"] = {"score": review_agent.progress(state), "ready_for_confirmation": ready}
+    record["unresolved"] = []
+    record["validation"] = graph_validator.validate(record["graph"])
+    if record["status"] != "expert_confirmed":
+        record["status"] = "needs_confirmation" if ready else "collecting"
+
+
+def _mark_confirmed(record: dict) -> None:
+    record["status"] = "expert_confirmed"
+    for node in record["graph"]["nodes"]:
+        node["expert_confirmed"] = True
+    for edge in record["graph"]["edges"]:
+        edge["expert_confirmed"] = True
+    if record.get("_review"):
+        record["_review"]["phase"] = "done"
+        record["stage"] = "review_done"
+        record["completion"] = {"score": 100.0, "ready_for_confirmation": False}
+
+
 @router.post("", response_model=WorkflowRecord)
 def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
     workflow_id = uuid.uuid4().hex[:12]
     now = _now()
     graph = graph_ops.new_graph()
+    if review_agent.available():
+        # Section 17: narrate first, then review. Falls back to section 15's step-by-step
+        # guide below when the C_standard slots aren't configured.
+        state = review_agent.new_state("create")
+        opening = review_agent.opening(state, graph)
+        record = {
+            "id": workflow_id, "name": req.name or f"专家会话 {workflow_id}", "status": "collecting",
+            "stage": "", "graph": graph,
+            "turns": [_review_turn(opening, sample=review_agent.SAMPLE_NARRATION)],
+            "unresolved": [], "completion": {}, "validation": [], "case_context": None,
+            "created_at": now, "updated_at": now, "pinned": False, "archived": False,
+        }
+        _apply_review_state(record, opening.state)
+        db.save(record)
+        return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
+
     reply, next_question = guide_service.initial_turn()
     state = guide_service.initial_state()
     record = {
@@ -264,11 +313,17 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     if record["status"] == "expert_confirmed":
         raise HTTPException(status_code=409, detail="workflow already confirmed, no further turns accepted")
 
+    if record.get("_review"):
+        return _post_review_turn(record, req)
+
     state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
     expert_turn_id = uuid.uuid4().hex[:8]
     history = list(record["turns"])
     graph_before = copy.deepcopy(record["graph"])
-    record["turns"].append({"turn_id": expert_turn_id, "role": "expert", "text": req.text})
+    expert_turn = {"turn_id": expert_turn_id, "role": "expert", "text": req.text}
+    if req.raw_transcript:
+        expert_turn["raw_transcript"] = req.raw_transcript
+    record["turns"].append(expert_turn)
 
     if state["stage"] == "awaiting_turn_selection":
         # Router-handled entirely -- this is the one turn guide_service.handle_turn never
@@ -364,6 +419,59 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     )
 
 
+def _post_review_turn(record: dict, req: TurnRequest) -> TurnResponse:
+    expert_turn_id = uuid.uuid4().hex[:8]
+    expert_turn = {"turn_id": expert_turn_id, "role": "expert", "text": req.text}
+    if req.raw_transcript:
+        expert_turn["raw_transcript"] = req.raw_transcript
+    record["turns"].append(expert_turn)
+
+    result = review_agent.handle_turn(record["_review"], record["graph"], record["turns"], req.text, expert_turn_id)
+    before = len(record["graph"]["nodes"]) + len(record["graph"]["edges"])
+    if result.graph is not None:
+        record["graph"] = result.graph
+    if result.case_context:
+        record["case_context"] = {**(record.get("case_context") or {}), **result.case_context}
+    record["turns"].append(_review_turn(result))
+    _apply_review_state(record, result.state)
+    if result.finished:
+        _mark_confirmed(record)
+    record["updated_at"] = _now()
+    db.save(record)
+    return TurnResponse(
+        assistant_reply=result.text,
+        graph_ops_applied=abs(len(record["graph"]["nodes"]) + len(record["graph"]["edges"]) - before),
+        current_dag=record["graph"],
+        completion=Completion(**record["completion"]),
+        validation=[ValidationIssue(**i) for i in record["validation"]],
+        next_question=None,
+    )
+
+
+@router.post("/{workflow_id}/reopen", response_model=WorkflowRecord)
+def reopen_workflow(workflow_id: str) -> WorkflowRecord:
+    """「继续修改」(section 17.1 "编辑"): a confirmed workflow that is not in any dataset goes
+    back into the review loop. Refused once published -- expert_collected versions read the
+    live graph, so editing would silently change published data (same rule as regenerate)."""
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if dataset_records.versions_containing(workflow_id):
+        raise HTTPException(status_code=409, detail="这个流程已经录入数据集，不能再修改")
+    if record["status"] != "expert_confirmed":
+        raise HTTPException(status_code=409, detail="这个流程还没有确认提交，直接在对话里修改即可")
+    if not review_agent.available():
+        raise HTTPException(status_code=409, detail="继续修改需要配置 AI 模型（系统管理 → 模型配置）")
+    state = review_agent.new_state("edit")
+    opening = review_agent.opening(state, record["graph"])
+    record["status"] = "collecting"
+    record["turns"].append(_review_turn(opening))
+    _apply_review_state(record, opening.state)
+    record["updated_at"] = _now()
+    db.save(record)
+    return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
+
+
 @router.post("/{workflow_id}/confirm", response_model=WorkflowRecord)
 def confirm_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
@@ -375,11 +483,7 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
             status_code=422,
             detail={"message": "图结构未通过校验，无法确认", "issues": issues},
         )
-    record["status"] = "expert_confirmed"
-    for node in record["graph"]["nodes"]:
-        node["expert_confirmed"] = True
-    for edge in record["graph"]["edges"]:
-        edge["expert_confirmed"] = True
+    _mark_confirmed(record)
     record["validation"] = issues
     record["updated_at"] = _now()
     db.save(record)
@@ -454,6 +558,15 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
 
     record["graph"] = new_graph
     record["validation"] = issues
+
+    if record.get("_review"):
+        result = review_agent.after_regeneration(record["_review"], new_graph)
+        record["turns"].append(_review_turn(result))
+        record["status"] = "collecting"
+        _apply_review_state(record, result.state)
+        record["updated_at"] = _now()
+        db.save(record)
+        return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
 
     # Reset the conversation progress to match the new graph: the old guide state (cursor,
     # sweep chip options, pending branch/correction scratch) points at node ids that no longer

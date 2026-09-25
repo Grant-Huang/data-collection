@@ -9,7 +9,7 @@ import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 interface Props {
   active: WorkflowRecord | null;
   sending: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, rawTranscript?: string) => void;
   onOpenDrawer: () => void;
   onToggleProgress: () => void;
   progressOpen: boolean;
@@ -18,6 +18,8 @@ interface Props {
 
 export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged }: Props) {
   const [draft, setDraft] = useState("");
+  // Raw recognizer output dictated into the current draft (see ChatPanel).
+  const [rawPieces, setRawPieces] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
   const nextQuestion = active?.unresolved[0] ?? null;
@@ -29,11 +31,13 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
-  function handleSend(text?: string) {
+  function handleSend(text?: string, raw?: string) {
     const value = (text ?? draft).trim();
     if (!value || sending || confirmed) return;
     setDraft("");
-    onSend(value);
+    const rawAll = [...rawPieces, ...(raw ? [raw] : [])].join("");
+    setRawPieces([]);
+    onSend(value, rawAll || undefined);
   }
 
   return (
@@ -102,8 +106,11 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
           disabled={confirmed || !active}
           onRecordingChange={recordingChanged}
           onTranscript={(text, mode) => {
-            if (mode === "send") handleSend(text);
-            else setDraft(text);
+            if (mode === "send") handleSend(draft.trim() ? `${draft.trimEnd()}${text}` : text, text);
+            else {
+              setRawPieces((prev) => [...prev, text]);
+              setDraft((prev) => (prev.trim() ? `${prev.trimEnd()}${text}` : text));
+            }
           }}
         />
         <button

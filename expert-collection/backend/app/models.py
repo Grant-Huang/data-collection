@@ -38,6 +38,9 @@ class Node(BaseModel):
     expert_confirmed: bool = False
     source_turn_ids: list[str] = Field(default_factory=list)
     retry_semantics: Optional[RetrySemantics] = None
+    # Section 17: verbatim quote(s) from what the expert/annotator said that back this step.
+    # Empty for steps the model couldn't tie to a quote -- those are asked about first.
+    evidence: list[str] = Field(default_factory=list)
     # Free-form layout hint; React Flow fills this in, the backend just round-trips it
     # untouched (PRD 11.4: keep manual_position across re-layouts).
     manual_position: Optional[dict] = None
@@ -69,6 +72,8 @@ class ConversationTurn(BaseModel):
     role: Literal["expert", "assistant"]
     # Full plain text of the message -- what exports/anonymization/older records read.
     text: str
+    # Expert turns: raw speech-recognition output if dictated (section 17.5).
+    raw_transcript: Optional[str] = None
     # Assistant turns only, all optional (older records don't have them): the same message
     # split into layers so the chat bubble can render them separately -- a short restatement
     # of what was just recorded, the one question being asked, a one-line "why ask this",
@@ -76,6 +81,11 @@ class ConversationTurn(BaseModel):
     ack: Optional[str] = None
     question: Optional[str] = None
     why: Optional[str] = None
+    # Review-loop assistant turns (section 17): concrete graph changes made this turn, a
+    # multi-line body (read-back / notices), and the sample narration on the opening message.
+    changes: Optional[list[str]] = None
+    body: Optional[str] = None
+    sample: Optional[str] = None
     chips: Optional[list[str]] = None
     chip_mode: Optional[Literal["prefill", "multi_select"]] = None
 
@@ -237,6 +247,9 @@ class CreateWorkflowRequest(BaseModel):
 
 class TurnRequest(BaseModel):
     text: str
+    # Raw speech-recognition output when the expert dictated this message (section 17.5);
+    # `text` is what they actually sent after editing.
+    raw_transcript: Optional[str] = None
 
 
 class TurnResponse(BaseModel):

@@ -8,12 +8,15 @@ import { useRef, useState } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
+import { VoiceDictationButton } from "./VoiceDictationButton";
 
 interface Props {
   turns: ConversationTurn[];
   graph?: Graph | null;
   nextQuestion: NextQuestion | null;
-  onSend: (text: string) => void;
+  // rawTranscript: what speech recognition heard, when the message was dictated -- stored
+  // next to the (possibly edited) text so recognition errors can be checked later.
+  onSend: (text: string, rawTranscript?: string) => void;
   sending: boolean;
   confirmed: boolean;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
@@ -21,6 +24,8 @@ interface Props {
 
 export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirmed, onHighlightNodes }: Props) {
   const [draft, setDraft] = useState("");
+  // Raw recognizer output for everything dictated into the current draft.
+  const [rawPieces, setRawPieces] = useState<string[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   function handleChipPick(pick: string) {
@@ -39,7 +44,15 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
     const text = draft.trim();
     if (!text || sending || confirmed) return;
     setDraft("");
-    onSend(text);
+    const raw = rawPieces.join("");
+    setRawPieces([]);
+    onSend(text, raw || undefined);
+  }
+
+  function handleDictated(text: string) {
+    setRawPieces((prev) => [...prev, text]);
+    setDraft((prev) => (prev.trim() ? `${prev.trimEnd()}${text}` : text));
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   const hasChips = !!nextQuestion?.chips?.length;
@@ -55,11 +68,15 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
         onHighlightNodes={onHighlightNodes}
       />
 
-      <div style={{ display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
+      <div style={{ position: "relative", display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
+        <VoiceDictationButton disabled={confirmed || sending} onText={handleDictated} />
         <textarea
           ref={inputRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (!e.target.value.trim()) setRawPieces([]);
+          }}
           onKeyDown={(e) => {
             // Don't send while an IME (Chinese input) composition is still open.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

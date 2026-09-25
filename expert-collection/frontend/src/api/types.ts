@@ -54,8 +54,11 @@ export interface Graph {
 export interface ConversationTurn {
   turn_id: string;
   role: "expert" | "assistant";
-  // Full plain text -- always present, and the only field older records have.
+  // Full plain text -- always present, and the only field older records have. For expert
+  // turns this is the text the expert actually sent (after editing any dictation).
   text: string;
+  // Expert turns only: raw speech-recognition output when the message was dictated.
+  raw_transcript?: string | null;
   // Assistant turns only (optional): the same message split into layers so the bubble can
   // render them separately -- restatement of what was recorded, the question, why it's
   // asked, and the chips offered with it (kept so the history shows what was picked).

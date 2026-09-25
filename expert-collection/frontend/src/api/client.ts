@@ -27,6 +27,11 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
+// WebSocket URL on the same backend (http -> ws, https -> wss) -- used by the voice relay.
+export function wsUrl(path: string): string {
+  return BASE.replace(/^http/, "ws") + path;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(BASE + path, {
     method,
@@ -41,6 +46,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
+  voiceStatus: () => req<{ configured: boolean; model: string }>("GET", "/api/voice/status"),
   listWorkflows: (includeArchived = false) =>
     req<WorkflowSummary[]>("GET", `/api/expert-workflows?include_archived=${includeArchived}`),
   createWorkflow: (name?: string) =>
@@ -48,8 +54,8 @@ export const api = {
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),
   updateWorkflowMeta: (id: string, patch: WorkflowMetaUpdate) =>
     req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
-  postTurn: (id: string, text: string) =>
-    req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
+  postTurn: (id: string, text: string, rawTranscript?: string) =>
+    req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text, raw_transcript: rawTranscript ?? null }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>

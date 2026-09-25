@@ -64,18 +64,18 @@ export function useWorkflowSession() {
   }, [refreshList]);
 
   const sendTurn = useCallback(
-    async (text: string) => {
+    async (text: string, rawTranscript?: string) => {
       if (!active) return;
       setSending(true);
       setError(null);
       // Optimistic local append so the expert's own message shows immediately.
       setActive((prev) =>
         prev
-          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text }] }
+          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
           : prev,
       );
       try {
-        await api.postTurn(active.id, text);
+        await api.postTurn(active.id, text, rawTranscript);
         const refreshed = await api.getWorkflow(active.id);
         setActive(refreshed);
         await refreshList();

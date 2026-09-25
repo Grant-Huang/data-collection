@@ -2,4 +2,5 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.8
 jsonschema>=4.20
+websockets>=13
 pm4py>=2.7
