@@ -55,6 +55,13 @@ def chat_completion(slot_config: dict, messages: list[dict[str, str]], *,
         "model": model_name,
         "messages": messages,
         "temperature": slot_config.get("temperature", 0.2),
+        # Disable Qwen3 thinking mode by default. Server-side --reasoning-budget 0 does
+        # not propagate through llama.cpp's jinja template; the only way to actually skip
+        # the `<think>...</think>` block is via chat_template_kwargs. Without this, 35B
+        # burns every max_tokens on reasoning_content and finishes with empty JSON.
+        # Slots that genuinely want thinking (none today) can override by passing their
+        # own chat_template_kwargs through a future slot-level config knob.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if response_format_json:
         body["response_format"] = {"type": "json_object"}
