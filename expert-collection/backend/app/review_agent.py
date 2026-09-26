@@ -38,7 +38,7 @@ from . import settings as app_settings
 
 EXTRACT_SLOT = "graph_regenerate"   # C_standard by default
 REVIEW_SLOT = "guide_service"       # C_standard by default since section 17
-EXTRACT_TIMEOUT = 90.0
+EXTRACT_TIMEOUT = 180.0  # was 90.0; C_standard 27B on long narratives needs ~90-120s for prompt eval + structured output
 REVIEW_TIMEOUT = 180.0  # was 60.0; 35B MoE + reasoning mode needs ~60-90s for long prompts
 MIN_NARRATIVE_CHARS = 60
 MAX_SNAPSHOTS = 30
