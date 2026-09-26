@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import type { ConversationTurn, NextQuestion } from "../api/types";
 import { MessageList } from "./MessageList";
+import { VoiceInputCapsule } from "../voice/VoiceInputCapsule";
 
 interface Props {
   turns: ConversationTurn[];
@@ -42,12 +43,12 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
     setDraft(selected.join("、"));
   }
 
-  function handleSend() {
-    const text = draft.trim();
-    if (!text || sending) return;
+  function handleSend(text?: string) {
+    const value = (text ?? draft).trim();
+    if (!value || sending) return;
     setDraft("");
     setSelected([]);
-    onSend(text);
+    onSend(value);
   }
 
   return (
@@ -142,8 +143,17 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
             fontFamily: "inherit",
           }}
         />
+        <VoiceInputCapsule
+          disabled={confirmed}
+          sending={sending}
+          turns={turns}
+          onTranscript={(text, mode) => {
+            if (mode === "send") handleSend(text);
+            else setDraft(text);
+          }}
+        />
         <button
-          onClick={handleSend}
+          onClick={() => handleSend()}
           disabled={confirmed || sending || !draft.trim()}
           style={{
             border: "none",

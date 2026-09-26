@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
-import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
+import { VoiceInputCapsule } from "../voice/VoiceInputCapsule";
 
 interface Props {
   active: WorkflowRecord | null;
@@ -109,8 +109,10 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
             style={{ flex: 1, border: "none", background: "none", outline: "none", fontSize: 14, minWidth: 0 }}
           />
         </div>
-        <VoiceCapsuleInput
+        <VoiceInputCapsule
           disabled={confirmed || !active}
+          sending={sending}
+          turns={active?.turns ?? []}
           onRecordingChange={recordingChanged}
           onTranscript={(text, mode) => {
             if (mode === "send") handleSend(text);
