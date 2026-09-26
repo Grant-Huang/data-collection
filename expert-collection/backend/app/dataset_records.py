@@ -54,6 +54,9 @@ def records_for_export(version: dict) -> list[dict]:
             "provenance": {"source_type": "expert_collected"},
             "case_context": w.get("case_context"),
             "manufacturing_context": w.get("manufacturing_context"),
+            # Dual-DAG upper layer (IMPLEMENTATION_PLAN.md section 18); `graph` above is the
+            # step / SOP layer. None for sessions collected before the task layer existed.
+            "task_workflow": w.get("task_workflow"),
         })
     return out
 

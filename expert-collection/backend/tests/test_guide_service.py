@@ -77,6 +77,18 @@ def test_full_conversation_reaches_valid_confirmable_graph(client):
 
     assert r["next_question"]["target"] == "experience_discovery"
     r = _turn(client, wid, "刀具磨损到什么程度该换，主要靠听声音判断")
+
+    # Task layer (IMPLEMENTATION_PLAN.md section 18): the expert defines who owns which segment,
+    # then picks each later task's first step among the steps already described.
+    assert r["next_question"]["target"] == "task_outline_discovery"
+    assert r["completion"]["ready_for_confirmation"] is False
+    r = _turn(client, wid, "班组：停机复测 → 工艺科：调整刀补 → 班组：试切首件")
+    assert r["next_question"]["target"] == "task_boundary_discovery"
+    assert "「调整刀补」（工艺科）" in r["next_question"]["question"]
+    r = _turn(client, wid, "工艺员调整刀补")
+    # Only steps after the previous boundary are offered, in graph (topological) order.
+    assert r["next_question"]["chips"][:2] == ["换刀后重新对刀", "操作工试切首件"]
+    r = _turn(client, wid, "操作工试切首件")
     assert r["next_question"] is None
     assert r["completion"]["ready_for_confirmation"] is True
     assert r["completion"]["score"] == 1.0
@@ -93,11 +105,26 @@ def test_full_conversation_reaches_valid_confirmable_graph(client):
     assert target["label"] == "工艺员调整刀补"
     assert rec["case_context"]["experience_notes"].startswith("刀具磨损")
 
+    # Topological, not list, order: the approval inserted by the sweep (appended to the end of
+    # `nodes`) belongs to the task it follows, and the later-created branch-B step to task 2.
+    tw = rec["task_workflow"]
+    by_id = {n["node_id"]: n for n in graph["nodes"]}
+    task_nodes = {n["node_id"]: n for n in tw["graph"]["nodes"]}
+    segments = [(task_nodes[t["task_id"]]["label"], task_nodes[t["task_id"]]["actor_roles"],
+                 [by_id[i]["label"] for i in t["sop_node_ids"]]) for t in tw["tasks"]]
+    assert segments[0][:2] == ("停机复测", ["班组"])
+    assert segments[1] == ("调整刀补", ["工艺科"], ["工艺员调整刀补", "判断", "换刀后重新对刀"])
+    assert segments[2][2] == ["操作工试切首件", "审批（质量主管）", "首件合格恢复批量生产"]
+    assert [e["edge_type"] for e in tw["graph"]["edges"]] == ["normal", "handoff", "handoff", "normal"]
+    assert graph_validator.is_valid(tw["graph"])
+
     # Assistant turns carry the layered bubble fields.
     last_q = [t for t in rec["turns"] if t["role"] == "assistant" and t.get("chips")][-1]
     assert last_q["question"] and last_q["why"]
 
-    assert client.post(f"/api/expert-workflows/{wid}/confirm").status_code == 200
+    confirmed = client.post(f"/api/expert-workflows/{wid}/confirm")
+    assert confirmed.status_code == 200
+    assert all(n["expert_confirmed"] for n in confirmed.json()["task_workflow"]["graph"]["nodes"])
 
 
 def test_ambiguous_connector_and_negated_simultaneous(client):
@@ -294,5 +321,50 @@ def test_regenerate_skips_answered_sweeps_and_clears_rollback_log(client, monkey
     # Finish the remaining sweeps -> final review, confirmable.
     _turn(client, wid, "没有需要等人确认的")
     _turn(client, wid, "没有返工的情况")
-    r = _turn(client, wid, "没有特别靠经验的地方")
+    _turn(client, wid, "没有特别靠经验的地方")
+    r = _turn(client, wid, guide_service.task_layer.SINGLE_TASK_CHIP)
     assert r["next_question"] is None and r["completion"]["ready_for_confirmation"] is True
+
+
+def _to_task_outline(client):
+    wid = client.post("/api/expert-workflows", json={}).json()["id"]
+    _through_background(client, wid)
+    for t in ["客服记录投诉", "质量部复检样品", "生产部返修", END_CHIP, "客户确认满意",
+              "没有，一直是这么处理", NO_PARALLEL_CHIP, "没有需要等人确认的", "没有返工的情况"]:
+        r = _turn(client, wid, t)
+    r = _turn(client, wid, "没有特别靠经验的地方")
+    assert r["next_question"]["target"] == "task_outline_discovery"
+    return wid
+
+
+def test_task_boundary_reasks_on_free_text_and_allows_no_step_task(client):
+    wid = _to_task_outline(client)
+    _turn(client, wid, "客服：确认问题 → 质量部：复检 → 客服：回复客户")
+    r = _turn(client, wid, "大概是复检那一步吧")          # free text, not a chip: re-asked, not guessed
+    assert r["next_question"]["target"] == "task_boundary_discovery"
+    assert "「复检」（质量部）" in r["next_question"]["question"]
+    r = _turn(client, wid, "质量部复检样品")
+    r = _turn(client, wid, guide_service.task_layer.NO_STEP_CHIP)
+    assert r["next_question"] is None
+    tw = _record(client, wid)["task_workflow"]
+    assert [len(t["sop_node_ids"]) for t in tw["tasks"]][2] == 0   # named, but no steps described
+    assert all(t["definition_source"] == "expert_defined" and t["structured_by"] == "rule" for t in tw["tasks"])
+
+
+def test_regenerate_drops_stale_task_layer_and_asks_again(client, monkeypatch):
+    wid = _to_task_outline(client)
+    _turn(client, wid, guide_service.task_layer.SINGLE_TASK_CHIP)
+    assert _record(client, wid)["task_workflow"] is not None
+    monkeypatch.setattr(guide_service, "regenerate_graph_from_transcript", lambda turns: _regenerated_graph())
+    rec = client.post(f"/api/expert-workflows/{wid}/regenerate-graph").json()
+    # Old sop_node_ids pointed at the discarded graph -- the task layer must not survive.
+    assert rec["task_workflow"] is None
+
+
+def test_rule_outline_parser_never_guesses_owner():
+    from app import task_layer
+    assert task_layer._rule_parse_outline("客服：确认问题 → 质量部负责复检") == [
+        {"name": "确认问题", "owner": "客服"}, {"name": "复检", "owner": "质量部"}]
+    # No "负责方：" / "X负责" pattern -> no owner (not stated), stacked fillers stripped.
+    assert task_layer._rule_parse_outline("先由客服确认问题，然后生产部处理") == [
+        {"name": "客服确认问题", "owner": None}, {"name": "生产部处理", "owner": None}]

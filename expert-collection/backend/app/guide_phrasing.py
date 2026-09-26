@@ -49,6 +49,9 @@ WHY_BY_TARGET: dict[str, str] = {
     "experience_discovery": "规定之外的经验判断，是这份记录里最有价值的部分。",
     "correction_turn_pick": "回退后，图上那一步之后的内容会一起撤掉，重新讲。",
     "parallel_merge_discovery": "同时进行的事情和先后做的事情，在图上的画法不一样。",
+    # Task layer (IMPLEMENTATION_PLAN.md section 18).
+    "task_outline_discovery": "按负责方分好段，就能看出这件事由哪些人接力完成、在哪里交接。",
+    "task_boundary_discovery": "确定每个任务从哪一步开始，两张图才能对得上。",
 }
 
 # PRD 3.2 rule 1 ("不问术语，只问业务"): the expert should never see graph vocabulary.

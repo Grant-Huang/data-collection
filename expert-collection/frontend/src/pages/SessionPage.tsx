@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
-import { DagView } from "../components/DagView";
+import { DualDagPanel } from "../components/DualDagPanel";
 import { HistoryDrawer } from "../components/HistoryDrawer";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types";
@@ -171,15 +171,8 @@ export function SessionPage() {
             </div>
           )}
           <div style={{ flex: 1, minHeight: 0 }}>
-            {active && active.graph.nodes.length === 0 ? (
-              // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come
-              // before any graph node exists -- show that this is expected, not a stuck app.
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12.5, textAlign: "center", padding: 24 }}>
-                {active.stage === "review_narrative" ? "您讲完之后，这里会生成流程图" : "背景信息收集中，还没开始画图……"}
-              </div>
-            ) : (
-              active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />
-            )}
+            {/* Two tabs: 任务协作 (task layer) / SOP 步骤 (step layer) -- IMPLEMENTATION_PLAN.md section 18. */}
+            {active && <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} />}
           </div>
         </div>
       </div>

@@ -163,12 +163,30 @@ export interface WorkflowSummary {
   in_dataset: boolean;
 }
 
+// Dual-DAG upper layer (IMPLEMENTATION_PLAN.md section 18): "谁负责哪一段". Task name/owner
+// live on the matching task_workflow.graph node (label / actor_roles), not here.
+export interface TaskDefinition {
+  task_id: string;
+  sop_node_ids: string[];
+  definition_source: "expert_defined" | "llm_mined" | "org_inferred";
+  structured_by: "llm" | "rule";
+}
+
+export interface TaskWorkflow {
+  graph: Graph;
+  tasks: TaskDefinition[];
+}
+
 export interface WorkflowRecord {
   id: string;
   name: string;
   status: WorkflowStatus;
   stage: string;
+  // Step-level graph = the SOP / Skill DAG layer ("每一段怎么做").
   graph: Graph;
+  // null for sessions collected before the task layer existed, or until the expert answers
+  // the task-outline question at the end of the conversation.
+  task_workflow: TaskWorkflow | null;
   turns: ConversationTurn[];
   unresolved: NextQuestion[];
   completion: Completion;

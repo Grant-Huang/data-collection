@@ -53,6 +53,8 @@ interface WorkflowNodeData {
   // narration but this step's quote wasn't found in what the expert said.
   evidence?: string[];
   unverified?: boolean;
+  // Second line under the label (task-layer tab: owner / step count).
+  subtitle?: string;
 }
 
 function WorkflowNode({ data }: { data: WorkflowNodeData }) {
@@ -99,6 +101,9 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
         </div>
       )}
       {data.label}
+      {data.subtitle && (
+        <div style={{ fontSize: 11, fontWeight: 500, color: "#667085", marginTop: 3 }}>{data.subtitle}</div>
+      )}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
           ↺
@@ -176,9 +181,12 @@ interface DagViewProps {
   // not trigger a re-layout.
   highlightNodeIds?: string[] | null;
   nodeDecorations?: Record<string, NodeDecoration>;
+  // Optional second line under a node's label, keyed by node_id -- used by the task-layer tab
+  // to show each task's owner / step count without changing the node label itself.
+  subtitles?: Record<string, string>;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations, subtitles }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -262,10 +270,11 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
         label: src?.label ?? n.data.label,
         decoration: nodeDecorations?.[n.id],
         clickable: !!onNodeTap,
+        subtitle: subtitles?.[n.id],
       },
       };
     });
-  }, [nodes, graph, nodeDecorations, onNodeTap]);
+  }, [nodes, graph, nodeDecorations, onNodeTap, subtitles]);
 
   if (nodeCount === 0) {
     return (

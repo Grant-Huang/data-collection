@@ -206,6 +206,57 @@
             }
           }
         },
+        "task_workflow": {
+          "description": "双层工作流的上层：任务协作 DAG（谁负责哪一段、任务间怎么交接）。同级的 graph 是下层 SOP / 步骤 DAG（每一段具体怎么做）。可选：旧数据和公开抽取数据没有这一层。",
+          "type": "object",
+          "required": [
+            "graph",
+            "tasks"
+          ],
+          "properties": {
+            "graph": {
+              "$ref": "#/$defs/workflow_record/properties/graph"
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "task_id",
+                  "sop_node_ids"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "description": "等于 task_workflow.graph 中该任务节点的 node_id；任务名在节点 label，负责方在节点 actor_roles"
+                  },
+                  "sop_node_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "该任务内部流程由 graph（SOP 层）中哪些节点组成；专家只提到任务、没描述步骤时为空"
+                  },
+                  "definition_source": {
+                    "type": "string",
+                    "enum": [
+                      "expert_defined",
+                      "llm_mined",
+                      "org_inferred"
+                    ]
+                  },
+                  "structured_by": {
+                    "type": "string",
+                    "enum": [
+                      "llm",
+                      "rule"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
         "entities": {
           "type": "array",
           "items": {

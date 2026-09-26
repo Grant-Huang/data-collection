@@ -192,17 +192,51 @@ class CaseContext(BaseModel):
     skipped_fields: list[str] = Field(default_factory=list)
 
 
+TaskDefinitionSource = Literal["expert_defined", "llm_mined", "org_inferred"]
+
+
+class TaskDefinition(BaseModel):
+    """One Task node's link down into the step (SOP) graph -- IMPLEMENTATION_PLAN.md section 18.
+    Name/owner are NOT here: they live on the matching TaskWorkflow.graph node (`label` /
+    `actor_roles`), so export anonymization, which already walks node labels and roles, covers
+    them without a second set of rules.
+    """
+    task_id: str  # == the node_id of this task in TaskWorkflow.graph
+    # Which nodes of WorkflowRecord.graph (the SOP / step graph) make up this task's internal
+    # workflow. Empty when the expert named the task but never described its steps.
+    sop_node_ids: list[str] = Field(default_factory=list)
+    # Product-owner priority for where a task layer may come from: expert_defined (the only
+    # one produced this iteration) > llm_mined (from real work logs, future) > org_inferred
+    # (auxiliary hint only, never allowed to define the DAG alone).
+    definition_source: TaskDefinitionSource = "expert_defined"
+    # Whether the expert's outline was split into items by the real LLM or the rule fallback.
+    structured_by: Literal["llm", "rule"] = "rule"
+
+
+class TaskWorkflow(BaseModel):
+    """Upper layer of the dual-DAG model ("谁负责哪一段"); `WorkflowRecord.graph` stays the step
+    graph ("每一段怎么做"). Kept as its own plain Graph so DagView/validator/export reuse it.
+    """
+    graph: Graph
+    tasks: list[TaskDefinition] = Field(default_factory=list)
+
+
 class WorkflowRecord(BaseModel):
     id: str
     name: str
     status: WorkflowStatus
     stage: str
+    # The step-level graph -- in dual-DAG terms, the SOP / Skill DAG. Name kept as `graph` so
+    # every existing consumer (datasets, experiments, quality scoring) is unchanged.
     graph: Graph
     turns: list[ConversationTurn]
     unresolved: list[NextQuestion]
     completion: Completion
     validation: list[ValidationIssue] = Field(default_factory=list)
     case_context: Optional[CaseContext] = None
+    # None for sessions collected before the task layer existed, and until the expert answers
+    # the task-outline question at the end of the conversation.
+    task_workflow: Optional[TaskWorkflow] = None
     manufacturing_context: Optional[ManufacturingContext] = None
     created_at: str
     updated_at: str
