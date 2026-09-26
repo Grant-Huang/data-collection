@@ -110,6 +110,8 @@ export const api = {
   compareExperiments: (experimentIds: string[]) =>
     req<ComparisonResult>("POST", "/api/experiments/compare", { experiment_ids: experimentIds }),
 
+  polishSpeech: (text: string) => req<{ text: string; polished: boolean }>("POST", "/api/voice/polish", { text }),
+
   getSettings: () => req<Settings>("GET", "/api/settings"),
   updateSettings: (patch: Record<string, unknown>) => req<Settings>("PUT", "/api/settings", patch),
   testConnection: (level: string) =>

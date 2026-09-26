@@ -1,10 +1,12 @@
-// PRD 4.3.1 "语音口述转文字": tap mic -> record -> cancel(✕) / stop(■, fills the input,
-// editable) / send(↑, sends immediately). Recognition now goes through the shared
-// useVoiceDictation hook (IMPLEMENTATION_PLAN.md section 17.5): the backend relay to
-// Qwen3-ASR-Flash-Realtime when it's configured, the browser's own SpeechRecognition
-// otherwise. This component only owns the capsule UI.
-import { useEffect } from "react";
+// PRD 4.3.1 "语音口述转文字": tap mic -> record -> cancel(✕) / organize-and-fill(①, LLM-polished
+// via POST /api/voice/polish, fills the input, editable) / send(②, sends immediately, raw).
+// Recognition now goes through the shared useVoiceDictation hook (IMPLEMENTATION_PLAN.md
+// section 17.5): the backend relay to Qwen3-ASR-Flash-Realtime when it's configured, the
+// browser's own SpeechRecognition otherwise. This component only owns the capsule UI.
+import { useEffect, useState } from "react";
+import { api } from "../api/client";
 import { useVoiceDictation } from "../hooks/useVoiceDictation";
+import { OrganizeIntoInputIcon, RecognizeAndSendIcon } from "../voice/icons";
 
 interface Props {
   onTranscript: (text: string, mode: "fill" | "send") => void;
@@ -14,6 +16,7 @@ interface Props {
 
 export function VoiceCapsuleInput({ onTranscript, disabled, onRecordingChange }: Props) {
   const { state: dictState, liveText, error, start, stop } = useVoiceDictation();
+  const [polishing, setPolishing] = useState(false);
   const recordingLike = dictState === "connecting" || dictState === "recording" || dictState === "finishing";
   const state = recordingLike ? "recording" : dictState === "unsupported" ? "unsupported" : "idle";
   const interim = liveText;
@@ -34,7 +37,22 @@ export function VoiceCapsuleInput({ onTranscript, disabled, onRecordingChange }:
       return;
     }
     const text = await stop("keep");
-    if (text) onTranscript(text, mode);
+    if (!text) return;
+    if (mode === "send") {
+      onTranscript(text, "send");
+      return;
+    }
+    // mode === "fill" -- icon ①: let the LLM organize it first, falling back to the raw
+    // transcript on any failure so the expert never loses what they just said.
+    setPolishing(true);
+    try {
+      const result = await api.polishSpeech(text);
+      onTranscript(result.text, "fill");
+    } catch {
+      onTranscript(text, "fill");
+    } finally {
+      setPolishing(false);
+    }
   }
 
   if (state === "recording") {
@@ -48,18 +66,32 @@ export function VoiceCapsuleInput({ onTranscript, disabled, onRecordingChange }:
           ✕
         </button>
         <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {interim || (dictState === "connecting" ? "正在连接……" : dictState === "finishing" ? "正在整理……" : "正在听……")}
+          {polishing ? "AI 正在整理…" : interim || (dictState === "connecting" ? "正在连接……" : dictState === "finishing" ? "正在整理……" : "正在听……")}
         </div>
-        <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 18 }} aria-hidden>
-          {[6, 12, 18, 10, 14].map((h, i) => (
-            <span key={i} style={{ width: 3, height: h, background: "#2a78d6", borderRadius: 2, animation: "pulse 0.9s ease-in-out infinite", animationDelay: `${i * 0.1}s` }} />
-          ))}
-        </div>
-        <button aria-label="停止并回填" onClick={() => stopRecognition("fill")} style={circleBtn("#fff", "#2a78d6", "#2a78d6")}>
-          ■
+        {!polishing && (
+          <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 18 }} aria-hidden>
+            {[6, 12, 18, 10, 14].map((h, i) => (
+              <span key={i} style={{ width: 3, height: h, background: "#2a78d6", borderRadius: 2, animation: "pulse 0.9s ease-in-out infinite", animationDelay: `${i * 0.1}s` }} />
+            ))}
+          </div>
+        )}
+        <button
+          aria-label="整理后填入输入框"
+          title="整理后填入输入框"
+          disabled={polishing}
+          onClick={() => stopRecognition("fill")}
+          style={circleBtn("#fff", "#2a78d6", "#2a78d6")}
+        >
+          <OrganizeIntoInputIcon size={17} />
         </button>
-        <button aria-label="直接发送" onClick={() => stopRecognition("send")} style={circleBtn("#2a78d6", "#2a78d6", "#fff")}>
-          ↑
+        <button
+          aria-label="识别后直接发送"
+          title="识别后直接发送"
+          disabled={polishing}
+          onClick={() => stopRecognition("send")}
+          style={circleBtn("#2a78d6", "#2a78d6", "#fff")}
+        >
+          <RecognizeAndSendIcon size={17} />
         </button>
         <style>{`@keyframes pulse{0%,100%{transform:scaleY(0.4)}50%{transform:scaleY(1)}}`}</style>
       </div>
@@ -100,5 +132,8 @@ function circleBtn(bg: string, border: string, color: string): React.CSSProperti
     fontSize: 14,
     flexShrink: 0,
     cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   };
 }

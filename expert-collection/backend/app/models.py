@@ -252,6 +252,19 @@ class TurnRequest(BaseModel):
     raw_transcript: Optional[str] = None
 
 
+class SpeechPolishRequest(BaseModel):
+    text: str
+
+
+class SpeechPolishResponse(BaseModel):
+    text: str
+    # False whenever the LLM step was skipped or failed (slot disabled/not configured, or any
+    # llm_client.LLMError) -- `text` is then the untouched raw transcript, not a fabricated
+    # "polished" result. Lets the frontend show a subtle "AI 未整理，原始识别结果" hint instead
+    # of silently claiming a cleanup that didn't happen.
+    polished: bool
+
+
 class TurnResponse(BaseModel):
     assistant_reply: str
     graph_ops_applied: int
