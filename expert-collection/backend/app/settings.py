@@ -49,7 +49,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "C_flagship": {"endpoint": "", "model_name": "", "api_key": ""},
     },
     "llm_slots": {
-        "guide_service": {"level": "L", "enabled": True, "temperature": 0.1},
+        # Section 17: the review loop reasons over the whole graph + transcript every turn
+        # (corrections -> graph edits, gap questions), which needs more than the 7B "L"
+        # model. Default only -- deployments that already saved settings keep whatever level
+        # they stored and must switch it in 系统管理 (get_effective_settings prefers stored).
+        "guide_service": {"level": "C_standard", "enabled": True, "temperature": 0.1},
         "mobile_speech_polish": {"level": "L", "enabled": False, "temperature": 0.2},
         "experiment_explain": {"level": "C_flagship", "enabled": True, "temperature": 0.3},
         "experiment_compare_explain": {"level": "C_flagship", "enabled": True, "temperature": 0.3},
@@ -62,6 +66,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "graph_regenerate": {"level": "C_standard", "enabled": True, "temperature": 0.1},
     },
     "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime", "api_key": ""},
+    # Section 17 review loop: how many clarification questions the agent may raise on its
+    # own before moving to the read-back. Deliberately high (the expert/annotator can always
+    # keep correcting past it; this only stops the agent from asking forever).
+    "review": {"max_clarify_questions": 20},
     "quality_params": {
         "min_sample_size": 20,
         "near_dup_text_threshold": 0.85,

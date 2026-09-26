@@ -10,7 +10,7 @@
 // Chips sit directly under the question they belong to: interactive for the current one,
 // frozen (with the pick highlighted) for answered ones. Older records without the layered
 // fields fall back to the plain `text`.
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { isFallbackChip, pickedChips } from "../utils/chips";
 import { QuickReplies } from "./QuickReplies";
@@ -43,7 +43,8 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
   function nodesFromTurn(turnId: string | undefined): string[] {
     if (!graph || !turnId) return [];
     return graph.nodes
-      .filter((n) => n.source_turn_ids.includes(turnId) && CONTENT_NODE_TYPES.has(n.node_type))
+      // Imported records have no source_turn_ids at all -- treat as "not from this turn".
+      .filter((n) => (n.source_turn_ids ?? []).includes(turnId) && CONTENT_NODE_TYPES.has(n.node_type))
       .map((n) => n.node_id);
   }
 
@@ -52,18 +53,15 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
       {turns.length === 0 && emptyState}
       {turns.map((t, i) => {
         if (t.role === "expert") {
-          return (
-            <div key={t.turn_id} className="chat-row expert">
-              <div className="chat-bubble">{t.text}</div>
-            </div>
-          );
+          return <ExpertBubble key={t.turn_id} turn={t} />;
         }
 
         const isLast = i === turns.length - 1;
         const prev = turns[i - 1];
         const next = turns[i + 1];
         const deltaIds = prev?.role === "expert" ? nodesFromTurn(prev.turn_id) : [];
-        const layered = !!t.question;
+        const review = !!(t.body || t.changes?.length || t.sample);
+        const layered = !!t.question || review;
         const chips = t.chips ?? [];
         const interactive = isLast && !sending && !!activeQuestion?.chips?.length && !!onChipPick;
         const picked = pickedChips(chips, next?.role === "expert" ? next.text : undefined);
@@ -90,7 +88,19 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
                         )}
                       </div>
                     )}
-                    <div className="chat-question">{t.question}</div>
+                    {t.changes && t.changes.length > 0 && (
+                      <ul className="chat-changes" aria-label="这一轮对流程图的改动">
+                        {t.changes.map((c, k) => <li key={k}>{c}</li>)}
+                      </ul>
+                    )}
+                    {t.body && <div className="chat-body">{t.body}</div>}
+                    {t.sample && (
+                      <details className="chat-sample">
+                        <summary>看一个讲述示范</summary>
+                        <div>{t.sample}</div>
+                      </details>
+                    )}
+                    {t.question && <div className="chat-question">{t.question}</div>}
                   </>
                 ) : (
                   t.text
@@ -127,6 +137,32 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Expert message: the text they actually sent. Long narrations collapse to a few lines; when
+// the message was dictated and then edited, the raw recognizer output is one click away
+// (section 17.5: one recognized text, shown as-is -- the agent's interpretation lives in its
+// own reply, never in place of what the expert said).
+function ExpertBubble({ turn }: { turn: ConversationTurn }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const long = turn.text.length > 180;
+  const edited = !!turn.raw_transcript && turn.raw_transcript.trim() !== turn.text.trim();
+  return (
+    <div className="chat-row expert">
+      <div className="chat-bubble">
+        <div className={long && !expanded ? "chat-clamp" : undefined}>{turn.text}</div>
+        {(long || turn.raw_transcript) && (
+          <div className="chat-expert-meta">
+            {turn.raw_transcript && <span>🎤 语音输入{edited ? "（已修改）" : ""}</span>}
+            {long && <button onClick={() => setExpanded((v) => !v)}>{expanded ? "收起" : "展开全文"}</button>}
+            {edited && <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "隐藏识别原文" : "看识别原文"}</button>}
+          </div>
+        )}
+        {showRaw && <div className="chat-raw">{turn.raw_transcript}</div>}
+      </div>
     </div>
   );
 }

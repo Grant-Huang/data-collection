@@ -13,7 +13,7 @@ import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types"
 export function SessionPage() {
   const {
     workflows, active, sending, creating, error, showArchived, regenerating,
-    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext,
+    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
     toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
   } = useWorkflowSession();
 
@@ -114,9 +114,22 @@ export function SessionPage() {
                 onSend={sendTurn}
                 sending={sending}
                 confirmed={active.status === "expert_confirmed"}
+                stage={active.stage}
               />
             </div>
-            {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && (
+            {/* Review-mode sessions confirm by replying「确认」in the conversation (section 17:
+                text only); the button stays for the step-by-step fallback. */}
+            {active.status === "expert_confirmed" && !active.in_dataset && active.stage.startsWith("review_") && (
+              <div style={{ padding: 16, borderTop: "1px solid #e5e7eb" }}>
+                <button
+                  onClick={reopenWorkflow}
+                  style={{ width: "100%", border: "1px solid #2a78d6", borderRadius: 8, padding: "10px 0", background: "#fff", color: "#2a78d6", fontWeight: 600, cursor: "pointer" }}
+                >
+                  继续修改
+                </button>
+              </div>
+            )}
+            {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && !active.stage.startsWith("review_") && (
               <div style={{ padding: 16, borderTop: "1px solid #e5e7eb" }}>
                 <button
                   onClick={confirmWorkflow}
@@ -162,7 +175,7 @@ export function SessionPage() {
               // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come
               // before any graph node exists -- show that this is expected, not a stuck app.
               <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12.5, textAlign: "center", padding: 24 }}>
-                背景信息收集中，还没开始画图……
+                {active.stage === "review_narrative" ? "您讲完之后，这里会生成流程图" : "背景信息收集中，还没开始画图……"}
               </div>
             ) : (
               active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />

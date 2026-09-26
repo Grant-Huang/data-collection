@@ -64,18 +64,18 @@ export function useWorkflowSession() {
   }, [refreshList]);
 
   const sendTurn = useCallback(
-    async (text: string) => {
+    async (text: string, rawTranscript?: string) => {
       if (!active) return;
       setSending(true);
       setError(null);
       // Optimistic local append so the expert's own message shows immediately.
       setActive((prev) =>
         prev
-          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text }] }
+          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
           : prev,
       );
       try {
-        await api.postTurn(active.id, text);
+        await api.postTurn(active.id, text, rawTranscript);
         const refreshed = await api.getWorkflow(active.id);
         setActive(refreshed);
         await refreshList();
@@ -93,6 +93,20 @@ export function useWorkflowSession() {
     setError(null);
     try {
       const record = await api.confirmWorkflow(active.id);
+      setActive(record);
+      await refreshList();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [active, refreshList]);
+
+  // 「继续修改」(section 17): a confirmed workflow that isn't in a dataset goes back into the
+  // review conversation.
+  const reopenWorkflow = useCallback(async () => {
+    if (!active) return;
+    setError(null);
+    try {
+      const record = await api.reopenWorkflow(active.id);
       setActive(record);
       await refreshList();
     } catch (e) {
@@ -173,6 +187,7 @@ export function useWorkflowSession() {
     createWorkflow,
     sendTurn,
     confirmWorkflow,
+    reopenWorkflow,
     updateManufacturingContext,
     updateWorkflowMeta,
     checkRegenerateGraph,

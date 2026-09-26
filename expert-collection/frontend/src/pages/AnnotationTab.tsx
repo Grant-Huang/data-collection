@@ -60,7 +60,7 @@ export function AnnotationTab({ role }: { role: Role }) {
           <DatasetRecordList
             versionId={latestVersionId}
             role={role}
-            title={sourceType === "public_extracted" ? "Prior / Gold 标注（双人独立盲标 → 分歧仲裁 → 需要修改则返工）" : "专家复核（双人独立盲标 → 分歧仲裁 → 需要修改则返工 → Gold）"}
+            title={sourceType === "public_extracted" ? "Prior / Gold 标注（双人独立盲标 → 对话中直接修改 → 分歧仲裁）" : "专家复核（双人独立盲标 → 对话中直接修改 → 分歧仲裁 → Gold）"}
             emptyMessage="当前最新版本没有可标注的记录。"
           />
         )}

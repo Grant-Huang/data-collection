@@ -148,6 +148,21 @@ export function DataExperimentManagementPage() {
                     onSave={(v) => saveQualityParams({ near_dup_text_threshold: v })}
                   />
                   <NumberField
+                    label="Agent 主动澄清问题上限（个）"
+                    value={settings.review?.max_clarify_questions ?? 20}
+                    tip="专家讲述之后（或标注时），Agent 最多主动追问多少个问题，问完就复述整个流程请对方确认。对方随时可以继续提修改，不受这个数字限制。"
+                    onSave={async (v) => {
+                      setSaving(true);
+                      try {
+                        setSettings(await api.updateSettings({ review: { max_clarify_questions: v } }));
+                      } catch (e) {
+                        setError(String(e));
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                  />
+                  <NumberField
                     label="Completion Score 完成门槛"
                     value={settings.quality_params.completion_threshold}
                     tip="预留参数：按命名意图，本应是专家采集会话完成度分数（0~100）的达标门槛。当前会话能否确认实际由采集流程的 review 阶段和 Graph 结构校验决定，不读这个数字——改这里暂时不会影响任何行为。"

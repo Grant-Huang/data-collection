@@ -19,12 +19,11 @@ import { PriorAnnotationPanel } from "./PriorAnnotationPanel";
 type Filter = "mine" | "all" | AnnotationStage;
 type Sort = "default" | "signals";
 
-const STAGE_ORDER: AnnotationStage[] = ["first_review", "second_review", "arbitration", "rework", "done"];
+const STAGE_ORDER: AnnotationStage[] = ["first_review", "second_review", "arbitration", "done"];
 const STAGE_COLOR: Record<AnnotationStage, { bg: string; fg: string }> = {
   first_review: { bg: "#f1f5f9", fg: "#667085" },
   second_review: { bg: "#eef4fc", fg: "#2a78d6" },
   arbitration: { bg: "#fff7ed", fg: "#c2410c" },
-  rework: { bg: "#f5f3ff", fg: "#7c3aed" },
   done: { bg: "#eafaea", fg: "#0ca30c" },
 };
 
@@ -76,7 +75,7 @@ export function AnnotationQueue({
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 20, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>
-          {title ?? "标注（双人独立盲标 → 分歧仲裁 → 需要修改则返工 → Gold）"}
+          {title ?? "标注（双人独立盲标 → 对话中直接修改 → 分歧仲裁 → Gold）"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12, color: "#667085" }}>我是</span>
@@ -108,7 +107,7 @@ export function AnnotationQueue({
                     .join("，")}
                 </>
               )}
-              {summary.rework_count > 0 && ` ・ 返工 ${summary.rework_count} 次`}
+              {summary.corrected_count > 0 && ` ・ 采用修正图 ${summary.corrected_count} 条`}
               {summary.agreement_kappa !== null && ` ・ 一致性 κ=${summary.agreement_kappa}`}
               {topReasons.length > 0 && ` ・ 主要问题：${topReasons.map(([t, n]) => `${REASON_TAG_LABELS[t]} ${n}`).join("，")}`}
             </>

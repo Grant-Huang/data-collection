@@ -1,44 +1,47 @@
 """Prior + Gold annotation endpoints -- design/case_context_and_prior_annotation_draft.md
-section 2, IMPLEMENTATION_PLAN.md section 9.2 (Prior, Phase 7), section 9 §9 Phase C-2 (Gold)
-and section 16 (blind review, structured reasons, Rework loop). Layers on the same data:
+section 2, IMPLEMENTATION_PLAN.md section 9.2 (Prior), section 9 §9 Phase C-2 (Gold), section
+16 (blind review, structured reasons) and section 17 (annotation on the review loop):
 
 - **Prior** (`prior_status`): "Public/LLM-derived Prior" becomes "Expert-annotated Prior" the
   moment ANY annotation exists.
-- **Gold** (`gold_status`/`stage`, computed in gold_annotation.py): every record gets two
-  *independent* annotations per round (decision 8: full double annotation, not sampled), a
-  third person's arbitration when they disagree, and -- when a round settles on
-  "needs_revision" -- a Rework step that produces a corrected graph and opens the next round
-  (decision 9).
+- **Gold** (`gold_status`/`stage`, computed in gold_annotation.py): two *independent*
+  annotations per record (full double annotation), a third person's arbitration when they
+  disagree. Section 17: each annotator reviews the record in a conversation
+  (review_agent, mode "annotate"/"arbitrate") and corrects the graph there; confirming at the
+  end writes one annotation carrying the verdict, reason tags, the list of changes and -- for
+  needs_revision -- the corrected graph. There is no separate rework step any more.
 
-Blind review: while a record is in independent review, the detail/list endpoints don't
-return anyone's verdict, notes or node verdicts (the first annotator's conclusion anchoring
-the second was the flaw this fixes). Names of who already annotated this round ARE returned
--- the UI needs them to stop the same person annotating twice before they do the work.
+Blind review: while a record is in independent review, the detail/list endpoints don't return
+anyone's verdict, notes or corrections, and each review session only contains its own
+annotator's messages and working graph. Names of who already annotated this round ARE
+returned -- the UI needs them to stop the same person annotating twice before they do the
+work.
 
 Without a real account system, "independent" is enforced by the free-text `annotator_name`
-(an honest, lightweight identity proxy, same as before -- see IMPLEMENTATION_PLAN.md section 9).
+(an honest, lightweight identity proxy -- see IMPLEMENTATION_PLAN.md section 9).
 
-dataset_versions rows are never mutated: annotations and rework revisions live in their own
-tables keyed by (version_id, record_id), and the current graph is derived at read time.
+dataset_versions rows are never mutated: annotations, sessions and legacy rework revisions
+live in their own tables keyed by (version_id, record_id); state is derived at read time.
 """
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import annotation_signals, audit, dataset_records, db, gold_annotation, graph_validator, rework
+from .. import annotation_signals, dataset_records, db, gold_annotation, review_agent
 from ..models import (
     AnnotationSummary,
     CreateAnnotationRequest,
-    CreateReworkRequest,
     PriorAnnotation,
     PriorRecordDetail,
     PriorRecordSummary,
     RecordRevision,
-    ReworkEdits,
-    ReworkPreviewResponse,
+    ReviewSession,
+    ReviewSessionTurnRequest,
+    StartReviewSessionRequest,
 )
 from .datasets import _thresholds
 
@@ -106,6 +109,7 @@ def _detail(version: dict, record: dict, history: list[dict], revisions: list[di
         name=_record_name(record),
         graph=graph,
         original_graph=record["graph"],
+        final_graph=state["final_graph"],
         prior_status="expert_annotated" if history else "raw",
         gold_status=state["gold_status"],
         stage=state["stage"],
@@ -121,9 +125,50 @@ def _detail(version: dict, record: dict, history: list[dict], revisions: list[di
     )
 
 
-def _check_round(requested: int | None, state: dict) -> None:
-    if requested is not None and requested != state["round"]:
-        raise HTTPException(status_code=409, detail="这条记录已进入新的一轮（有人提交了返工），请刷新后重新查看")
+def _role_for(state: dict, reworker: str | None, name: str) -> str:
+    """Who may annotate now, as whom. Raises 400 with a message the UI shows as-is."""
+    stage = state["stage"]
+    if stage == "done":
+        raise HTTPException(status_code=400, detail="这条记录已经有结论，标注流程已结束")
+    if reworker and _norm(reworker) == _norm(name):
+        raise HTTPException(status_code=400, detail=f"「{reworker}」是本轮修正图的返工人，不能复核自己的返工")
+    independents = [a for a in state["round_annotations"] if a.get("role_in_process", "independent") == "independent"]
+    if stage == "arbitration":
+        if _norm(name) in {_norm(a["annotator_name"]) for a in independents[:2]}:
+            raise HTTPException(status_code=400, detail="仲裁人不能是本轮两次独立标注中的任何一位")
+        return "arbitration"
+    if stage == "second_review" and _norm(independents[0]["annotator_name"]) == _norm(name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"第二次独立标注需要换一个人，不能跟本轮第一位标注人「{independents[0]['annotator_name']}」相同",
+        )
+    return "independent"
+
+
+def _save_annotation(version_id: str, record_id: str, history: list[dict], *, verdict: str, reason_tags: list[str],
+                     note: str | None, name: str, role: str, round_: int, actor_role: str | None,
+                     revised_graph: dict | None = None, changes: list[str] | None = None,
+                     session_id: str | None = None) -> dict:
+    entry = {
+        "annotation_id": uuid.uuid4().hex[:10],
+        "version_id": version_id,
+        "record_id": record_id,
+        "based_on_annotation_id": history[-1]["annotation_id"] if history else None,
+        "verdict": verdict,
+        "node_verdicts": {},
+        "reason_tags": reason_tags,
+        "note": note,
+        "actor_role": actor_role,
+        "annotator_name": name,
+        "role_in_process": role,
+        "round": round_,
+        "annotated_at": _now(),
+        "revised_graph": revised_graph,
+        "changes": changes or [],
+        "session_id": session_id,
+    }
+    db.save_annotation(entry)
+    return entry
 
 
 @router.get("/records", response_model=list[PriorRecordSummary])
@@ -169,9 +214,12 @@ def get_record(version_id: str, record_id: str) -> PriorRecordDetail:
 
 @router.post("/records/{record_id}/annotations", response_model=PriorRecordDetail)
 def create_annotation(version_id: str, record_id: str, req: CreateAnnotationRequest) -> PriorRecordDetail:
+    """Direct verdict without a conversation (kept for API clients / scripts). The UI uses the
+    review session below. A needs_revision submitted here has no corrected graph, so on its
+    own it can't settle a record -- the round goes to arbitration, where the arbitrator makes
+    the correction in conversation."""
     version = _get_annotatable_version(version_id)
     record = _find_record(version, record_id)
-
     name = req.annotator_name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="标注人姓名不能为空")
@@ -179,32 +227,12 @@ def create_annotation(version_id: str, record_id: str, req: CreateAnnotationRequ
     history = db.list_annotations(version_id, record_id)
     revisions = db.list_revisions(version_id, record_id)
     state = gold_annotation.compute_state(history, revisions)
-    _check_round(req.round, state)
-    stage = state["stage"]
+    if req.round is not None and req.round != state["round"]:
+        raise HTTPException(status_code=409, detail="这条记录的状态已经变化，请刷新后重新查看")
+    _, reworker = _round_people(state, revisions)
+    role = _role_for(state, reworker, name)
 
-    if stage == "done":
-        raise HTTPException(status_code=400, detail="这条记录本轮已有结论，标注流程已结束")
-    if stage == "rework":
-        raise HTTPException(status_code=400, detail="这条记录本轮结论是「需要修改」，正在等待返工，返工提交后才能开始下一轮标注")
-
-    names, reworker = _round_people(state, revisions)
-    if reworker and _norm(reworker) == _norm(name):
-        raise HTTPException(status_code=400, detail=f"「{reworker}」是本轮修正图的返工人，不能复核自己的返工")
-    independents = [a for a in state["round_annotations"] if a.get("role_in_process", "independent") == "independent"]
-    if stage == "arbitration":
-        if _norm(name) in {_norm(a["annotator_name"]) for a in independents[:2]}:
-            raise HTTPException(status_code=400, detail="仲裁人不能是本轮两次独立标注中的任何一位")
-        role_in_process = "arbitration"
-    else:
-        if stage == "second_review" and _norm(independents[0]["annotator_name"]) == _norm(name):
-            raise HTTPException(
-                status_code=400,
-                detail=f"第二次独立标注需要换一个人，不能跟本轮第一位标注人「{independents[0]['annotator_name']}」相同",
-            )
-        role_in_process = "independent"
-
-    # Structured reasons (decision 10): required for anything other than "accepted".
-    tags = list(dict.fromkeys(req.reason_tags))  # dedupe, keep order
+    tags = list(dict.fromkeys(req.reason_tags))
     note = (req.note or "").strip() or None
     if req.verdict == "accepted":
         tags = []
@@ -214,98 +242,138 @@ def create_annotation(version_id: str, record_id: str, req: CreateAnnotationRequ
         if "other" in tags and not note:
             raise HTTPException(status_code=400, detail="勾选了「其他」原因时，请在备注里写明具体原因")
 
-    # Node verdicts only mean something for "needs_revision"; they must be applicable to the
-    # current graph so the reworker can start from them as-is.
-    node_verdicts = {k: v for k, v in req.node_verdicts.items() if v != "keep"} if req.verdict == "needs_revision" else {}
-    graph = _current_graph(record, revisions)
-    try:
-        rework.validate_edits(graph, {"node_verdicts": node_verdicts})
-    except rework.EditError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    previous = history[-1] if history else None
-    entry = {
-        "annotation_id": uuid.uuid4().hex[:10],
-        "version_id": version_id,
-        "record_id": record_id,
-        "based_on_annotation_id": previous["annotation_id"] if previous else None,
-        "verdict": req.verdict,
-        "node_verdicts": node_verdicts,
-        "reason_tags": tags,
-        "note": note,
-        "actor_role": req.actor_role,
-        "annotator_name": name,
-        "role_in_process": role_in_process,
-        "round": state["round"],
-        "annotated_at": _now(),
-    }
-    db.save_annotation(entry)
+    _save_annotation(version_id, record_id, history, verdict=req.verdict, reason_tags=tags, note=note, name=name,
+                     role=role, round_=state["round"], actor_role=req.actor_role)
     return _detail(version, record, db.list_annotations(version_id, record_id), revisions)
 
 
-def _apply_or_400(graph: dict, edits: ReworkEdits, new_node_prefix: str) -> dict:
-    try:
-        return rework.apply_edits(graph, edits.model_dump(), new_node_prefix=new_node_prefix)
-    except rework.EditError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# --- review sessions (section 17.4) --------------------------------------------------------
+
+def _session_model(s: dict) -> ReviewSession:
+    return ReviewSession(
+        session_id=s["session_id"], version_id=s["version_id"], record_id=s["record_id"],
+        annotator_name=s["annotator_name"], role_in_process=s["role_in_process"], round=s["round"],
+        phase=s["review"]["phase"], status=s["status"], graph=s["graph"], base_graph=s["base_graph"],
+        turns=s["turns"], proposal=s["review"].get("proposal"), annotation_id=s.get("annotation_id"),
+    )
 
 
-@router.post("/records/{record_id}/rework/preview", response_model=ReworkPreviewResponse)
-def preview_rework(version_id: str, record_id: str, edits: ReworkEdits) -> ReworkPreviewResponse:
-    """Applies edits to the current graph without saving -- the Rework editor's live preview.
-    Same code path as the real submission, so what's previewed is exactly what gets saved.
-    """
+def _assistant_turn(result: review_agent.TurnResult) -> dict:
+    return {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": result.text, "ack": result.ack,
+            "question": result.question, "changes": result.changes or None, "body": result.body}
+
+
+def _candidates(state: dict) -> list[dict]:
+    """What the arbitrator gets to see: each independent annotator's verdict, reasons, change
+    list and corrected graph (arbitration isn't blind)."""
+    out = []
+    for a in [x for x in state["round_annotations"] if x.get("role_in_process", "independent") == "independent"][:2]:
+        out.append({"annotation_id": a["annotation_id"], "annotator_name": a["annotator_name"], "verdict": a["verdict"],
+                    "reason_tags": a.get("reason_tags", []), "changes": a.get("changes", []),
+                    "revised_graph": a.get("revised_graph")})
+    return out
+
+
+@router.post("/records/{record_id}/review-session", response_model=ReviewSession)
+def start_review_session(version_id: str, record_id: str, req: StartReviewSessionRequest) -> ReviewSession:
+    """Start -- or resume, if this annotator already has an unfinished one for this round --
+    a review conversation on the record."""
     version = _get_annotatable_version(version_id)
     record = _find_record(version, record_id)
-    revisions = db.list_revisions(version_id, record_id)
-    state = gold_annotation.compute_state(db.list_annotations(version_id, record_id), revisions)
-    graph = _apply_or_400(_current_graph(record, revisions), edits, f"r{state['round'] + 1}_n")
-    return ReworkPreviewResponse(graph=graph, issues=graph_validator.validate(graph))
-
-
-@router.post("/records/{record_id}/rework", response_model=PriorRecordDetail)
-def create_rework(version_id: str, record_id: str, req: CreateReworkRequest) -> PriorRecordDetail:
-    version = _get_annotatable_version(version_id)
-    record = _find_record(version, record_id)
-    name = req.reworker_name.strip()
+    name = req.annotator_name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="返工人姓名不能为空")
-
+        raise HTTPException(status_code=400, detail="标注人姓名不能为空")
     history = db.list_annotations(version_id, record_id)
     revisions = db.list_revisions(version_id, record_id)
     state = gold_annotation.compute_state(history, revisions)
-    _check_round(req.round, state)
-    if state["stage"] != "rework":
-        raise HTTPException(status_code=400, detail="只有本轮结论为「需要修改」的记录才能提交返工")
+    _, reworker = _round_people(state, revisions)
+    role = _role_for(state, reworker, name)
 
-    edits = req.edits
-    has_change = any(v != "keep" for v in edits.node_verdicts.values()) or edits.renames or edits.inserts
-    if not has_change:
-        raise HTTPException(status_code=400, detail="返工没有做任何修改")
+    for s in db.list_review_sessions(version_id, record_id):
+        if (s["status"] == "active" and _norm(s["annotator_name"]) == _norm(name)
+                and s["round"] == state["round"] and s["role_in_process"] == role):
+            return _session_model(s)
 
-    graph = _apply_or_400(_current_graph(record, revisions), edits, f"r{state['round'] + 1}_n")
-    errors = [i for i in graph_validator.validate(graph) if i["level"] == "error"]
-    if errors:
-        raise HTTPException(status_code=400, detail="修正后的图结构不合法：" + "；".join(i["message"] for i in errors))
-
-    entry = {
-        "revision_id": uuid.uuid4().hex[:10],
-        "version_id": version_id,
-        "record_id": record_id,
-        "from_round": state["round"],
-        "edits": edits.model_dump(),
-        "graph": graph,
-        "reworker_name": name,
-        "note": (req.note or "").strip() or None,
-        "actor_role": req.actor_role,
-        "created_at": _now(),
+    graph = copy.deepcopy(_current_graph(record, revisions))
+    mode = "arbitrate" if role == "arbitration" else "annotate"
+    review = review_agent.new_state(mode, base_graph=copy.deepcopy(graph),
+                                    candidates=_candidates(state) if mode == "arbitrate" else None)
+    opening = review_agent.opening(review, graph)
+    now = _now()
+    session = {
+        "session_id": uuid.uuid4().hex[:12], "version_id": version_id, "record_id": record_id,
+        "annotator_name": name, "role_in_process": role, "round": state["round"], "status": "active",
+        "graph": graph, "base_graph": copy.deepcopy(graph), "turns": [_assistant_turn(opening)],
+        "review": opening.state, "annotation_id": None, "actor_role": req.actor_role,
+        "created_at": now, "updated_at": now,
     }
-    db.save_revision(entry)
-    audit.log(req.actor_role or "unknown", "record_rework", {
-        "dataset_version_id": version_id, "record_id": record_id,
-        "revision_id": entry["revision_id"], "from_round": state["round"], "reworker_name": name,
-    })
-    return _detail(version, record, history, db.list_revisions(version_id, record_id))
+    db.save_review_session(session)
+    return _session_model(session)
+
+
+def _load_session(version_id: str, session_id: str) -> dict:
+    s = db.get_review_session(session_id)
+    if not s or s["version_id"] != version_id:
+        raise HTTPException(status_code=404, detail="review session not found")
+    return s
+
+
+@router.get("/review-sessions/{session_id}", response_model=ReviewSession)
+def get_review_session(version_id: str, session_id: str) -> ReviewSession:
+    return _session_model(_load_session(version_id, session_id))
+
+
+@router.post("/review-sessions/{session_id}/turns", response_model=ReviewSession)
+def review_session_turn(version_id: str, session_id: str, req: ReviewSessionTurnRequest) -> ReviewSession:
+    session = _load_session(version_id, session_id)
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="这次标注已经提交或已失效")
+    version = _get_annotatable_version(version_id)
+    record = _find_record(version, session["record_id"])
+    history = db.list_annotations(version_id, session["record_id"])
+    revisions = db.list_revisions(version_id, session["record_id"])
+    state = gold_annotation.compute_state(history, revisions)
+    _, reworker = _round_people(state, revisions)
+    # The record may have moved on while this conversation was open (e.g. someone else
+    # finished the arbitration) -- then this session can't be submitted any more.
+    try:
+        role = _role_for(state, reworker, session["annotator_name"])
+    except HTTPException as e:
+        session["status"] = "stale"
+        db.save_review_session(session)
+        raise HTTPException(status_code=409, detail=f"这条记录的状态已经变化：{e.detail}") from e
+    if state["round"] != session["round"] or role != session["role_in_process"]:
+        session["status"] = "stale"
+        db.save_review_session(session)
+        raise HTTPException(status_code=409, detail="这条记录的状态已经变化，这次标注已失效，请重新打开")
+
+    turn_id = uuid.uuid4().hex[:8]
+    person_turn = {"turn_id": turn_id, "role": "expert", "text": req.text}
+    if req.raw_transcript:
+        person_turn["raw_transcript"] = req.raw_transcript
+    session["turns"].append(person_turn)
+
+    result = review_agent.handle_turn(session["review"], session["graph"], session["turns"], req.text, turn_id)
+    if result.graph is not None:
+        session["graph"] = result.graph
+    session["review"] = result.state
+    session["turns"].append(_assistant_turn(result))
+
+    if result.finished:
+        proposal = result.state.get("proposal") or review_agent.propose_verdict(result.state, session["graph"], rejected=False)
+        changes, _ = review_agent.describe_changes(session["base_graph"], session["graph"])
+        entry = _save_annotation(
+            version_id, session["record_id"], history, verdict=proposal["verdict"], reason_tags=proposal["reason_tags"],
+            note="；".join(changes) or None, name=session["annotator_name"], role=role, round_=state["round"],
+            actor_role=session.get("actor_role"),
+            revised_graph=session["graph"] if proposal["verdict"] == "needs_revision" else None,
+            changes=changes, session_id=session_id,
+        )
+        session["status"] = "submitted"
+        session["annotation_id"] = entry["annotation_id"]
+    session["updated_at"] = _now()
+    db.save_review_session(session)
+    return _session_model(session)
 
 
 @router.get("/annotation-summary", response_model=AnnotationSummary)
@@ -320,25 +388,28 @@ def annotation_summary(version_id: str) -> AnnotationSummary:
     stage_counts: dict[str, int] = {}
     reason_tag_counts: dict[str, int] = {}
     pairs: list[tuple[str, str]] = []
-    rework_count = 0
+    corrected = 0
     for r in records:
         rid = r["record_id"]
         history = annotations.get(rid, [])
         revs = revisions.get(rid, [])
-        rework_count += len(revs)
         state = gold_annotation.compute_state(history, revs)
         gold_counts[state["gold_status"]] = gold_counts.get(state["gold_status"], 0) + 1
         stage_counts[state["stage"]] = stage_counts.get(state["stage"], 0) + 1
         pairs.extend(gold_annotation.kappa_pairs(history))
-        # Only settled rounds count toward verdict/reason distributions -- past rounds are
-        # settled by definition (a revision exists), plus the current round when it's done
-        # or waiting for rework. An open round's verdicts would leak through the aggregates.
-        current_open = state["stage"] not in ("done", "rework")
+        if state["final_graph"]:
+            corrected += 1
+        # Only settled rounds count toward verdict/reason distributions (an open round's
+        # verdicts would leak through the aggregates): legacy past rounds, plus the current
+        # round once it's done.
         for rnd in range(1, state["round"] + 1):
-            if rnd == state["round"] and current_open:
-                continue
             in_round = [a for a in history if int(a.get("round") or 1) == rnd]
-            outcome = gold_annotation.round_outcome(in_round)
+            if rnd == state["round"]:
+                if state["stage"] != "done":
+                    continue
+                outcome = state["outcome"]
+            else:
+                outcome = gold_annotation.round_outcome(in_round)
             if outcome:
                 verdict_counts[outcome] = verdict_counts.get(outcome, 0) + 1
             for a in in_round:
@@ -350,5 +421,5 @@ def annotation_summary(version_id: str) -> AnnotationSummary:
         annotated_records=sum(1 for r in records if annotations.get(r["record_id"])),
         verdict_counts=verdict_counts, gold_counts=gold_counts, stage_counts=stage_counts,
         reason_tag_counts=reason_tag_counts, agreement_kappa=gold_annotation.cohens_kappa(pairs),
-        rework_count=rework_count,
+        corrected_count=corrected,
     )
