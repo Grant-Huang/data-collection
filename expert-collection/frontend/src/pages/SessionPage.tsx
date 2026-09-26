@@ -1,6 +1,7 @@
 // Desktop three-column layout (PRD 4/5: session history | conversation | DAG) for the
 // expert conversational collection loop. The left (history) and right (DAG) panels are
 // resizable and collapsible; the middle conversation column always fills what's left.
+import { useState } from "react";
 import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
@@ -11,9 +12,32 @@ import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types"
 
 export function SessionPage() {
   const {
-    workflows, active, sending, creating, error,
-    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext,
+    workflows, active, sending, creating, error, showArchived, regenerating,
+    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
+    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
   } = useWorkflowSession();
+
+  // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
+  // 还没有专家发言），不允许就把原因原样弹给专家，不装作按钮不存在；允许的话，如果这个会话已经
+  // 确认过，额外提示一句「会变回待确认」，专家点确认后再真正调用。
+  const handleRegenerateGraph = async () => {
+    const check = await checkRegenerateGraph();
+    if (!check) return;
+    if (!check.allowed) {
+      window.alert(check.reason ?? "暂时无法重新生成流程图。");
+      return;
+    }
+    const warning = check.will_reset_confirmation
+      ? "\n\n注意：这个会话已经确认过，重新生成后会变回「待确认」，需要重新确认一遍。"
+      : "";
+    if (!window.confirm(`刷新工作流图会用大模型根据当前会话内容重新生成，重绘之前的工作流图。对话会在新图的基础上继续，之前未答完的问题会作废，也不能再回退到刷新之前。${warning}\n\n确定要继续吗？`)) {
+      return;
+    }
+    await regenerateGraph();
+  };
+
+  // Node ids to highlight on the DAG while the expert hovers a message's "图上 +N" tag.
+  const [highlightNodeIds, setHighlightNodeIds] = useState<string[] | null>(null);
 
   // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
   // only used the first time, before anything is stored -- after that the saved px width wins.
@@ -31,6 +55,9 @@ export function SessionPage() {
             onSelect={selectWorkflow}
             onCreate={createWorkflow}
             creating={creating}
+            showArchived={showArchived}
+            onToggleShowArchived={toggleShowArchived}
+            onUpdateMeta={updateWorkflowMeta}
           />
         </div>
       </div>
@@ -81,13 +108,28 @@ export function SessionPage() {
             <div style={{ flex: 1, minHeight: 0 }}>
               <ChatPanel
                 turns={active.turns}
+                graph={active.graph}
+                onHighlightNodes={setHighlightNodeIds}
                 nextQuestion={active.unresolved[0] ?? null}
                 onSend={sendTurn}
                 sending={sending}
                 confirmed={active.status === "expert_confirmed"}
+                stage={active.stage}
               />
             </div>
-            {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && (
+            {/* Review-mode sessions confirm by replying「确认」in the conversation (section 17:
+                text only); the button stays for the step-by-step fallback. */}
+            {active.status === "expert_confirmed" && !active.in_dataset && active.stage.startsWith("review_") && (
+              <div style={{ padding: 16, borderTop: "1px solid #e5e7eb" }}>
+                <button
+                  onClick={reopenWorkflow}
+                  style={{ width: "100%", border: "1px solid #2a78d6", borderRadius: 8, padding: "10px 0", background: "#fff", color: "#2a78d6", fontWeight: 600, cursor: "pointer" }}
+                >
+                  继续修改
+                </button>
+              </div>
+            )}
+            {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && !active.stage.startsWith("review_") && (
               <div style={{ padding: 16, borderTop: "1px solid #e5e7eb" }}>
                 <button
                   onClick={confirmWorkflow}
@@ -109,10 +151,29 @@ export function SessionPage() {
         onToggleCollapse={right.toggleCollapsed}
         onResize={(dx) => right.resizeBy(dx, -1)}
       />
-      <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined }}>
-        <div style={{ width: right.width, height: "100%" }}>
-          {/* Two tabs: 任务协作 (task layer) / SOP 步骤 (step layer) -- IMPLEMENTATION_PLAN.md section 15. */}
-          {active && <DualDagPanel active={active} />}
+      <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined, display: "flex", flexDirection: "column" }}>
+        <div style={{ width: right.width, height: "100%", display: "flex", flexDirection: "column" }}>
+          {active && (
+            <div style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={handleRegenerateGraph}
+                disabled={regenerating || active.in_dataset}
+                title={active.in_dataset ? "流程图已录入数据集，不能刷新" : undefined}
+                style={{
+                  border: "1px solid #d0d5dd", borderRadius: 6, padding: "4px 10px", fontSize: 11.5,
+                  background: active.in_dataset ? "#f2f4f7" : "#fff",
+                  color: active.in_dataset ? "#98a2b3" : "#344054",
+                  cursor: regenerating || active.in_dataset ? "default" : "pointer",
+                }}
+              >
+                {regenerating ? "刷新中…" : "🪄 刷新工作流图"}
+              </button>
+            </div>
+          )}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {/* Two tabs: 任务协作 (task layer) / SOP 步骤 (step layer) -- IMPLEMENTATION_PLAN.md section 18. */}
+            {active && <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} />}
+          </div>
         </div>
       </div>
 

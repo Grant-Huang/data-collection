@@ -1,4 +1,4 @@
-// Dual-DAG panel (IMPLEMENTATION_PLAN.md section 15): one expert conversation produces two
+// Dual-DAG panel (IMPLEMENTATION_PLAN.md section 18): one expert conversation produces two
 // graphs, shown as two independent tabs --
 //   「任务协作」 = task_workflow.graph, the upper layer ("谁负责哪一段、怎么交接")
 //   「SOP 步骤」 = graph, the step layer ("每一段具体怎么做"; this is the graph that existed before)
@@ -22,11 +22,13 @@ interface Props {
   scrollable?: boolean;
   onNodeTap?: (node: GraphNode, tab: DagTab) => void;
   sopEmptyLabel?: string;
+  // Nodes the latest conversation turn added (desktop chat hover) -- SOP tab only.
+  sopHighlightNodeIds?: string[] | null;
   // Rendered under the graph for the current tab (mobile puts its stats/rules sections here).
   footer?: (tab: DagTab) => ReactNode;
 }
 
-export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmptyLabel, footer }: Props) {
+export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmptyLabel, sopHighlightNodeIds, footer }: Props) {
   // Default to the SOP tab: it's the one that fills in live while the expert is talking; the
   // task layer only appears at the very end of the conversation.
   const [tab, setTab] = useState<DagTab>("sop");
@@ -49,7 +51,10 @@ export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmpty
 
   const taskEmptyLabel = TASK_STAGES.has(active.stage)
     ? "正在划分任务……回答完会话里的问题，这里就会出现任务协作图。"
-    : active.status === "expert_confirmed" || active.stage === "review"
+    : active.stage.startsWith("review_")
+      // Section 17 "先讲述、后评审" loop (review_agent) doesn't produce a task layer yet.
+      ? "这个会话用「先讲述、后评审」方式采集，暂不生成任务协作图。"
+      : active.status === "expert_confirmed" || active.stage === "review"
       ? "这个会话是在任务协作层上线之前采集的，没有任务协作图。"
       : "任务协作图会在对话最后生成：步骤讲完后，会请你按「谁负责哪一段」划分任务。";
 
@@ -93,7 +98,7 @@ export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmpty
     ) : active.graph.nodes.length === 0 && !scrollable ? (
       // Scenario/Case Context questions (IMPLEMENTATION_PLAN.md section 9.1) come before any
       // graph node exists -- show that this is expected, not a stuck app.
-      <EmptyHint text="背景信息收集中，还没开始画图……" />
+      <EmptyHint text={active.stage === "review_narrative" ? "您讲完之后，这里会生成流程图" : "背景信息收集中，还没开始画图……"} />
     ) : (
       <DagView
         key={`sop-${active.id}`}
@@ -101,6 +106,7 @@ export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmpty
         readOnly={readOnly}
         scrollable={scrollable}
         emptyLabel={sopEmptyLabel}
+        highlightNodeIds={sopHighlightNodeIds}
         onNodeTap={onNodeTap ? (n) => onNodeTap(n, "sop") : undefined}
       />
     );

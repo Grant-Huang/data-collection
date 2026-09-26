@@ -1,4 +1,4 @@
-"""Task Workflow DAG (the upper layer of the dual-DAG model -- IMPLEMENTATION_PLAN.md section 15):
+"""Task Workflow DAG (the upper layer of the dual-DAG model -- IMPLEMENTATION_PLAN.md section 18):
 "谁负责哪一段、任务之间怎么交接", built from the same single expert conversation that already
 produces the step-level graph (which is, in the dual-DAG model's terms, the SOP / Skill DAG:
 "每一段具体怎么做").
@@ -30,7 +30,7 @@ from . import llm_client
 from . import settings as app_settings
 
 TASK_OUTLINE_QUESTION = (
-    "步骤都记下来了。最后一个问题：如果把整件事按「谁负责哪一段」分成几个任务，你会怎么分？"
+    "最后一个问题：如果把整件事按「谁负责哪一段」分成几个任务，你会怎么分？"
     "按先后顺序说，每项最好写成「负责方：做什么」，比如：客服：确认问题 → 质量部：复检 → 生产部：处理。"
 )
 # Prefill chip (PRD 18: fills the draft box, never auto-sends).
@@ -139,39 +139,74 @@ def parse_outline(text: str) -> tuple[list[dict[str, Any]], str]:
 
 # --- Step -> task boundaries ---------------------------------------------------------------
 
-def step_candidates(graph: dict, after_index: int) -> dict[str, int]:
-    """Chip label -> node index (position in `graph["nodes"]`, i.e. narration order) for every
-    content step strictly after `after_index`. Node order is the order the steps were created
-    in, which is the order the expert narrated them -- the only ordering this layer relies on.
-    Duplicate labels get a "（第 n 步）" suffix so every chip maps back to exactly one node.
+def ordered_node_ids(graph: dict) -> list[str]:
+    """Topological order of the step graph, ties broken by creation order. Creation order alone
+    is not enough: the structural sweeps insert decision/approval nodes *after* an existing step
+    but append them to the end of `nodes`. Retry is recorded as `retry_semantics`, not a back
+    edge, so the graph is a DAG; any node left over by an unexpected cycle is appended in
+    creation order rather than dropped.
     """
-    options: dict[str, int] = {}
+    nodes = graph.get("nodes", [])
+    ids = [n["node_id"] for n in nodes]
+    rank = {nid: i for i, nid in enumerate(ids)}
+    indeg = {nid: 0 for nid in ids}
+    succ: dict[str, list[str]] = {nid: [] for nid in ids}
+    for e in graph.get("edges", []):
+        if e["from"] in indeg and e["to"] in indeg:
+            succ[e["from"]].append(e["to"])
+            indeg[e["to"]] += 1
+    ready = sorted((nid for nid in ids if indeg[nid] == 0), key=rank.get)
+    order: list[str] = []
+    while ready:
+        nid = ready.pop(0)
+        order.append(nid)
+        for nxt in succ[nid]:
+            indeg[nxt] -= 1
+            if indeg[nxt] == 0:
+                ready.append(nxt)
+        ready.sort(key=rank.get)
+    seen = set(order)
+    return order + [nid for nid in ids if nid not in seen]
+
+
+def step_candidates(graph: dict, prior_starts: list[str]) -> dict[str, str]:
+    """Chip label -> node_id for every content step strictly after the last of `prior_starts`
+    in graph order. Duplicate labels get a "（第 n 步）" suffix so every chip maps back to
+    exactly one node.
+    """
+    order = ordered_node_ids(graph)
+    pos = {nid: i for i, nid in enumerate(order)}
+    after = max((pos[s] for s in prior_starts if s in pos), default=-1)
+    by_id = {n["node_id"]: n for n in graph.get("nodes", [])}
+    options: dict[str, str] = {}
     seen: dict[str, int] = {}
     step_no = 0
-    for idx, node in enumerate(graph.get("nodes", [])):
+    for i, nid in enumerate(order):
+        node = by_id[nid]
         if node.get("node_type") not in _STEP_NODE_TYPES:
             continue
         step_no += 1
-        if idx <= after_index:
+        if i <= after:
             continue
         label = node.get("label") or "（未命名步骤）"
         seen[label] = seen.get(label, 0) + 1
         chip = label if seen[label] == 1 else f"{label}（第 {step_no} 步）"
-        options[chip] = idx
+        options[chip] = nid
     return options
 
 
 def boundary_question(items: list[dict[str, Any]], task_index: int) -> str:
     item = items[task_index]
     owner = f"（{item['owner']}）" if item.get("owner") else ""
-    return f"「{item['name']}」{owner}是从哪一步开始的？从下面选一个。"
+    return f"「{item['name']}」{owner}是从哪一步开始的？"
 
 
-def build_task_workflow(graph: dict, items: list[dict[str, Any]], boundaries: list[int | None],
+def build_task_workflow(graph: dict, items: list[dict[str, Any]], starts: list[str | None],
                          structured_by: str) -> dict[str, Any]:
-    """`boundaries[i]` is the node index task i starts at (task 0 is always 0), or None when the
-    expert said that task has no described steps. Every SOP node is assigned to the task with
-    the greatest start index <= its own index; a None task gets no nodes.
+    """`starts[i]` is the node_id task i starts at, or None when the expert said that task has
+    no described steps. Task 0 always starts at the beginning of the graph (starts[0] is
+    ignored). Every SOP node, in graph order, belongs to the task whose start comes last at or
+    before it; a task with no start gets no nodes.
 
     Returns {"graph": <a plain Graph dict>, "tasks": [...]}: the task layer is itself a normal
     Graph (start -> task nodes -> end) so the exact same DagView / validator / export paths
@@ -179,16 +214,14 @@ def build_task_workflow(graph: dict, items: list[dict[str, Any]], boundaries: li
     `label`, owner in its `actor_roles` -- not duplicated into `tasks`, so export anonymization
     (which already walks node labels/roles) covers the task layer with no extra rules.
     """
-    nodes = graph.get("nodes", [])
-    starts = sorted((b, i) for i, b in enumerate(boundaries) if b is not None)
+    order = ordered_node_ids(graph)
+    pos = {nid: i for i, nid in enumerate(order)}
+    begin = [(0, 0)] + [(pos[s], i) for i, s in enumerate(starts) if i > 0 and s in pos]
+    begin.sort()
     sop_ids: list[list[str]] = [[] for _ in items]
-    for idx, node in enumerate(nodes):
-        owner_task = None
-        for start, task_i in starts:
-            if start <= idx:
-                owner_task = task_i
-        if owner_task is not None:
-            sop_ids[owner_task].append(node["node_id"])
+    for i, nid in enumerate(order):
+        owner_task = max((b for b in begin if b[0] <= i), default=(0, 0))[1]
+        sop_ids[owner_task].append(nid)
 
     confidence = 0.8 if structured_by == "llm" else 0.9
     start_id, end_id = _nid(), _nid()

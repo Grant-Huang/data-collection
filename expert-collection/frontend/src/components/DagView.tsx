@@ -31,14 +31,45 @@ const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill"
   handoff: { fill: "#fff7ed", stroke: "#f97316", shape: "rect" },
 };
 
-function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean; subtitle?: string } }) {
-  const style = NODE_STYLE[data.nodeType];
+// Optional per-node overlay (annotation panel: node verdict colors, arbitration diff
+// highlight, selected node). Purely visual -- doesn't affect layout.
+export interface NodeDecoration {
+  border?: string; // replaces the node-type stroke color
+  badge?: string; // small tag rendered above the node, e.g. "删除"
+  badgeColor?: string;
+  faded?: boolean; // e.g. a node marked for deletion
+  selected?: boolean;
+}
+
+interface WorkflowNodeData {
+  label: string;
+  nodeType: NodeType;
+  confirmed: boolean;
+  hasRetry: boolean;
+  highlighted?: boolean; // hovering a chat message's "图上 +N" tag
+  decoration?: NodeDecoration;
+  clickable?: boolean;
+  // Section 17 evidence: quotes backing the step; "unverified" = graph built from a
+  // narration but this step's quote wasn't found in what the expert said.
+  evidence?: string[];
+  unverified?: boolean;
+  // Second line under the label (task-layer tab: owner / step count).
+  subtitle?: string;
+}
+
+function WorkflowNode({ data }: { data: WorkflowNodeData }) {
+  const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
+  const deco = data.decoration;
   return (
     <div
+      title={data.evidence?.length ? `依据原话：「${data.evidence.join("」「")}」` : data.unverified ? "没有在讲述中找到这一步的原话，待确认" : undefined}
       style={{
         background: style.fill,
-        border: `1.6px solid ${style.stroke}`,
+        border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px ${data.unverified && !deco?.border ? "dashed" : "solid"} ${deco?.selected ? "#2a78d6" : deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
+        opacity: deco?.faded ? 0.5 : 1,
+        textDecoration: deco?.faded ? "line-through" : undefined,
+        cursor: data.clickable ? "pointer" : undefined,
         borderRadius: radius,
         padding: "10px 16px",
         minWidth: 120,
@@ -47,11 +78,28 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
         fontWeight: 700,
         color: "#1f2937",
         textAlign: "center",
-        boxShadow: data.confirmed ? "0 0 0 2px #0ca30c33" : "none",
+        // Highlight (hovering a chat message's "图上 +N" tag) wins over the confirmed ring.
+        boxShadow: data.highlighted
+          ? "0 0 0 3px #f59e0b88"
+          : data.confirmed
+            ? "0 0 0 2px #0ca30c33"
+            : "none",
+        transition: "box-shadow 0.15s",
         position: "relative",
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      {deco?.badge && (
+        <div
+          style={{
+            position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", whiteSpace: "nowrap",
+            background: deco.badgeColor ?? "#2a78d6", color: "#fff", borderRadius: 999, padding: "1px 8px",
+            fontSize: 10.5, fontWeight: 700, textDecoration: "none",
+          }}
+        >
+          {deco.badge}
+        </div>
+      )}
       {data.label}
       {data.subtitle && (
         <div style={{ fontSize: 11, fontWeight: 500, color: "#667085", marginTop: 3 }}>{data.subtitle}</div>
@@ -68,7 +116,7 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
 
 const nodeTypes = { workflow: WorkflowNode };
 
-async function layout(graph: Graph, subtitles?: Record<string, string>): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
+async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
   const elkGraph = {
     id: "root",
     layoutOptions: {
@@ -96,7 +144,6 @@ async function layout(graph: Graph, subtitles?: Record<string, string>): Promise
       nodeType: n.node_type,
       confirmed: n.expert_confirmed,
       hasRetry: !!n.retry_semantics?.enabled,
-      subtitle: subtitles?.[n.node_id],
     },
   }));
 
@@ -130,27 +177,40 @@ interface DagViewProps {
   // rest of a tall graph instead of the graph panning inside a fixed viewport. Used by the
   // mobile DAG page, which reads top-to-bottom and scrolls like the rest of the page.
   scrollable?: boolean;
+  // Nodes to emphasize (e.g. what the latest conversation turn added). Display-only; does
+  // not trigger a re-layout.
+  highlightNodeIds?: string[] | null;
+  nodeDecorations?: Record<string, NodeDecoration>;
   // Optional second line under a node's label, keyed by node_id -- used by the task-layer tab
   // to show each task's owner / step count without changing the node label itself.
   subtitles?: Record<string, string>;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, subtitles }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations, subtitles }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const flowInstance = useRef<ReactFlowInstance | null>(null);
   const nodeCount = graph.nodes.length;
-  const edgeCount = graph.edges.length;
 
-  // Re-layout whenever the graph's shape changes; keying off node/edge counts (rather than
-  // deep-equality) is enough here since the mock guide service only ever appends structure.
-  const layoutKey = useMemo(() => `${nodeCount}-${edgeCount}`, [nodeCount, edgeCount]);
+  // Re-layout whenever the graph's content changes. Counts alone are not enough: the guide's
+  // structural questions rewire existing edges and fill in branch conditions / approver
+  // labels without changing how many nodes or edges there are, and a rework preview can
+  // merge one node and insert another. Decorations are applied in `displayNodes` below
+  // without re-running ELK.
+  const layoutKey = useMemo(
+    () =>
+      [
+        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}`),
+        ...graph.edges.map((e) => `${e.edge_id}:${e.from}>${e.to}:${e.edge_type}:${e.condition ?? ""}`),
+      ].join("|"),
+    [graph],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    layout(graph, subtitles).then((res) => {
+    layout(graph).then((res) => {
       if (!cancelled) {
         setNodes(res.nodes);
         setEdges(res.edges);
@@ -162,6 +222,14 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, su
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey]);
+
+  // Apply highlight on top of the laid-out nodes without re-running ELK.
+  const highlightKey = (highlightNodeIds ?? []).join(",");
+  useEffect(() => {
+    const ids = new Set(highlightNodeIds ?? []);
+    setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, highlighted: ids.has(n.id) } })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey, layoutKey]);
 
   const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {
@@ -185,6 +253,29 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, su
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollable, fitZoom, containerWidth, size.width, layoutKey]);
 
+  const displayNodes = useMemo(() => {
+    const byId = new Map(graph.nodes.map((n) => [n.node_id, n]));
+    // Only graphs built by the review loop carry evidence; don't flag every node of an
+    // imported / step-by-step graph as "unverified" just because it has none.
+    const tracksEvidence = graph.nodes.some((n) => (n.evidence?.length ?? 0) > 0);
+    return nodes.map((n) => {
+      const src = byId.get(n.id);
+      const evidence = src?.evidence ?? [];
+      return {
+      ...n,
+      data: {
+        ...n.data,
+        evidence,
+        unverified: tracksEvidence && evidence.length === 0 && src?.node_type !== "start" && src?.node_type !== "end",
+        label: src?.label ?? n.data.label,
+        decoration: nodeDecorations?.[n.id],
+        clickable: !!onNodeTap,
+        subtitle: subtitles?.[n.id],
+      },
+      };
+    });
+  }, [nodes, graph, nodeDecorations, onNodeTap, subtitles]);
+
   if (nodeCount === 0) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
@@ -195,7 +286,7 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, su
 
   const flow = (
     <ReactFlow
-      nodes={nodes}
+      nodes={displayNodes}
       edges={edges}
       nodeTypes={nodeTypes}
       fitView={!scrollable}

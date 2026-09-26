@@ -11,14 +11,16 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
+from .. import annotation_signals, anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
 from ..models import (
+    DatasetVersionListResponse,
     DatasetVersionSummary,
     DuplicateCheckRequest,
     DuplicateCheckResult,
     DuplicateMatch,
     ImportConfirmRequest,
     PublishDatasetRequest,
+    RenameDatasetVersionRequest,
 )
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -41,9 +43,12 @@ def _draft_pool(source_type: str) -> list[dict]:
     if source_type != "expert_collected":
         return []
     already_published = _published_workflow_ids(source_type)
+    # Archived sessions are the expert/admin saying "set this one aside" -- keep them out of
+    # the next publish until they're unarchived.
     return [
         w for w in db.list_all()
         if w["status"] == "expert_confirmed" and w["id"] not in already_published
+        and not w.get("archived", False)
     ]
 
 
@@ -52,16 +57,21 @@ def _live_annotation_readiness(version: dict) -> dict:
     instead of frozen at publish -- see quality.compute_annotation_readiness's docstring.
     """
     records = dataset_records.records_for_export(version)
+    annotations = db.list_annotations_by_record(version["id"])
+    revisions = db.list_revisions_by_record(version["id"])
     gold_count = double_count = arbitrated_count = 0
     kappa_pairs: list[tuple[str, str]] = []
     for r in records:
-        history = db.list_annotations(version["id"], r["record_id"])
-        if gold_annotation.compute_gold_status(history) == "gold":
+        history = annotations.get(r["record_id"], [])
+        if gold_annotation.compute_gold_status(history, revisions.get(r["record_id"], [])) == "gold":
             gold_count += 1
-        independents = [a for a in history if a.get("role_in_process", "independent") == "independent"]
-        if len(independents) >= 2:
+        # Rounds (IMPLEMENTATION_PLAN.md section 16): a record counts as double-annotated
+        # once any of its rounds has two independent annotations; every such round
+        # contributes one pair to kappa.
+        pairs = gold_annotation.kappa_pairs(history)
+        if pairs:
             double_count += 1
-            kappa_pairs.append((independents[0]["verdict"], independents[1]["verdict"]))
+            kappa_pairs.extend(pairs)
         if any(a.get("role_in_process") == "arbitration" for a in history):
             arbitrated_count += 1
 
@@ -93,6 +103,7 @@ def _to_summary(version: dict) -> DatasetVersionSummary:
     return DatasetVersionSummary(
         id=version["id"],
         source_type=version["source_type"],
+        name=version.get("name") or version["source_type"],
         version_number=version["version_number"],
         workflow_count=version["workflow_count"],
         total_steps=version["total_steps"],
@@ -161,6 +172,44 @@ def archive_version(version_id: str, actor_role: str = "unknown") -> DatasetVers
     return _to_summary(version)
 
 
+@router.post("/versions/{version_id}/rename", response_model=DatasetVersionSummary)
+def rename_version(version_id: str, req: RenameDatasetVersionRequest) -> DatasetVersionSummary:
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="名称不能为空")
+    db.rename_dataset_version(version_id, name)
+    version["name"] = name
+
+    audit.log(req.actor_role or "unknown", "dataset_rename", {"dataset_version_id": version_id, "name": name})
+
+    return _to_summary(version)
+
+
+@router.delete("/versions/{version_id}")
+def delete_version(version_id: str, actor_role: str = "unknown") -> dict:
+    """Hard delete -- unlike archive (reversible-in-spirit, just hidden from the default
+    list), this permanently removes the version row and its prior annotations. Scoped to
+    public_extracted in the frontend (each import is its own standalone dataset there,
+    unlike expert_collected's single continuously-published version), but not enforced here
+    since there's no real permission system yet (same honest gap as every other admin
+    action in this codebase).
+    """
+    version = db.get_dataset_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    db.delete_dataset_version(version_id)
+
+    audit.log(actor_role, "dataset_delete", {
+        "dataset_version_id": version_id, "source_type": version["source_type"],
+        "version_number": version["version_number"], "name": version.get("name"),
+    })
+
+    return {"ok": True}
+
+
 @router.post("/versions/{version_id}/mark-gold", response_model=DatasetVersionSummary)
 def mark_gold_version(version_id: str, is_gold: bool = True, actor_role: str = "unknown") -> DatasetVersionSummary:
     """PRD 16.1/16.2: admin-only in principle (no backend permission enforcement yet -- same
@@ -185,6 +234,44 @@ def list_versions(source_type: str = "expert_collected", include_archived: bool 
     if not include_archived:
         versions = [v for v in versions if not v.get("archived")]
     return [_to_summary(v) for v in versions]
+
+
+def _version_matches_query(version: dict, query: str) -> bool:
+    """Substring match against name and version number -- "v3"/"3" both hit version_number 3,
+    so searching either the way a version is labeled in the UI ("v3") or the bare number works.
+    """
+    name = (version.get("name") or "").lower()
+    number = version["version_number"]
+    return query in name or query in f"v{number}" or query == str(number)
+
+
+@router.get("/versions/search", response_model=DatasetVersionListResponse)
+def search_versions(
+    source_type: str = "expert_collected",
+    query: str = "",
+    page: int = 1,
+    page_size: int = 20,
+    include_archived: bool = False,
+) -> DatasetVersionListResponse:
+    """Dashboard「全部」入口：进入某个来源（专家集/公有集）的 Dashboard 后默认只看最新版本，
+    点「查看全部」才翻到这个分页 + 可查询的完整版本列表，而不是把所有版本一次性堆在 Dashboard
+    首屏里。`query` 匹配版本名称或版本号（"v3" 或 "3" 都能命中第 3 版）。
+    """
+    versions = db.list_dataset_versions(source_type)
+    if not include_archived:
+        versions = [v for v in versions if not v.get("archived")]
+    q = query.strip().lower()
+    if q:
+        versions = [v for v in versions if _version_matches_query(v, q)]
+
+    total = len(versions)
+    page = max(page, 1)
+    page_size = max(1, min(page_size, 100))
+    start = (page - 1) * page_size
+    page_items = versions[start:start + page_size]
+    return DatasetVersionListResponse(
+        items=[_to_summary(v) for v in page_items], total=total, page=page, page_size=page_size,
+    )
 
 
 @router.get("/versions/{version_id}", response_model=DatasetVersionSummary)
@@ -296,6 +383,15 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
         "created_at": _now(),
         "archived": False,
         "records": records,  # public_extracted has no separate `workflows` table row per record
+        # Cross-version precheck matches, kept so the annotation panel can show them later
+        # (annotation_signals.py) -- within-batch matches and graph issues are recomputed live.
+        "precheck_issues": {
+            rid: [
+                {"code": i["code"], "message": i["message"]} for i in report["issues"]
+                if i.get("record_id") == rid and i["code"].startswith(annotation_signals.STORED_CODE_PREFIXES)
+            ]
+            for rid in importable_ids
+        },
     }
     db.save_dataset_version(version)
 
@@ -311,6 +407,39 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
 _records_for_export = dataset_records.records_for_export
 
 
+def _with_gold(version: dict, records: list[dict]) -> list[dict]:
+    """Export carries both graphs (IMPLEMENTATION_PLAN.md section 17.8, user decision "两个都要"):
+    - `graph`: the record as collected / imported -- unchanged, so an export still re-imports;
+    - `gold_graph`: the graph the Gold process settled on -- the corrected graph when the
+      annotators (or the arbitrator) adopted a correction, the record's current graph when it
+      was accepted as is, null while the record isn't Gold (in progress, or discarded).
+    `annotation` (already an object in schema v2's workflow_record) gets the Gold outcome;
+    keys an imported record already had there are kept. Verdicts and reasons only appear
+    once a record is settled, same blind-review rule as the annotation list."""
+    annotations = db.list_annotations_by_record(version["id"])
+    revisions = db.list_revisions_by_record(version["id"])
+    out = []
+    for r in records:
+        rid = r.get("record_id")
+        history = annotations.get(rid, [])
+        revs = revisions.get(rid, [])
+        state = gold_annotation.compute_state(history, revs)
+        current = revs[-1]["graph"] if revs else r["graph"]
+        done = state["stage"] == "done"
+        gold = state["gold_status"] == "gold"
+        annotation = {
+            **(r.get("annotation") or {}),
+            "gold_status": state["gold_status"],
+            "final_verdict": state["outcome"] if done else None,
+            "corrected": bool(state["final_graph"]),
+            "reason_tags": sorted({t for a in state["round_annotations"] for t in (a.get("reason_tags") or [])}) if done else [],
+            "annotator_count": len({a["annotator_name"].strip().lower() for a in history}),
+            "adjudicated": any(a.get("role_in_process") == "arbitration" for a in state["round_annotations"]) and done,
+        }
+        out.append({**r, "gold_graph": (state["final_graph"] or current) if gold else None, "annotation": annotation})
+    return out
+
+
 @router.get("/versions/{version_id}/export")
 def export_version(version_id: str, format: str = "raw") -> Response:
     version = db.get_dataset_version(version_id)
@@ -319,11 +448,18 @@ def export_version(version_id: str, format: str = "raw") -> Response:
     if format not in ("raw", "anonymized", "role_normalized"):
         raise HTTPException(status_code=400, detail="format 必须是 raw / anonymized / role_normalized 之一")
 
-    records = _records_for_export(version)
+    records = _with_gold(version, _records_for_export(version))
     if format == "role_normalized":
-        records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"])} for r in records]
+        records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"]),
+                    "gold_graph": anonymize.apply_role_normalization(r["gold_graph"]) if r["gold_graph"] else None}
+                   for r in records]
     elif format == "anonymized":
-        records = [anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}) for r in records]
+        records = [
+            {**anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}),
+             "gold_graph": anonymize.apply_anonymization({"graph": anonymize.apply_role_normalization(r["gold_graph"])})["graph"]
+             if r["gold_graph"] else None}
+            for r in records
+        ]
     if format != "raw":
         records = [_transform_task_layer(r, format) for r in records]
 
