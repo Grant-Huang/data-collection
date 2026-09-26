@@ -964,21 +964,57 @@ _CORRECTION_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的解析�
 
 
 def _llm_parse(text: str, slot_config: dict, system_prompt: str, want_correction: bool) -> dict | None:
-    """Returns None on ANY failure so the caller falls back to the rule-based path."""
-    try:
-        parsed = llm_client.chat_completion_json(slot_config, [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ])
-    except llm_client.LLMError:
+    """Returns None on ANY failure so the caller falls back to the rule-based path.
+
+    Auto-upgrade: if the primary slot fails for any reason (timeout / network / bad
+    JSON / schema mismatch) AND a higher tier (C_flagship) is configured and reachable,
+    retry once with the higher tier before giving up. This keeps the local 35B (free,
+    offline) as the default while letting cloud kick in when the local model can't
+    keep up. We never silently degrade to a fake success; both attempts either return
+    a parsed dict or raise back to the rule-based path.
+    """
+    def _attempt(cfg: dict) -> dict[str, Any] | None:
+        try:
+            parsed = llm_client.chat_completion_json(cfg, [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ])
+        except llm_client.LLMError:
+            return None
+        clauses = parsed.get("clauses")
+        if (not isinstance(clauses, list) or not clauses
+                or not all(isinstance(c, str) and c.strip() for c in clauses)):
+            return None
+        return parsed  # schema validation done below, once
+
+    parsed = _attempt(slot_config)
+    if parsed is None:
+        # Try C_flagship once. Same merge rules as the slot config (resolve_slot_for_call
+        # returns the merged level config), but pinned to C_flagship regardless of the
+        # primary slot's level.
+        try:
+            effective = app_settings.get_effective_settings()
+            # Build a C_flagship config explicitly. We do NOT reuse resolve_slot_for_call()
+            # because the slot-level overrides (enabled/temperature) belong to the primary
+            # caller; C_flagship here is a fixed upgrade target with primary's temperature.
+            level_cfg = (effective.get("llm_levels") or {}).get("C_flagship") or {}
+            if level_cfg.get("endpoint") and level_cfg.get("model_name"):
+                upgrade_cfg = {
+                    "level": "C_flagship",
+                    "enabled": True,
+                    "temperature": slot_config.get("temperature", 0.2),
+                    "endpoint": level_cfg.get("endpoint", ""),
+                    "model_name": level_cfg.get("model_name", ""),
+                    "api_key": level_cfg.get("api_key", ""),
+                }
+                parsed = _attempt(upgrade_cfg)
+        except Exception:
+            parsed = None
+    if parsed is None:
         return None
 
     clauses = parsed.get("clauses")
-    if (not isinstance(clauses, list) or not clauses
-            or not all(isinstance(c, str) and c.strip() for c in clauses)):
-        return None
     clauses = [c.strip()[:60] for c in clauses]
-
     relationship = parsed.get("relationship") if len(clauses) >= 2 else "serial"
     if relationship not in ("serial", "parallel", "ambiguous"):
         return None
