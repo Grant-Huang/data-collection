@@ -324,6 +324,8 @@ def export_version(version_id: str, format: str = "raw") -> Response:
         records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"])} for r in records]
     elif format == "anonymized":
         records = [anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}) for r in records]
+    if format != "raw":
+        records = [_transform_task_layer(r, format) for r in records]
 
     export_payload = {
         "dataset_meta": {
@@ -339,6 +341,20 @@ def export_version(version_id: str, format: str = "raw") -> Response:
         content=body, media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{version["id"]}_{format}.json"'},
     )
+
+
+def _transform_task_layer(record: dict, format: str) -> dict:
+    """Applies the same role-normalization / name-redaction rules to the task layer's graph
+    (task name = node label, owner = node actor_roles -- see models.TaskDefinition) that the
+    step graph just got, so an anonymized export can't leak a name through the task layer.
+    """
+    task_workflow = record.get("task_workflow")
+    if not task_workflow:
+        return record
+    task_graph = anonymize.apply_role_normalization(task_workflow["graph"])
+    if format == "anonymized":
+        task_graph = anonymize.apply_anonymization({"graph": task_graph})["graph"]
+    return {**record, "task_workflow": {**task_workflow, "graph": task_graph}}
 
 
 @router.get("/versions/{version_id}/drill-down")

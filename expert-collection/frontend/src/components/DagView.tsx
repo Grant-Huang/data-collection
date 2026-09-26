@@ -31,7 +31,7 @@ const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill"
   handoff: { fill: "#fff7ed", stroke: "#f97316", shape: "rect" },
 };
 
-function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean } }) {
+function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean; subtitle?: string } }) {
   const style = NODE_STYLE[data.nodeType];
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   return (
@@ -53,6 +53,9 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       {data.label}
+      {data.subtitle && (
+        <div style={{ fontSize: 11, fontWeight: 500, color: "#667085", marginTop: 3 }}>{data.subtitle}</div>
+      )}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
           ↺
@@ -65,7 +68,7 @@ function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; con
 
 const nodeTypes = { workflow: WorkflowNode };
 
-async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
+async function layout(graph: Graph, subtitles?: Record<string, string>): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
   const elkGraph = {
     id: "root",
     layoutOptions: {
@@ -93,6 +96,7 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       nodeType: n.node_type,
       confirmed: n.expert_confirmed,
       hasRetry: !!n.retry_semantics?.enabled,
+      subtitle: subtitles?.[n.node_id],
     },
   }));
 
@@ -126,9 +130,12 @@ interface DagViewProps {
   // rest of a tall graph instead of the graph panning inside a fixed viewport. Used by the
   // mobile DAG page, which reads top-to-bottom and scrolls like the rest of the page.
   scrollable?: boolean;
+  // Optional second line under a node's label, keyed by node_id -- used by the task-layer tab
+  // to show each task's owner / step count without changing the node label itself.
+  subtitles?: Record<string, string>;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, subtitles }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -143,7 +150,7 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
 
   useEffect(() => {
     let cancelled = false;
-    layout(graph).then((res) => {
+    layout(graph, subtitles).then((res) => {
       if (!cancelled) {
         setNodes(res.nodes);
         setEdges(res.edges);

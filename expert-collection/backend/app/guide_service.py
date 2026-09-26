@@ -70,6 +70,7 @@ from typing import Any
 
 from . import llm_client
 from . import settings as app_settings
+from . import task_layer
 
 NODE_TYPE_LABELS = {
     "decision": "判断",
@@ -239,7 +240,7 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 
 def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
-                 skip_correction_check: bool = False
+                 skip_correction_check: bool = False, graph: dict | None = None,
                  ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
     """Returns (assistant_reply, graph_ops, next_question_or_None, new_state).
 
@@ -256,8 +257,13 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
     an expert's original text after they picked "不是，这是新的一步" from the turn picker (see
     "awaiting_turn_selection" there) -- without it, re-running the exact same text through the
     exact same stage could flag it as a correction again and loop.
+
+    `graph` is the current step (SOP) graph, read-only. Only the task-layer stages
+    ("task_outline"/"task_boundary", IMPLEMENTATION_PLAN.md section 15) read it -- they offer
+    already-described steps as "this task starts here" chips; no other stage needs it.
     """
-    reply, ops, nq, new_state = _dispatch_turn(state, text, skip_correction_check=skip_correction_check)
+    reply, ops, nq, new_state = _dispatch_turn(state, text, skip_correction_check=skip_correction_check,
+                                               graph=graph)
     if turn_id:
         for op in ops:
             if op.get("op") == "add_node":
@@ -267,7 +273,8 @@ def handle_turn(state: dict[str, Any], text: str, turn_id: str | None = None,
     return reply, ops, nq, new_state
 
 
-def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool = False
+def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool = False,
+                    graph: dict | None = None,
                     ) -> tuple[str, list[dict], dict | None, dict[str, Any]]:
     """The actual FSM dispatch, previously named `handle_turn`. `skip_correction_check` is
     used only when re-processing an expert's original text after the expert picked "不是，
@@ -510,11 +517,23 @@ def _dispatch_turn(state: dict[str, Any], text: str, skip_correction_check: bool
                 {"op": "add_edge", "edge": {"edge_id": _nid(), "from": loose_end, "to": end_id,
                                              "edge_type": "normal", "confidence": 0.7, "expert_confirmed": False}},
             ]
-        reply = "整理得差不多了。我已经把这张流程图画出来了，麻烦你在右边看一下有没有地方不对。"
-        # Reset pending to drop stage-scratch state (branch tails etc.) but keep case_context --
-        # it was collected before any of that scratch state existed and has nothing to do with it.
-        new_state = {"stage": "review", "cursor": None, "pending": {"case_context": pending.get("case_context", {})}}
-        return reply, ops, None, new_state
+        # Step (SOP) graph is done -- one more question for the task layer (IMPLEMENTATION_PLAN.md
+        # section 15) before review. Reset pending to drop stage-scratch state (branch tails
+        # etc.) but keep case_context and category -- both were collected before any of that
+        # scratch state existed and have nothing to do with it.
+        reply = task_layer.TASK_OUTLINE_QUESTION
+        nq = {"target": "task_outline_discovery", "priority": "P0", "question": reply,
+              "chips": [task_layer.SINGLE_TASK_CHIP]}
+        new_state = {"stage": "task_outline", "cursor": None,
+                      "pending": {"case_context": pending.get("case_context", {}),
+                                  "category": pending.get("category")}}
+        return reply, ops, nq, new_state
+
+    if stage == "task_outline":
+        return _handle_task_outline(text, pending, graph or {}, ops)
+
+    if stage == "task_boundary":
+        return _handle_task_boundary(text, pending, graph or {}, ops)
 
     # stage == "review" or unknown: nothing more to structurally extract
     reply = "已经在最终确认阶段了——有需要修改的地方，直接说，我来改图；没问题的话可以点「确认并提交」。"
@@ -911,6 +930,69 @@ def _apply_understanding(resume: str, entry_id: str, understanding: dict, pendin
     else:
         tail_id = _build_step_chain(ops, entry_id, clauses, edge_type, condition, confidence)
     return _continue_after_step(resume, tail_id, pending, ops, entry_id=entry_id)
+
+
+_REVIEW_REPLY = ("整理得差不多了。我已经画出两张图：「任务协作」看谁负责哪一段、怎么交接，"
+                 "「SOP 步骤」看每一步具体怎么做。麻烦你在右边切换看一下有没有地方不对。")
+
+
+def _finish_task_layer(pending: dict, graph: dict, items: list[dict], boundaries: list,
+                        structured_by: str, ops: list[dict]) -> tuple[str, list[dict], None, dict]:
+    task_workflow = task_layer.build_task_workflow(graph, items, boundaries, structured_by)
+    new_state = {"stage": "review", "cursor": None,
+                  "pending": {"case_context": pending.get("case_context", {}), "task_workflow": task_workflow}}
+    return _REVIEW_REPLY, ops, None, new_state
+
+
+def _ask_task_boundary(pending: dict, graph: dict, ops: list[dict]) -> tuple[str, list[dict], dict, dict]:
+    """Ask where task `len(boundaries)` starts. Candidates are only steps after the last real
+    boundary so far, which keeps tasks contiguous and in the order the expert listed them.
+    """
+    items, boundaries = pending["_task_items"], pending["_task_boundaries"]
+    last = max((b for b in boundaries if b is not None), default=0)
+    options: dict[str, int | None] = dict(task_layer.step_candidates(graph, last))
+    options[task_layer.NO_STEP_CHIP] = None
+    question = task_layer.boundary_question(items, len(boundaries))
+    nq = {"target": "task_boundary_discovery", "priority": "P0", "question": question,
+          "chips": list(options.keys())}
+    new_state = {"stage": "task_boundary", "cursor": None,
+                  "pending": {**pending, "_boundary_options": options}}
+    return question, ops, nq, new_state
+
+
+def _handle_task_outline(text: str, pending: dict, graph: dict, ops: list[dict]):
+    """The expert defines the task layer directly (priority 1 source). One task -> every step
+    belongs to it, no boundary questions needed; several -> ask one boundary per task after the
+    first. The single-task name comes from the expert's own opening answer (`category`), never
+    a made-up summary.
+    """
+    if text.startswith(task_layer.SINGLE_TASK_CHIP):
+        items, structured_by = [{"name": (pending.get("category") or "整体任务")[:40], "owner": None}], "rule"
+    else:
+        items, structured_by = task_layer.parse_outline(text)
+    if len(items) <= 1:
+        items = items or [{"name": text[:40], "owner": None}]
+        return _finish_task_layer(pending, graph, items, [0], structured_by, ops)
+    pending = {**pending, "_task_items": items, "_task_boundaries": [0], "_task_structured_by": structured_by}
+    return _ask_task_boundary(pending, graph, ops)
+
+
+def _handle_task_boundary(text: str, pending: dict, graph: dict, ops: list[dict]):
+    options = pending.get("_boundary_options", {})
+    picked = text.strip()
+    if picked not in options:
+        # Free text instead of a chip: same honest re-ask the correction turn picker uses --
+        # matching arbitrary text to a step would be exactly the guessing PRD 3.2 forbids.
+        question = "麻烦从上面列出的步骤里选一个，我才知道这个任务从哪里开始。"
+        nq = {"target": "task_boundary_discovery", "priority": "P0", "question": question,
+              "chips": list(options.keys())}
+        return question, ops, nq, {"stage": "task_boundary", "cursor": None, "pending": pending}
+    boundaries = pending["_task_boundaries"] + [options[picked]]
+    pending = {**pending, "_task_boundaries": boundaries}
+    if len(boundaries) < len(pending["_task_items"]):
+        return _ask_task_boundary(pending, graph, ops)
+    return _finish_task_layer(pending, graph, pending["_task_items"], boundaries,
+                              pending.get("_task_structured_by", "rule"), ops)
 
 
 def _split_condition(text: str) -> tuple[str, str]:

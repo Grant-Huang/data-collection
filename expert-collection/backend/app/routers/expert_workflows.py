@@ -60,7 +60,7 @@ def _completion_score(record: dict) -> float:
         "trigger_detail", "main_path", "branch_check", "branch_condition_a",
         "branch_condition_b", "merge_check", "parallel_check", "parallel_branch_a",
         "parallel_branch_b", "approval_check", "approval_who", "retry_check",
-        "retry_target", "end_condition", "review",
+        "retry_target", "end_condition", "task_outline", "task_boundary", "review",
     ]
     try:
         idx = order.index(stage)
@@ -135,6 +135,18 @@ def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpda
     return WorkflowRecord.model_validate(_strip_internal(record))
 
 
+def _sync_state(record: dict, new_state: dict) -> None:
+    """Copies everything derived from the guide FSM state onto the record. case_context and
+    the task layer (IMPLEMENTATION_PLAN.md section 15) both live in the FSM's `pending`, so a
+    correction rollback (which restores an earlier state) rolls them back too, for free.
+    """
+    pending = new_state.get("pending", {})
+    record["_guide_state"] = new_state
+    record["stage"] = new_state["stage"]
+    record["case_context"] = pending.get("case_context")
+    record["task_workflow"] = pending.get("task_workflow")
+
+
 def _describe_turn(record: dict, turn_id: str) -> str:
     """Human-readable description of what one expert turn produced, for the correction
     "which turn do you want to roll back to" picker. Built entirely from the graph's own data
@@ -197,10 +209,7 @@ def _rollback_to_turn(record: dict, turn_id: str) -> str:
     record["turns"] = record["turns"][:pos]
     record["_turn_state_log"] = log[:idx]
 
-    state_before = log[idx]["state_before"]
-    record["_guide_state"] = state_before
-    record["stage"] = state_before["stage"]
-    record["case_context"] = state_before.get("pending", {}).get("case_context")
+    _sync_state(record, log[idx]["state_before"])
     return original_question
 
 
@@ -229,9 +238,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             next_question = {"target": "correction_turn_pick", "priority": "P0", "question": assistant_reply,
                               "chips": list(options.keys())}
             new_state, ops = state, []
-            record["_guide_state"] = new_state
-            record["stage"] = new_state["stage"]
-            record["case_context"] = new_state.get("pending", {}).get("case_context")
+            _sync_state(record, new_state)
         elif options[picked] is None:
             # "不是，这是新的一步" -- resume normal processing of the original text at the
             # original stage, as if the correction check had never fired.
@@ -241,11 +248,10 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": restored_state})
             assistant_reply, ops, next_question, new_state = guide_service.handle_turn(
                 restored_state, correction["original_text"], turn_id=expert_turn_id, skip_correction_check=True,
+                graph=record["graph"],
             )
             record["graph"] = graph_ops.apply_ops(record["graph"], ops)
-            record["_guide_state"] = new_state
-            record["stage"] = new_state["stage"]
-            record["case_context"] = new_state.get("pending", {}).get("case_context")
+            _sync_state(record, new_state)
         else:
             original_question = _rollback_to_turn(record, options[picked])
             assistant_reply = f"好，已经回退。{original_question}"
@@ -253,16 +259,14 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             next_question = {"target": new_state["stage"], "priority": "P0", "question": original_question,
                               "chips": None}
             ops = []
-            record["_guide_state"] = new_state
-            record["stage"] = new_state["stage"]
-            record["case_context"] = new_state.get("pending", {}).get("case_context")
+            _sync_state(record, new_state)
     else:
         record.setdefault("_turn_state_log", []).append({"turn_id": expert_turn_id, "state_before": state})
-        assistant_reply, ops, next_question, new_state = guide_service.handle_turn(state, req.text, turn_id=expert_turn_id)
+        assistant_reply, ops, next_question, new_state = guide_service.handle_turn(
+            state, req.text, turn_id=expert_turn_id, graph=record["graph"],
+        )
         record["graph"] = graph_ops.apply_ops(record["graph"], ops)
-        record["_guide_state"] = new_state
-        record["stage"] = new_state["stage"]
-        record["case_context"] = new_state.get("pending", {}).get("case_context")
+        _sync_state(record, new_state)
 
         if new_state["stage"] == "awaiting_turn_selection_setup":
             # guide_service asked to defer to a turn picker but can't build the candidate list
@@ -320,6 +324,11 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
         node["expert_confirmed"] = True
     for edge in record["graph"]["edges"]:
         edge["expert_confirmed"] = True
+    # The task layer is confirmed together with the step graph -- the expert reviewed both tabs.
+    task_graph = (record.get("task_workflow") or {}).get("graph")
+    if task_graph:
+        for item in task_graph["nodes"] + task_graph["edges"]:
+            item["expert_confirmed"] = True
     record["validation"] = issues
     record["updated_at"] = _now()
     db.save(record)
