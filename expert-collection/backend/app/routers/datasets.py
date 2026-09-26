@@ -407,6 +407,39 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
 _records_for_export = dataset_records.records_for_export
 
 
+def _with_gold(version: dict, records: list[dict]) -> list[dict]:
+    """Export carries both graphs (IMPLEMENTATION_PLAN.md section 17.8, user decision "两个都要"):
+    - `graph`: the record as collected / imported -- unchanged, so an export still re-imports;
+    - `gold_graph`: the graph the Gold process settled on -- the corrected graph when the
+      annotators (or the arbitrator) adopted a correction, the record's current graph when it
+      was accepted as is, null while the record isn't Gold (in progress, or discarded).
+    `annotation` (already an object in schema v2's workflow_record) gets the Gold outcome;
+    keys an imported record already had there are kept. Verdicts and reasons only appear
+    once a record is settled, same blind-review rule as the annotation list."""
+    annotations = db.list_annotations_by_record(version["id"])
+    revisions = db.list_revisions_by_record(version["id"])
+    out = []
+    for r in records:
+        rid = r.get("record_id")
+        history = annotations.get(rid, [])
+        revs = revisions.get(rid, [])
+        state = gold_annotation.compute_state(history, revs)
+        current = revs[-1]["graph"] if revs else r["graph"]
+        done = state["stage"] == "done"
+        gold = state["gold_status"] == "gold"
+        annotation = {
+            **(r.get("annotation") or {}),
+            "gold_status": state["gold_status"],
+            "final_verdict": state["outcome"] if done else None,
+            "corrected": bool(state["final_graph"]),
+            "reason_tags": sorted({t for a in state["round_annotations"] for t in (a.get("reason_tags") or [])}) if done else [],
+            "annotator_count": len({a["annotator_name"].strip().lower() for a in history}),
+            "adjudicated": any(a.get("role_in_process") == "arbitration" for a in state["round_annotations"]) and done,
+        }
+        out.append({**r, "gold_graph": (state["final_graph"] or current) if gold else None, "annotation": annotation})
+    return out
+
+
 @router.get("/versions/{version_id}/export")
 def export_version(version_id: str, format: str = "raw") -> Response:
     version = db.get_dataset_version(version_id)
@@ -415,11 +448,18 @@ def export_version(version_id: str, format: str = "raw") -> Response:
     if format not in ("raw", "anonymized", "role_normalized"):
         raise HTTPException(status_code=400, detail="format 必须是 raw / anonymized / role_normalized 之一")
 
-    records = _records_for_export(version)
+    records = _with_gold(version, _records_for_export(version))
     if format == "role_normalized":
-        records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"])} for r in records]
+        records = [{**r, "graph": anonymize.apply_role_normalization(r["graph"]),
+                    "gold_graph": anonymize.apply_role_normalization(r["gold_graph"]) if r["gold_graph"] else None}
+                   for r in records]
     elif format == "anonymized":
-        records = [anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}) for r in records]
+        records = [
+            {**anonymize.apply_anonymization({**r, "graph": anonymize.apply_role_normalization(r["graph"])}),
+             "gold_graph": anonymize.apply_anonymization({"graph": anonymize.apply_role_normalization(r["gold_graph"])})["graph"]
+             if r["gold_graph"] else None}
+            for r in records
+        ]
 
     export_payload = {
         "dataset_meta": {

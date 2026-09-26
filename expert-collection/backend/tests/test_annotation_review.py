@@ -161,3 +161,38 @@ def test_without_model_only_short_intents_work(client, version):
     s = _start(client, version, "rec_0", "alice")
     s = _say(client, version, s["session_id"], "第三步其实是班长做的")
     assert "没有配置可用的 AI 模型" in s["turns"][-1]["body"] and s["graph"] == s["base_graph"]
+
+
+def test_export_carries_original_and_gold_graph(client, version, model):
+    """Section 17.8: export keeps `graph` as collected and adds `gold_graph` + outcome."""
+    import jsonschema
+    from app import import_pipeline
+
+    for name in ("alice", "bob"):  # same correction by both -> Gold with the corrected graph
+        s = _start(client, version, "rec_1", name)
+        model.queue.append(_rename_n3("质量工程师复测尺寸（来料检验不合格）"))
+        _say(client, version, s["session_id"], "复测那一步应该写清楚是复测尺寸")
+        _say(client, version, s["session_id"], "确认")
+    s = _start(client, version, "rec_0", "alice")  # rec_0: only one annotation so far
+    _say(client, version, s["session_id"], "确认")
+
+    for fmt in ("raw", "role_normalized", "anonymized"):
+        r = client.get(f"/api/datasets/versions/{version}/export?format={fmt}")
+        assert r.status_code == 200, r.text
+        payload = r.json()
+        recs = {x["record_id"]: x for x in payload["records"]}
+        corrected, pending, untouched = recs["rec_1"], recs["rec_0"], recs["rec_2"]
+        labels = lambda g: {n["label"] for n in g["nodes"]}
+        assert "质量工程师复测（来料检验不合格）" in labels(corrected["graph"])          # original kept
+        assert "质量工程师复测尺寸（来料检验不合格）" in labels(corrected["gold_graph"])  # Gold = corrected
+        expected = {"gold_status": "gold", "final_verdict": "needs_revision", "corrected": True,
+                    "reason_tags": ["unclear_label"], "annotator_count": 2}
+        assert {k: corrected["annotation"][k] for k in expected} == expected
+        assert pending["gold_graph"] is None and pending["annotation"]["gold_status"] == "pending_second_review"
+        assert pending["annotation"]["final_verdict"] is None and pending["annotation"]["reason_tags"] == []  # nothing leaks early
+        assert untouched["gold_graph"] is None and untouched["annotation"]["annotator_count"] == 0
+        if fmt != "anonymized":
+            # The anonymized format buckets provenance.expert_years_experience into text
+            # ("10-20年"), which schema v2 types as a number -- a pre-existing mismatch of that
+            # format, unrelated to gold_graph, so only the other two are schema-checked here.
+            jsonschema.validate({k: v for k, v in payload.items() if k != "export_format"}, import_pipeline._load_schema())
