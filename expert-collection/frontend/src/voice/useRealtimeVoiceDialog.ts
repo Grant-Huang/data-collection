@@ -19,7 +19,7 @@
 // moment the component re-renders for any other reason.
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { ConversationTurn } from "../api/types";
-import { getSpeechRecognitionCtor } from "./VoiceInputCapsule";
+import { getSpeechRecognitionCtor } from "./browserSpeech";
 
 export type DialogPhase = "connecting" | "listening" | "thinking" | "speaking" | "error" | "unsupported";
 

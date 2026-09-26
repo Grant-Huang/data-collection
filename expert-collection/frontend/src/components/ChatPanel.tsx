@@ -1,137 +1,126 @@
-// PRD section 18: quick-reply chips only ever prefill the input box as an editable draft --
-// they never auto-send, so the expert always has the chance to correct/qualify before
-// committing, and open recall questions (chips === null) render as plain text with no chips.
+// Desktop conversation column: message list (with the current question's quick-reply chips
+// rendered under its bubble -- see MessageList/QuickReplies) plus the input box.
 //
-// chip_mode "multi_select" (Case Context B-group, IMPLEMENTATION_PLAN.md section 9.1) is an
-// extension of the same rule: chips toggle on/off, and a "确认选择" button joins the picks
-// with "、" into the draft box -- still never auto-sends, the expert can still edit before
-// hitting 发送.
-import { useEffect, useState } from "react";
-import type { ConversationTurn, NextQuestion } from "../api/types";
+// PRD section 18: chips only ever prefill the input box as an editable draft -- they never
+// auto-send, so the expert always has the chance to correct/qualify before committing, and
+// open recall questions (chips === null) have no chips at all.
+import { useEffect, useRef, useState } from "react";
+import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
+import { mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
-import { VoiceInputCapsule } from "../voice/VoiceInputCapsule";
+import { VoiceDictationButton } from "./VoiceDictationButton";
+import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
+import { RealtimeVoiceIcon } from "../voice/icons";
 
 interface Props {
   turns: ConversationTurn[];
+  graph?: Graph | null;
   nextQuestion: NextQuestion | null;
-  onSend: (text: string) => void;
+  // rawTranscript: what speech recognition heard, when the message was dictated -- stored
+  // next to the (possibly edited) text so recognition errors can be checked later.
+  onSend: (text: string, rawTranscript?: string) => void;
   sending: boolean;
   confirmed: boolean;
+  onHighlightNodes?: (nodeIds: string[] | null) => void;
+  // Review-loop stage ("review_narrative" etc., section 17) -- only changes the input hint.
+  stage?: string;
+  // Text to append to the draft from outside (clicking a node on the graph quotes its name);
+  // `nonce` makes repeated clicks on the same node count.
+  insertText?: { text: string; nonce: number } | null;
+  placeholder?: string;
 }
 
-export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: Props) {
+export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirmed, onHighlightNodes, stage, insertText, placeholder }: Props) {
   const [draft, setDraft] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
-  const isMultiSelect = nextQuestion?.chip_mode === "multi_select";
+  // Raw recognizer output for everything dictated into the current draft.
+  const [rawPieces, setRawPieces] = useState<string[]>([]);
+  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Selections are scoped to one question -- reset when the question changes so a leftover
-  // selection from a previous B-group question can't leak into the next one.
+  function handleChipPick(pick: string) {
+    setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
+    // Put the cursor in the box so the expert can edit the prefilled draft right away.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  }
+
   useEffect(() => {
-    setSelected([]);
-  }, [nextQuestion?.target, nextQuestion?.question]);
-
-  function handleChip(chip: string) {
-    setDraft(chip);
-  }
-
-  function toggleChip(chip: string) {
-    setSelected((prev) => (prev.includes(chip) ? prev.filter((c) => c !== chip) : [...prev, chip]));
-  }
-
-  function handleConfirmSelection() {
-    if (selected.length === 0) return;
-    setDraft(selected.join("、"));
-  }
+    if (!insertText?.text) return;
+    setDraft((prev) => prev + insertText.text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [insertText?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSend(text?: string) {
     const value = (text ?? draft).trim();
-    if (!value || sending) return;
+    if (!value || sending || confirmed) return;
     setDraft("");
-    setSelected([]);
-    onSend(value);
+    const raw = text ? undefined : rawPieces.join("") || undefined;
+    setRawPieces([]);
+    onSend(value, raw);
   }
+
+  // Icon ① -- VoiceDictationButton already ran the transcript through the LLM polish call
+  // (POST /api/voice/polish) before handing it here; this only appends it to the draft.
+  function handleDictatedFill(text: string) {
+    setRawPieces((prev) => [...prev, text]);
+    setDraft((prev) => (prev.trim() ? `${prev.trimEnd()}${text}` : text));
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  // Icon ② -- skips the draft box entirely, sent as its own turn with the raw transcript
+  // attached (never polished -- speed over cleanup is the point of this path).
+  function handleDictatedSend(text: string) {
+    onSend(text, text);
+  }
+
+  const hasChips = !!nextQuestion?.chips?.length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <MessageList turns={turns} />
+      <MessageList
+        turns={turns}
+        graph={graph}
+        activeQuestion={confirmed ? null : nextQuestion}
+        onChipPick={handleChipPick}
+        sending={sending}
+        onHighlightNodes={onHighlightNodes}
+      />
 
-      {nextQuestion?.chips && !confirmed && !isMultiSelect && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "0 16px 8px" }}>
-          {nextQuestion.chips.map((chip) => (
-            <button
-              key={chip}
-              onClick={() => handleChip(chip)}
-              style={{
-                border: "1.3px solid #2a78d6",
-                color: "#2a78d6",
-                background: "#eef4fc",
-                borderRadius: 999,
-                padding: "6px 14px",
-                fontSize: 12.5,
-                cursor: "pointer",
-              }}
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {nextQuestion?.chips && !confirmed && isMultiSelect && (
-        <div style={{ padding: "0 16px 8px" }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-            {nextQuestion.chips.map((chip) => {
-              const isOn = selected.includes(chip);
-              return (
-                <button
-                  key={chip}
-                  onClick={() => toggleChip(chip)}
-                  style={{
-                    border: "1.3px solid #2a78d6",
-                    color: isOn ? "#fff" : "#2a78d6",
-                    background: isOn ? "#2a78d6" : "#eef4fc",
-                    borderRadius: 999,
-                    padding: "6px 14px",
-                    fontSize: 12.5,
-                    cursor: "pointer",
-                  }}
-                >
-                  {chip}
-                </button>
-              );
-            })}
-          </div>
-          <button
-            onClick={handleConfirmSelection}
-            disabled={selected.length === 0}
-            style={{
-              border: "none",
-              borderRadius: 8,
-              padding: "6px 14px",
-              fontSize: 12.5,
-              fontWeight: 600,
-              background: selected.length === 0 ? "#e5e7eb" : "#0ca30c",
-              color: selected.length === 0 ? "#94a3b8" : "#fff",
-              cursor: selected.length === 0 ? "default" : "pointer",
-            }}
-          >
-            确认选择（{selected.length}）
-          </button>
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, padding: 16, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ position: "relative", display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
+        <VoiceDictationButton disabled={confirmed || sending} onFill={handleDictatedFill} onSend={handleDictatedSend} />
         <textarea
+          ref={inputRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (!e.target.value.trim()) setRawPieces([]);
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            // Don't send while an IME (Chinese input) composition is still open.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               handleSend();
             }
           }}
           disabled={confirmed}
-          placeholder={confirmed ? "该会话已确认提交，不能再修改" : "点击上方气泡快速填入，或直接输入你的回答"}
+          placeholder={
+            placeholder ?? (confirmed
+              ? stage?.startsWith("review_")
+                ? "已确认提交。要修改的话，点下方的「继续修改」"
+                : "该会话已确认提交，不能再修改"
+              : stage === "review_narrative"
+                ? "把整件事从头到尾讲一遍，可以打字，也可以点 🎤 直接说。Enter 发送，Shift+Enter 换行"
+                : stage?.startsWith("review_")
+                  ? "回答上面的问题，或直接说哪里要改。Enter 发送，Shift+Enter 换行"
+                  : hasChips
+                    ? "点上面的选项快速填入（可修改），或直接输入你的回答"
+                    : "按你记得的实际情况说就好，Enter 发送，Shift+Enter 换行")
+          }
           rows={2}
           style={{
             flex: 1,
@@ -143,15 +132,35 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
             fontFamily: "inherit",
           }}
         />
-        <VoiceInputCapsule
-          disabled={confirmed}
-          sending={sending}
-          turns={turns}
-          onTranscript={(text, mode) => {
-            if (mode === "send") handleSend(text);
-            else setDraft(text);
+        <button
+          aria-label="实时语音会话"
+          title="开始实时语音会话"
+          disabled={confirmed || sending}
+          onClick={() => setVoiceDialogOpen(true)}
+          style={{
+            border: "none",
+            background: "#eef4fc",
+            color: "#2a78d6",
+            width: 44,
+            height: 40,
+            borderRadius: 8,
+            flexShrink: 0,
+            cursor: confirmed || sending ? "default" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
-        />
+        >
+          <RealtimeVoiceIcon size={24} />
+        </button>
+        {voiceDialogOpen && (
+          <RealtimeVoiceDialog
+            turns={turns}
+            sending={sending}
+            onSend={(text) => onSend(text, text)}
+            onClose={() => setVoiceDialogOpen(false)}
+          />
+        )}
         <button
           onClick={() => handleSend()}
           disabled={confirmed || sending || !draft.trim()}
@@ -159,10 +168,10 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
             border: "none",
             borderRadius: 8,
             padding: "0 18px",
-            background: sending || confirmed ? "#a9c4e8" : "#2a78d6",
+            background: sending || confirmed || !draft.trim() ? "#a9c4e8" : "var(--chat-accent)",
             color: "#fff",
             fontWeight: 600,
-            cursor: sending || confirmed ? "default" : "pointer",
+            cursor: sending || confirmed || !draft.trim() ? "default" : "pointer",
           }}
         >
           发送
