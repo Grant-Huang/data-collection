@@ -7,11 +7,16 @@
 //   (c) a long-idle session (nobody speaking) auto-ends -- IDLE_TIMEOUT_MS, same 5 minutes
 //       Workforce settled on after real-device testing.
 //
-// Recognition/TTS backend: see VoiceInputCapsule.tsx's top comment -- this runs on the
-// browser's own SpeechRecognition + SpeechSynthesis (real, working, no server round trip for
-// audio) rather than the Qwen Realtime link PRD 6.2 targets, which this sandbox has no
-// reachable endpoint or verified wire protocol to build against. Swapping in the real link
-// later only touches `beginListeningCycle`/`speak` below.
+// Recognition/TTS backend: this runs on the browser's own SpeechRecognition + SpeechSynthesis,
+// not the real /api/voice/asr relay to Qwen3-ASR-Flash-Realtime that
+// useVoiceDictation.ts/VoiceDictationButton.tsx/VoiceCapsuleInput.tsx use for one-shot
+// dictation (icons ①/②). That relay's session is meant to be finished once per dictation
+// ("session.finish" in useVoiceDictation.ts's `stop`); this dialog instead needs a session
+// kept open across many turns, judging its own turn boundaries locally so it can react
+// immediately (submit + speak back) rather than waiting on a round trip through the backend.
+// Rebuilding icon ③ on a long-lived relay session is the natural next step once the relay
+// exposes something for that; today, swapping it in would only touch `beginListeningCycle`/
+// `speak` below.
 //
 // Every mutable flag read inside a SpeechRecognition/SpeechSynthesis callback is kept in a
 // ref, not a plain closure over React state -- those callbacks fire from browser-internal

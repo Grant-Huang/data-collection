@@ -1,5 +1,5 @@
-// Three voice icons, one per input mode (see VoiceInputCapsule.tsx and RealtimeVoiceDialog.tsx
-// for where each is used):
+// Three voice icons, one per input mode (see VoiceDictationButton.tsx / mobile/VoiceCapsuleInput.tsx
+// and RealtimeVoiceDialog.tsx for where each is used):
 //
 // ① OrganizeIntoInputIcon -- "专家原话经过大模型整理以后进入输入框": mic + a sparkle (stands in
 //    for the LLM cleanup pass) + a curved arrow feeding down into an input-box outline.
