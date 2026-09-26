@@ -670,5 +670,5 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 **已验证**：新增测试覆盖"两人同样修正 → Gold"的记录导出后 `graph` 是原图、`gold_graph` 是修正图；标注中的记录 `gold_graph` 为空且不泄露结论；未标注记录 `annotator_count` 为 0；原始 / 角色归一化两种格式的导出通过 schema v2 校验。
 
-**顺带发现的原有问题（未在本次修改）**：匿名格式把 `provenance.expert_years_experience` 分桶成文字（如"10-20年"），而 schema v2 把这个字段定义为数字，所以匿名格式的导出文件过不了 schema 校验。需要决定是改 schema（允许文字区间）还是改分桶方式（例如导出区间下限的数字）。
+**顺带发现的原有问题（已修复）**：匿名格式把 `provenance.expert_years_experience` 分桶成文字（如"10-20年"），而 schema v2 原先把这个字段定义为数字，所以匿名格式的导出文件过不了 schema 校验。处理方式：schema v2 改为允许数字，或 `anonymize.bucket_experience_years` 产出的五个区间文字之一（5年以下 / 5-10年 / 10-20年 / 20-30年 / 30年以上）；导出测试对三种格式都做 schema 校验，另有测试保证 schema 里的区间列表和分桶函数一致。
 

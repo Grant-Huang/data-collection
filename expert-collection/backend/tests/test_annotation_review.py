@@ -191,8 +191,16 @@ def test_export_carries_original_and_gold_graph(client, version, model):
         assert pending["gold_graph"] is None and pending["annotation"]["gold_status"] == "pending_second_review"
         assert pending["annotation"]["final_verdict"] is None and pending["annotation"]["reason_tags"] == []  # nothing leaks early
         assert untouched["gold_graph"] is None and untouched["annotation"]["annotator_count"] == 0
-        if fmt != "anonymized":
-            # The anonymized format buckets provenance.expert_years_experience into text
-            # ("10-20年"), which schema v2 types as a number -- a pre-existing mismatch of that
-            # format, unrelated to gold_graph, so only the other two are schema-checked here.
-            jsonschema.validate({k: v for k, v in payload.items() if k != "export_format"}, import_pipeline._load_schema())
+        # Every format, the anonymized one included (its text experience buckets are allowed by
+        # schema v2), must stay re-importable.
+        jsonschema.validate({k: v for k, v in payload.items() if k != "export_format"}, import_pipeline._load_schema())
+    assert recs["rec_1"]["provenance"]["expert_years_experience"] == "10-20年"  # anonymized: bucketed
+
+
+def test_schema_allows_exactly_the_experience_buckets():
+    """schema v2 lists the anonymized buckets verbatim; keep it in step with anonymize.py."""
+    from app import anonymize, import_pipeline
+
+    field = import_pipeline._load_schema()["$defs"]["workflow_record"]["properties"]["provenance"]["properties"]["expert_years_experience"]
+    enum = next(a["enum"] for a in field["anyOf"] if a.get("type") == "string")
+    assert {anonymize.bucket_experience_years(y) for y in range(0, 60)} == set(enum)

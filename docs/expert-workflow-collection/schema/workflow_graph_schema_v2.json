@@ -256,7 +256,16 @@
               "type": "string"
             },
             "expert_years_experience": {
-              "type": "number"
+              "description": "Years of experience: a number as collected, or one of the text buckets the anonymized export uses instead (backend/app/anonymize.py bucket_experience_years).",
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "enum": ["5年以下", "5-10年", "10-20年", "20-30年", "30年以上"]
+                }
+              ]
             },
             "expert_id_hash": {
               "type": "string"
