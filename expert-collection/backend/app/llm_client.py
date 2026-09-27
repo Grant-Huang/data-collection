@@ -13,10 +13,13 @@ failure into an empty string or a fabricated success.
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
 
@@ -35,6 +38,38 @@ class LLMError(Exception):
 class LLMResult:
     content: str
     raw: dict[str, Any]
+
+
+def _post_chat_completion(url: str, api_key: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """One HTTP round trip: POST `body`, return the parsed JSON response. Raises `LLMError`
+    on any failure. Split out of `chat_completion` so it can be retried with a slightly
+    different body (see the `chat_template_kwargs` retry below) without duplicating the
+    request/response plumbing.
+    """
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_bytes = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:500]
+        raise LLMError("http_error", f"推理服务返回 {e.code}：{detail}") from e
+    except TimeoutError as e:
+        raise LLMError("timeout", f"推理服务请求超时（>{timeout}s）") from e
+    except urllib.error.URLError as e:
+        raise LLMError("timeout", f"无法连接推理服务：{e.reason}") from e
+
+    try:
+        return json.loads(raw_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise LLMError("bad_response", "推理服务返回的不是合法 JSON") from e
 
 
 def chat_completion(slot_config: dict, messages: list[dict[str, str]], *,
@@ -66,30 +101,24 @@ def chat_completion(slot_config: dict, messages: list[dict[str, str]], *,
     if response_format_json:
         body["response_format"] = {"type": "json_object"}
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw_bytes = resp.read()
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:500]
-        raise LLMError("http_error", f"推理服务返回 {e.code}：{detail}") from e
-    except TimeoutError as e:
-        raise LLMError("timeout", f"推理服务请求超时（>{timeout}s）") from e
-    except urllib.error.URLError as e:
-        raise LLMError("timeout", f"无法连接推理服务：{e.reason}") from e
-
-    try:
-        parsed = json.loads(raw_bytes.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise LLMError("bad_response", "推理服务返回的不是合法 JSON") from e
+        parsed = _post_chat_completion(url, api_key, body, timeout)
+    except LLMError as e:
+        # chat_template_kwargs is a llama.cpp/vLLM extension, not part of the OpenAI Chat
+        # Completions schema -- a strict OpenAI-compatible endpoint (e.g. a level pointed at
+        # a real cloud vendor instead of the local Qwen3 server) can reject the whole request
+        # over this one unrecognized field. Rather than let that silently break every call
+        # to that level, retry once without it before giving up, and log it so ops can see
+        # a level's endpoint doesn't tolerate this field instead of it just "not working".
+        if e.kind == "http_error" and "chat_template_kwargs" in body:
+            logger.warning(
+                "chat_completion: %s rejected chat_template_kwargs (%s); retrying once without it",
+                url, e,
+            )
+            retry_body = {k: v for k, v in body.items() if k != "chat_template_kwargs"}
+            parsed = _post_chat_completion(url, api_key, retry_body, timeout)
+        else:
+            raise
 
     try:
         content = parsed["choices"][0]["message"]["content"]
