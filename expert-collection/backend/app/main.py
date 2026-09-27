@@ -24,7 +24,10 @@ app.add_middleware(
         "https://workflow-data.inkpath.cc",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    # Every route this API actually defines, plus OPTIONS for the CORS preflight itself.
+    # allow_origins above is the real access-control boundary (an explicit hostname list,
+    # not "*"); this is defense in depth, not load-bearing on its own.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
