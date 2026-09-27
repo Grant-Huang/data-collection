@@ -43,6 +43,7 @@ Priorities P0-P7 are PRD section 3.2 / 18.2.
 from __future__ import annotations
 
 import copy
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -50,6 +51,8 @@ from typing import Any
 
 from . import graph_ops, guide_phrasing, llm_client, task_layer
 from . import settings as app_settings
+
+logger = logging.getLogger(__name__)
 
 NODE_TYPE_LABELS = {
     "decision": "判断",
@@ -973,21 +976,23 @@ def _llm_parse(text: str, slot_config: dict, system_prompt: str, want_correction
     keep up. We never silently degrade to a fake success; both attempts either return
     a parsed dict or raise back to the rule-based path.
     """
-    def _attempt(cfg: dict) -> dict[str, Any] | None:
+    def _attempt(cfg: dict, *, label: str) -> dict[str, Any] | None:
         try:
             parsed = llm_client.chat_completion_json(cfg, [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ])
-        except llm_client.LLMError:
+        except llm_client.LLMError as e:
+            logger.warning("_llm_parse[%s]: %s call failed (%s): %s", label, cfg.get("level"), e.kind, e)
             return None
         clauses = parsed.get("clauses")
         if (not isinstance(clauses, list) or not clauses
                 or not all(isinstance(c, str) and c.strip() for c in clauses)):
+            logger.warning("_llm_parse[%s]: %s returned an unusable clauses list: %r", label, cfg.get("level"), clauses)
             return None
         return parsed  # schema validation done below, once
 
-    parsed = _attempt(slot_config)
+    parsed = _attempt(slot_config, label="primary")
     if parsed is None:
         # Try C_flagship once. Same merge rules as the slot config (resolve_slot_for_call
         # returns the merged level config), but pinned to C_flagship regardless of the
@@ -1007,8 +1012,14 @@ def _llm_parse(text: str, slot_config: dict, system_prompt: str, want_correction
                     "model_name": level_cfg.get("model_name", ""),
                     "api_key": level_cfg.get("api_key", ""),
                 }
-                parsed = _attempt(upgrade_cfg)
+                parsed = _attempt(upgrade_cfg, label="upgrade")
+            else:
+                logger.info("_llm_parse: primary failed and C_flagship isn't configured; falling back to rule-based")
         except Exception:
+            # Anything here (bad settings shape, get_effective_settings() itself failing) is
+            # a bug, not an expected degradation path -- log the full traceback rather than
+            # silently taking the rule-based fallback as if this were a normal outcome.
+            logger.exception("_llm_parse: unexpected error while attempting the C_flagship upgrade")
             parsed = None
     if parsed is None:
         return None
