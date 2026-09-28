@@ -1304,7 +1304,7 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 - 必须有且只应有你能从对话里确认的 start 和 end 节点。
 
 只输出一个 JSON object，字段：
-- "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）}
+- "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）, "retry_semantics": null 或 {"enabled":true,"rework_reference_node_id":"要重做的那个节点的 node_id","condition":"什么情况下需要重做","description":"字符串或 null"}——这是表达"返工/重试"的**唯一**方式，永远不要为此另外建一条指回之前节点的边}
 - "edges"：数组，每个元素 {"edge_id": 短字符串（如 "e1"）, "from": 起点 node_id, "to": 终点 node_id, "edge_type": 以下之一：normal/conditional/parallel/merge/handoff/approval/timeout/exception_forward, "condition": 字符串或 null（仅 conditional 边，条件是什么）}
 - "start_node_ids"：字符串数组，start 节点的 node_id
 - "end_node_ids"：字符串数组，end 节点的 node_id
@@ -1376,6 +1376,30 @@ def _coerce_regenerated_graph(parsed: dict) -> dict | None:
     )
 
 
+def _apply_retry_semantics(graph: dict, raw_nodes: dict[str, dict]) -> None:
+    """Layers each node's `retry_semantics` on top of an already-coerced graph, mirroring
+    review_agent.extract_from_narrative's post-processing (`_coerce_regenerated_graph` itself
+    never sets this field -- see its docstring).
+
+    This has to be a second pass over the *finished* node list, not folded into
+    `_coerce_regenerated_graph`'s own node-building loop: a `rework_reference_node_id` can
+    legally point at a node that appears later in the model's own "nodes" array (the model
+    isn't required to list a rework target before the node that reworks it), so it can only be
+    validated once every node_id is known.
+    """
+    by_id = {n["node_id"] for n in graph["nodes"]}
+    for n in graph["nodes"]:
+        retry = raw_nodes.get(n["node_id"], {}).get("retry_semantics")
+        if isinstance(retry, dict) and retry.get("enabled"):
+            ref = retry.get("rework_reference_node_id")
+            n["retry_semantics"] = {
+                "enabled": True,
+                "rework_reference_node_id": ref if ref in by_id else None,
+                "condition": retry.get("condition") if isinstance(retry.get("condition"), str) else None,
+                "description": retry.get("description") if isinstance(retry.get("description"), str) else None,
+            }
+
+
 def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
     """Full transcript -> full replacement Graph, via the `graph_regenerate` LLM slot. Raises
     `llm_client.LLMError` on any failure (not configured/disabled, network/timeout, malformed
@@ -1396,4 +1420,13 @@ def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
     graph = _coerce_regenerated_graph(parsed)
     if graph is None:
         raise llm_client.LLMError("bad_response", f"模型输出的流程图结构不符合预期格式：{parsed!r}"[:500])
+    # Bug fix: _REGENERATE_SYSTEM_PROMPT's rule text told the model rework/retry must be
+    # expressed via retry_semantics, but until now the output JSON schema it was given never
+    # defined that field -- so a model asked to describe a workflow with a rework loop had no
+    # legal way to comply, and would either silently drop the rework path or (worse) build a
+    # back-edge anyway despite being told not to, which graph_validator then rejects as a
+    # cycle and fails the *entire* regeneration. The prompt now documents the field; this
+    # reads it back the same way extract_from_narrative does for the narrative-based path.
+    raw_nodes = {n.get("node_id"): n for n in parsed.get("nodes", []) if isinstance(n, dict)}
+    _apply_retry_semantics(graph, raw_nodes)
     return graph
