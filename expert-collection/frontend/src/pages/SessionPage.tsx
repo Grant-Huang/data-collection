@@ -14,7 +14,7 @@ export function SessionPage() {
   const {
     workflows, active, sending, creating, error, showArchived, regenerating,
     selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
-    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
+    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
   } = useWorkflowSession();
 
   // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
@@ -172,7 +172,7 @@ export function SessionPage() {
           )}
           <div style={{ flex: 1, minHeight: 0 }}>
             {/* Two tabs: 任务协作 (task layer) / SOP 步骤 (step layer) -- IMPLEMENTATION_PLAN.md section 18. */}
-            {active && <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} />}
+            {active && <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />}
           </div>
         </div>
       </div>

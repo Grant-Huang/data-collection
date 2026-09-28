@@ -55,6 +55,9 @@ interface WorkflowNodeData {
   unverified?: boolean;
   // Second line under the label (task-layer tab: owner / step count).
   subtitle?: string;
+  // Stable step number (Node.seq) -- shown so a person can say "第3步" and mean exactly this
+  // node, and the review-loop model is told the same number (review_agent._graph_for_prompt).
+  seq?: number | null;
 }
 
 function WorkflowNode({ data }: { data: WorkflowNodeData }) {
@@ -89,6 +92,18 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      {data.seq != null && (
+        <div
+          title={`第 ${data.seq} 步`}
+          style={{
+            position: "absolute", top: -9, left: -9, width: 20, height: 20, borderRadius: "50%",
+            background: "#fff", border: `1.4px solid ${deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
+            color: "#475569", fontSize: 10.5, fontWeight: 700, lineHeight: "18px", textAlign: "center",
+          }}
+        >
+          {data.seq}
+        </div>
+      )}
       {deco?.badge && (
         <div
           style={{
@@ -144,6 +159,7 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       nodeType: n.node_type,
       confirmed: n.expert_confirmed,
       hasRetry: !!n.retry_semantics?.enabled,
+      seq: n.seq,
     },
   }));
 
@@ -181,12 +197,21 @@ interface DagViewProps {
   // not trigger a re-layout.
   highlightNodeIds?: string[] | null;
   nodeDecorations?: Record<string, NodeDecoration>;
+  // Fires once when a manual drag ends (not on every intermediate mouse move). The caller
+  // persists it as that node's `manual_position`; see the layout() call above for how a saved
+  // manual_position wins over ELK's own answer on every future layout. Only reachable when
+  // dragging is actually enabled (!readOnly && !scrollable), so this is the one and only path
+  // that can move a node -- an LLM-driven edit never can (review_agent.sanitize_ops's
+  // update_node patch whitelist doesn't include position).
+  onNodeMove?: (nodeId: string, position: { x: number; y: number }) => void;
   // Optional second line under a node's label, keyed by node_id -- used by the task-layer tab
   // to show each task's owner / step count without changing the node label itself.
   subtitles?: Record<string, string>;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations, subtitles }: DagViewProps) {
+export function DagView({
+  graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations, onNodeMove, subtitles,
+}: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -271,6 +296,7 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
         decoration: nodeDecorations?.[n.id],
         clickable: !!onNodeTap,
         subtitle: subtitles?.[n.id],
+        seq: src?.seq,
       },
       };
     });
@@ -307,6 +333,13 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
       onNodeClick={(_, node) => {
         const original = graph.nodes.find((n) => n.node_id === node.id);
         if (original) onNodeTap?.(original);
+      }}
+      onNodeDragStop={(_, node) => {
+        // Update our own layout state immediately so the node stays put on the next
+        // unrelated re-render (we don't pass onNodesChange, so React Flow's internal drag
+        // position never reaches the `nodes` state on its own -- see layout()/setNodes above).
+        setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, position: node.position } : n)));
+        onNodeMove?.(node.id, node.position);
       }}
     >
       <Background color="#e5e7eb" gap={20} />

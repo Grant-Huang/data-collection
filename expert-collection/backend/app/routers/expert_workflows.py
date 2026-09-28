@@ -15,6 +15,7 @@ from ..models import (
     Completion,
     CreateWorkflowRequest,
     ManufacturingContextUpdateRequest,
+    NodePositionUpdateRequest,
     RegenerateGraphCheck,
     TurnRequest,
     TurnResponse,
@@ -185,6 +186,11 @@ def get_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
+    # Legacy records collected before `seq` existed -- backfill once, persisted, so every later
+    # read (and the review loop) sees the same numbers instead of them drifting per request.
+    if any(not isinstance(n.get("seq"), int) for n in record["graph"]["nodes"]):
+        graph_ops.assign_missing_seqs(record["graph"])
+        db.save(record)
     in_dataset = bool(dataset_records.versions_containing(workflow_id))
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
 
@@ -230,6 +236,35 @@ def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpda
     db.save(record)
     in_dataset = bool(dataset_records.versions_containing(workflow_id))
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
+
+
+@router.patch("/{workflow_id}/nodes/{node_id}/position")
+def update_node_position(workflow_id: str, node_id: str, req: NodePositionUpdateRequest, layer: str = "sop") -> dict:
+    """A manual drag on either DAG tab (DagView's onNodeMove, section 18's SOP / task layers) --
+    purely a view-layer preference, not a content edit, so it bypasses review_agent/turns
+    entirely: no clarifying question spent, no entry in the change list, no relayout of
+    anything else. This is also the *only* way a node's position can change --
+    review_agent.sanitize_ops's update_node patch whitelist (label / actor_roles / node_type /
+    decision_question) never includes position, so an LLM-driven edit can rename, rewire, or
+    delete a node around it, but never move it.
+    """
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if layer == "task":
+        task_workflow = record.get("task_workflow")
+        graph = task_workflow["graph"] if task_workflow else None
+    else:
+        graph = record.get("graph")
+    if not graph:
+        raise HTTPException(status_code=404, detail="graph not found")
+    node = next((n for n in graph["nodes"] if n["node_id"] == node_id), None)
+    if not node:
+        raise HTTPException(status_code=404, detail="node not found")
+    node["manual_position"] = {"x": req.x, "y": req.y}
+    record["updated_at"] = _now()
+    db.save(record)
+    return {"ok": True}
 
 
 def _describe_turn(record: dict, turn_id: str) -> str:

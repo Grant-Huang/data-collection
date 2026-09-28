@@ -44,6 +44,11 @@ class Node(BaseModel):
     # Free-form layout hint; React Flow fills this in, the backend just round-trips it
     # untouched (PRD 11.4: keep manual_position across re-layouts).
     manual_position: Optional[dict] = None
+    # Stable, human-facing step number ("第3步") -- assigned once at creation
+    # (graph_ops.assign_missing_seqs) and never renumbered afterward, so it stays a reliable
+    # natural-language handle for the review loop across a whole conversation. None only for
+    # data collected before this field existed and not yet backfilled.
+    seq: Optional[int] = None
 
 
 class Edge(BaseModel):
@@ -252,6 +257,14 @@ class WorkflowMetaUpdateRequest(BaseModel):
     name: Optional[str] = None
     pinned: Optional[bool] = None
     archived: Optional[bool] = None
+
+
+class NodePositionUpdateRequest(BaseModel):
+    """PATCH body for a manual node drag -- the only path that can ever move a node (see
+    Node.manual_position; review_agent.sanitize_ops's update_node patch whitelist never
+    includes position, so an LLM-driven edit cannot reach this)."""
+    x: float
+    y: float
 
 
 class DatasetVersionRef(BaseModel):

@@ -128,6 +128,43 @@ export function useWorkflowSession() {
     [active],
   );
 
+  // Manual drag on either DAG tab (section 18: SOP step graph or task graph). Optimistic +
+  // local-only: unlike the other actions here, this never refetches the whole record -- a drag
+  // is a view preference, not a conversation turn, so it must not clobber an in-flight
+  // sendTurn's optimistic append or reset scroll position.
+  const moveNode = useCallback(
+    (nodeId: string, position: { x: number; y: number }, layer: "sop" | "task" = "sop") => {
+      if (!active) return;
+      setActive((prev) => {
+        if (!prev) return prev;
+        if (layer === "task") {
+          if (!prev.task_workflow) return prev;
+          return {
+            ...prev,
+            task_workflow: {
+              ...prev.task_workflow,
+              graph: {
+                ...prev.task_workflow.graph,
+                nodes: prev.task_workflow.graph.nodes.map((n) =>
+                  n.node_id === nodeId ? { ...n, manual_position: position } : n,
+                ),
+              },
+            },
+          };
+        }
+        return {
+          ...prev,
+          graph: {
+            ...prev.graph,
+            nodes: prev.graph.nodes.map((n) => (n.node_id === nodeId ? { ...n, manual_position: position } : n)),
+          },
+        };
+      });
+      api.moveNode(active.id, nodeId, position, layer).catch((e) => setError(String(e)));
+    },
+    [active],
+  );
+
   // 左栏「...」下拉菜单：重命名 / 置顶 / 归档-取消归档。`workflowId` defaults to the active
   // workflow but takes an explicit id too, since the menu can act on a row that isn't
   // currently selected.
@@ -190,6 +227,7 @@ export function useWorkflowSession() {
     reopenWorkflow,
     updateManufacturingContext,
     updateWorkflowMeta,
+    moveNode,
     checkRegenerateGraph,
     regenerateGraph,
   };

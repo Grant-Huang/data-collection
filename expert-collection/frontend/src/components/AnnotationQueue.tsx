@@ -20,7 +20,9 @@ type Filter = "mine" | "all" | AnnotationStage;
 type Sort = "default" | "signals";
 
 const STAGE_ORDER: AnnotationStage[] = ["first_review", "second_review", "arbitration", "done"];
-const STAGE_COLOR: Record<AnnotationStage, { bg: string; fg: string }> = {
+// Exported for PriorAnnotationPanel's full-page left-column queue list, which shows the same
+// stage pills as this list rather than inventing its own palette.
+export const STAGE_COLOR: Record<AnnotationStage, { bg: string; fg: string }> = {
   first_review: { bg: "#f1f5f9", fg: "#667085" },
   second_review: { bg: "#eef4fc", fg: "#2a78d6" },
   arbitration: { bg: "#fff7ed", fg: "#c2410c" },
@@ -28,7 +30,7 @@ const STAGE_COLOR: Record<AnnotationStage, { bg: string; fg: string }> = {
 };
 
 export function AnnotationQueue({
-  title, versionId, records, summary, role, onChanged,
+  title, versionId, records, summary, role, onChanged, fullPage,
 }: {
   title?: ReactNode;
   versionId: string;
@@ -36,6 +38,11 @@ export function AnnotationQueue({
   summary: AnnotationSummary | null;
   role: Role;
   onChanged: () => void;
+  // Section 17.4 follow-up: open a record as a full-viewport three-column layout (queue |
+  // chat | graph), the same shell as SessionPage's 专家录入, instead of a centered modal.
+  // Only the live "数据标注" tab (AnnotationTab) asks for this -- Dashboard's "查看全部 -> 查看"
+  // keeps the modal, since it's nested inside its own smaller panel, not a dedicated tab.
+  fullPage?: boolean;
 }) {
   const { annotatorName, setAnnotatorName } = useAnnotatorName();
   const [filter, setFilter] = useState<Filter>("mine");
@@ -210,6 +217,8 @@ export function AnnotationQueue({
           recordId={openId}
           role={role}
           queue={queue}
+          records={records}
+          fullPage={fullPage}
           annotatorName={annotatorName}
           setAnnotatorName={setAnnotatorName}
           onClose={() => setOpenId(null)}

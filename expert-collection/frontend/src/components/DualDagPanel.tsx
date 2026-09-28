@@ -24,11 +24,15 @@ interface Props {
   sopEmptyLabel?: string;
   // Nodes the latest conversation turn added (desktop chat hover) -- SOP tab only.
   sopHighlightNodeIds?: string[] | null;
+  // Manual drag on either tab's graph; the caller persists it against the matching graph
+  // (WorkflowRecord.graph for "sop", TaskWorkflow.graph for "task" -- see useWorkflowSession's
+  // moveNode). Undefined when the panel is read-only/scrollable, since DagView never drags then.
+  onNodeMove?: (nodeId: string, position: { x: number; y: number }, tab: DagTab) => void;
   // Rendered under the graph for the current tab (mobile puts its stats/rules sections here).
   footer?: (tab: DagTab) => ReactNode;
 }
 
-export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmptyLabel, sopHighlightNodeIds, footer }: Props) {
+export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmptyLabel, sopHighlightNodeIds, onNodeMove, footer }: Props) {
   // Default to the SOP tab: it's the one that fills in live while the expert is talking; the
   // task layer only appears at the very end of the conversation.
   const [tab, setTab] = useState<DagTab>("sop");
@@ -91,6 +95,7 @@ export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmpty
           scrollable={scrollable}
           subtitles={taskSubtitles}
           onNodeTap={onNodeTap ? (n) => onNodeTap(n, "task") : undefined}
+          onNodeMove={onNodeMove ? (nodeId, pos) => onNodeMove(nodeId, pos, "task") : undefined}
         />
       ) : (
         <EmptyHint text={taskEmptyLabel} />
@@ -108,6 +113,7 @@ export function DualDagPanel({ active, readOnly, scrollable, onNodeTap, sopEmpty
         emptyLabel={sopEmptyLabel}
         highlightNodeIds={sopHighlightNodeIds}
         onNodeTap={onNodeTap ? (n) => onNodeTap(n, "sop") : undefined}
+        onNodeMove={onNodeMove ? (nodeId, pos) => onNodeMove(nodeId, pos, "sop") : undefined}
       />
     );
 

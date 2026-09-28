@@ -17,9 +17,10 @@ interface Props {
   role: Role;
   title?: ReactNode;
   emptyMessage?: string;
+  fullPage?: boolean;
 }
 
-export function DatasetRecordList({ versionId, role, title, emptyMessage }: Props) {
+export function DatasetRecordList({ versionId, role, title, emptyMessage, fullPage }: Props) {
   const [records, setRecords] = useState<PriorRecordSummary[]>([]);
   const [summary, setSummary] = useState<AnnotationSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +58,7 @@ export function DatasetRecordList({ versionId, role, title, emptyMessage }: Prop
           {emptyMessage ?? "这个版本没有可查看的记录。"}
         </div>
       ) : (
-        <AnnotationQueue title={title} versionId={versionId} records={records} summary={summary} role={role} onChanged={refresh} />
+        <AnnotationQueue title={title} versionId={versionId} records={records} summary={summary} role={role} onChanged={refresh} fullPage={fullPage} />
       )}
 
       {error && (

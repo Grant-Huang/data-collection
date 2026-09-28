@@ -32,6 +32,9 @@ export interface GraphNode {
   manual_position: { x: number; y: number } | null;
   // Section 17: verbatim quote(s) from the expert that back this step; empty = unverified.
   evidence?: string[];
+  // Stable step number ("第3步") -- assigned once at creation, never renumbered; null only for
+  // legacy data not yet backfilled (see graph_ops.assign_missing_seqs).
+  seq: number | null;
 }
 
 export interface GraphEdge {
