@@ -14,7 +14,7 @@ export function SessionPage() {
   const {
     workflows, active, sending, creating, error, showArchived, regenerating,
     selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
-    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph,
+    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
   } = useWorkflowSession();
 
   // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
@@ -178,7 +178,7 @@ export function SessionPage() {
                 {active.stage === "review_narrative" ? "您讲完之后，这里会生成流程图" : "背景信息收集中，还没开始画图……"}
               </div>
             ) : (
-              active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} />
+              active && <DagView graph={active.graph} highlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />
             )}
           </div>
         </div>

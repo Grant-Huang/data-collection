@@ -50,6 +50,8 @@ export const api = {
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),
   updateWorkflowMeta: (id: string, patch: WorkflowMetaUpdate) =>
     req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
+  moveNode: (id: string, nodeId: string, position: { x: number; y: number }) =>
+    req<{ ok: boolean }>("PATCH", `/api/expert-workflows/${id}/nodes/${nodeId}/position`, position),
   postTurn: (id: string, text: string, rawTranscript?: string) =>
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text, raw_transcript: rawTranscript ?? null }),
   reopenWorkflow: (id: string) =>

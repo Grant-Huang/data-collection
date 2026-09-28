@@ -220,6 +220,14 @@ class WorkflowMetaUpdateRequest(BaseModel):
     archived: Optional[bool] = None
 
 
+class NodePositionUpdateRequest(BaseModel):
+    """PATCH body for a manual node drag -- the only path that can ever move a node (see
+    Node.manual_position; review_agent.sanitize_ops's update_node patch whitelist never
+    includes position, so an LLM-driven edit cannot reach this)."""
+    x: float
+    y: float
+
+
 class DatasetVersionRef(BaseModel):
     id: str
     source_type: str

@@ -128,6 +128,28 @@ export function useWorkflowSession() {
     [active],
   );
 
+  // Manual drag on the DAG. Optimistic + local-only: unlike the other actions here, this
+  // never refetches the whole record -- a drag is a view preference, not a conversation turn,
+  // so it must not clobber an in-flight sendTurn's optimistic append or reset scroll position.
+  const moveNode = useCallback(
+    (nodeId: string, position: { x: number; y: number }) => {
+      if (!active) return;
+      setActive((prev) =>
+        prev
+          ? {
+              ...prev,
+              graph: {
+                ...prev.graph,
+                nodes: prev.graph.nodes.map((n) => (n.node_id === nodeId ? { ...n, manual_position: position } : n)),
+              },
+            }
+          : prev,
+      );
+      api.moveNode(active.id, nodeId, position).catch((e) => setError(String(e)));
+    },
+    [active],
+  );
+
   // 左栏「...」下拉菜单：重命名 / 置顶 / 归档-取消归档。`workflowId` defaults to the active
   // workflow but takes an explicit id too, since the menu can act on a row that isn't
   // currently selected.
@@ -190,6 +212,7 @@ export function useWorkflowSession() {
     reopenWorkflow,
     updateManufacturingContext,
     updateWorkflowMeta,
+    moveNode,
     checkRegenerateGraph,
     regenerateGraph,
   };

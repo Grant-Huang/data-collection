@@ -176,9 +176,16 @@ interface DagViewProps {
   // not trigger a re-layout.
   highlightNodeIds?: string[] | null;
   nodeDecorations?: Record<string, NodeDecoration>;
+  // Fires once when a manual drag ends (not on every intermediate mouse move). The caller
+  // persists it as that node's `manual_position`; see the layout() call above for how a saved
+  // manual_position wins over ELK's own answer on every future layout. Only reachable when
+  // dragging is actually enabled (!readOnly && !scrollable), so this is the one and only path
+  // that can move a node -- an LLM-driven edit never can (review_agent.sanitize_ops's
+  // update_node patch whitelist doesn't include position).
+  onNodeMove?: (nodeId: string, position: { x: number; y: number }) => void;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, highlightNodeIds, nodeDecorations, onNodeMove }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -298,6 +305,13 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, hi
       onNodeClick={(_, node) => {
         const original = graph.nodes.find((n) => n.node_id === node.id);
         if (original) onNodeTap?.(original);
+      }}
+      onNodeDragStop={(_, node) => {
+        // Update our own layout state immediately so the node stays put on the next
+        // unrelated re-render (we don't pass onNodesChange, so React Flow's internal drag
+        // position never reaches the `nodes` state on its own -- see layout()/setNodes above).
+        setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, position: node.position } : n)));
+        onNodeMove?.(node.id, node.position);
       }}
     >
       <Background color="#e5e7eb" gap={20} />
