@@ -9,6 +9,8 @@ import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
 import { VoiceDictationButton } from "./VoiceDictationButton";
+import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
+import { RealtimeVoiceIcon } from "../voice/icons";
 
 interface Props {
   turns: ConversationTurn[];
@@ -32,6 +34,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
   const [draft, setDraft] = useState("");
   // Raw recognizer output for everything dictated into the current draft.
   const [rawPieces, setRawPieces] = useState<string[]>([]);
+  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   function handleChipPick(pick: string) {
@@ -52,19 +55,27 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [insertText?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleSend() {
-    const text = draft.trim();
-    if (!text || sending || confirmed) return;
+  function handleSend(text?: string) {
+    const value = (text ?? draft).trim();
+    if (!value || sending || confirmed) return;
     setDraft("");
-    const raw = rawPieces.join("");
+    const raw = text ? undefined : rawPieces.join("") || undefined;
     setRawPieces([]);
-    onSend(text, raw || undefined);
+    onSend(value, raw);
   }
 
-  function handleDictated(text: string) {
+  // Icon ① -- VoiceDictationButton already ran the transcript through the LLM polish call
+  // (POST /api/voice/polish) before handing it here; this only appends it to the draft.
+  function handleDictatedFill(text: string) {
     setRawPieces((prev) => [...prev, text]);
     setDraft((prev) => (prev.trim() ? `${prev.trimEnd()}${text}` : text));
     requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  // Icon ② -- skips the draft box entirely, sent as its own turn with the raw transcript
+  // attached (never polished -- speed over cleanup is the point of this path).
+  function handleDictatedSend(text: string) {
+    onSend(text, text);
   }
 
   const hasChips = !!nextQuestion?.chips?.length;
@@ -81,7 +92,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
       />
 
       <div style={{ position: "relative", display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
-        <VoiceDictationButton disabled={confirmed || sending} onText={handleDictated} />
+        <VoiceDictationButton disabled={confirmed || sending} onFill={handleDictatedFill} onSend={handleDictatedSend} />
         <textarea
           ref={inputRef}
           value={draft}
@@ -122,7 +133,36 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
           }}
         />
         <button
-          onClick={handleSend}
+          aria-label="实时语音会话"
+          title="开始实时语音会话"
+          disabled={confirmed || sending}
+          onClick={() => setVoiceDialogOpen(true)}
+          style={{
+            border: "none",
+            background: "#eef4fc",
+            color: "#2a78d6",
+            width: 44,
+            height: 40,
+            borderRadius: 8,
+            flexShrink: 0,
+            cursor: confirmed || sending ? "default" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <RealtimeVoiceIcon size={24} />
+        </button>
+        {voiceDialogOpen && (
+          <RealtimeVoiceDialog
+            turns={turns}
+            sending={sending}
+            onSend={(text) => onSend(text, text)}
+            onClose={() => setVoiceDialogOpen(false)}
+          />
+        )}
+        <button
+          onClick={() => handleSend()}
           disabled={confirmed || sending || !draft.trim()}
           style={{
             border: "none",

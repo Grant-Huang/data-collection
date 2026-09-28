@@ -43,13 +43,16 @@ Priorities P0-P7 are PRD section 3.2 / 18.2.
 from __future__ import annotations
 
 import copy
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import graph_ops, guide_phrasing, llm_client
+from . import graph_ops, guide_phrasing, llm_client, task_layer
 from . import settings as app_settings
+
+logger = logging.getLogger(__name__)
 
 NODE_TYPE_LABELS = {
     "decision": "判断",
@@ -84,7 +87,8 @@ SWEEP_ORDER = ["branch", "parallel", "approval", "retry", "experience"]
 MAX_STEP_CHIPS = 8
 _CHIP_LABEL_MAX = 16
 
-REVIEW_TEXT = "流程图已经整理好了，请在右边从头到尾看一遍：有不对的地方直接告诉我，没问题就点「确认并提交」。"
+REVIEW_TEXT = ("两张图都整理好了：「任务协作」看谁负责哪一段、怎么交接，「SOP 步骤」看每一步具体怎么做。"
+               "请在右边切换着从头到尾看一遍：有不对的地方直接告诉我，没问题就点「确认并提交」。")
 REVIEW_REPEAT_TEXT = "已经在最终确认阶段了——有需要修改的地方，直接说，我来改图；没问题的话可以点「确认并提交」。"
 
 
@@ -310,6 +314,11 @@ def _dispatch_turn(state: dict[str, Any], text: str, graph: dict, skip_correctio
         pending = _case_context_set(pending, "experience_notes", text)
         return _to_review("这条经验很有价值，已经记下了。", pending, ops)
 
+    if stage == "task_outline":
+        return _handle_task_outline(text, pending, ops, graph)
+    if stage == "task_boundary":
+        return _handle_task_boundary(text, pending, ops, graph)
+
     # stage == "review" or unknown: nothing more to structurally extract
     return _Out("", ops, None, state, closing=REVIEW_REPEAT_TEXT)
 
@@ -412,8 +421,68 @@ def _next_sweep(ack: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
 
 
 def _to_review(ack: str, pending: dict, ops: list[dict]) -> _Out:
-    kept = {k: v for k, v in pending.items() if k in ("case_context", "sweeps_done")}
+    """Every path that finishes the step (SOP) graph ends here. Before final review, the expert
+    defines the task layer (IMPLEMENTATION_PLAN.md section 18) -- unless it already exists,
+    e.g. the expert is mid-review. A graph refresh drops `task_workflow` from pending (its
+    sop_node_ids pointed at the discarded graph), so the task question is asked again then.
+    """
+    if not pending.get("task_workflow"):
+        kept = {k: v for k, v in pending.items() if k in ("case_context", "sweeps_done", "category")}
+        nq = _q("task_outline_discovery", "P0", task_layer.TASK_OUTLINE_QUESTION,
+                chips=[task_layer.SINGLE_TASK_CHIP])
+        return _Out(ack, ops, nq, _st("task_outline", None, kept))
+    kept = {k: v for k, v in pending.items() if k in ("case_context", "sweeps_done", "task_workflow")}
     return _Out(ack, ops, None, _st("review", None, kept), closing=REVIEW_TEXT)
+
+
+# --- Task layer (IMPLEMENTATION_PLAN.md section 18) ------------------------------------------
+# The expert defines the task-collaboration DAG directly (priority-1 source); the LLM only
+# structures the outline (task_layer.parse_outline). Boundaries are the expert's own picks
+# among already-described steps, in graph (topological) order -- never guessed.
+
+def _handle_task_outline(text: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
+    g = _preview(graph, ops)
+    if text.startswith(task_layer.SINGLE_TASK_CHIP):
+        # Single-task name = the expert's own opening answer, never a made-up summary.
+        items, structured_by = [{"name": (pending.get("category") or "整体任务")[:40], "owner": None}], "rule"
+    else:
+        items, structured_by = task_layer.parse_outline(text)
+    items = items or [{"name": text[:40], "owner": None}]
+    if len(items) == 1:
+        return _finish_task_layer(pending, ops, g, items, [None], structured_by)
+    pending = {**pending, "_task_items": items, "_task_starts": [None], "_task_structured_by": structured_by}
+    return _ask_task_boundary("好，按这几个任务来分。", pending, ops, g)
+
+
+def _ask_task_boundary(ack: str, pending: dict, ops: list[dict], g: dict) -> _Out:
+    """Ask where task `len(starts)` begins. Only steps after the last real start so far are
+    offered, which keeps tasks contiguous and in the order the expert listed them."""
+    items, starts = pending["_task_items"], pending["_task_starts"]
+    options: dict[str, str | None] = dict(task_layer.step_candidates(g, [s for s in starts if s]))
+    options[task_layer.NO_STEP_CHIP] = None
+    nq = _q("task_boundary_discovery", "P0", task_layer.boundary_question(items, len(starts)), chips=list(options))
+    return _Out(ack, ops, nq, _st("task_boundary", None, {**pending, "_boundary_options": options}))
+
+
+def _handle_task_boundary(text: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
+    g = _preview(graph, ops)
+    options = pending.get("_boundary_options", {})
+    if text not in options:
+        # Same honest re-ask as the sweeps: matching free text to a step would be guessing.
+        return _ask_task_boundary("麻烦从下面列出的步骤里选一个，我才知道这个任务从哪里开始。", pending, ops, g)
+    starts = pending["_task_starts"] + [options[text]]
+    pending = {**pending, "_task_starts": starts}
+    if len(starts) < len(pending["_task_items"]):
+        return _ask_task_boundary("", pending, ops, g)
+    return _finish_task_layer(pending, ops, g, pending["_task_items"], starts,
+                              pending.get("_task_structured_by", "rule"))
+
+
+def _finish_task_layer(pending: dict, ops: list[dict], g: dict, items: list[dict],
+                       starts: list[str | None], structured_by: str) -> _Out:
+    task_workflow = task_layer.build_task_workflow(g, items, starts, structured_by)
+    pending = {k: v for k, v in pending.items() if not k.startswith("_task") and k != "_boundary_options"}
+    return _to_review("任务划分记下了。", {**pending, "task_workflow": task_workflow}, ops)
 
 
 def _cue_prefix(pending: dict, kind: str) -> str:
@@ -898,21 +967,65 @@ _CORRECTION_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的解析�
 
 
 def _llm_parse(text: str, slot_config: dict, system_prompt: str, want_correction: bool) -> dict | None:
-    """Returns None on ANY failure so the caller falls back to the rule-based path."""
-    try:
-        parsed = llm_client.chat_completion_json(slot_config, [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ])
-    except llm_client.LLMError:
+    """Returns None on ANY failure so the caller falls back to the rule-based path.
+
+    Auto-upgrade: if the primary slot fails for any reason (timeout / network / bad
+    JSON / schema mismatch) AND a higher tier (C_flagship) is configured and reachable,
+    retry once with the higher tier before giving up. This keeps the local 35B (free,
+    offline) as the default while letting cloud kick in when the local model can't
+    keep up. We never silently degrade to a fake success; both attempts either return
+    a parsed dict or raise back to the rule-based path.
+    """
+    def _attempt(cfg: dict, *, label: str) -> dict[str, Any] | None:
+        try:
+            parsed = llm_client.chat_completion_json(cfg, [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ])
+        except llm_client.LLMError as e:
+            logger.warning("_llm_parse[%s]: %s call failed (%s): %s", label, cfg.get("level"), e.kind, e)
+            return None
+        clauses = parsed.get("clauses")
+        if (not isinstance(clauses, list) or not clauses
+                or not all(isinstance(c, str) and c.strip() for c in clauses)):
+            logger.warning("_llm_parse[%s]: %s returned an unusable clauses list: %r", label, cfg.get("level"), clauses)
+            return None
+        return parsed  # schema validation done below, once
+
+    parsed = _attempt(slot_config, label="primary")
+    if parsed is None:
+        # Try C_flagship once. Same merge rules as the slot config (resolve_slot_for_call
+        # returns the merged level config), but pinned to C_flagship regardless of the
+        # primary slot's level.
+        try:
+            effective = app_settings.get_effective_settings()
+            # Build a C_flagship config explicitly. We do NOT reuse resolve_slot_for_call()
+            # because the slot-level overrides (enabled/temperature) belong to the primary
+            # caller; C_flagship here is a fixed upgrade target with primary's temperature.
+            level_cfg = (effective.get("llm_levels") or {}).get("C_flagship") or {}
+            if level_cfg.get("endpoint") and level_cfg.get("model_name"):
+                upgrade_cfg = {
+                    "level": "C_flagship",
+                    "enabled": True,
+                    "temperature": slot_config.get("temperature", 0.2),
+                    "endpoint": level_cfg.get("endpoint", ""),
+                    "model_name": level_cfg.get("model_name", ""),
+                    "api_key": level_cfg.get("api_key", ""),
+                }
+                parsed = _attempt(upgrade_cfg, label="upgrade")
+            else:
+                logger.info("_llm_parse: primary failed and C_flagship isn't configured; falling back to rule-based")
+        except Exception:
+            # Anything here (bad settings shape, get_effective_settings() itself failing) is
+            # a bug, not an expected degradation path -- log the full traceback rather than
+            # silently taking the rule-based fallback as if this were a normal outcome.
+            logger.exception("_llm_parse: unexpected error while attempting the C_flagship upgrade")
+            parsed = None
+    if parsed is None:
         return None
 
     clauses = parsed.get("clauses")
-    if (not isinstance(clauses, list) or not clauses
-            or not all(isinstance(c, str) and c.strip() for c in clauses)):
-        return None
     clauses = [c.strip()[:60] for c in clauses]
-
     relationship = parsed.get("relationship") if len(clauses) >= 2 else "serial"
     if relationship not in ("serial", "parallel", "ambiguous"):
         return None

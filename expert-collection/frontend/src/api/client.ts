@@ -50,8 +50,8 @@ export const api = {
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),
   updateWorkflowMeta: (id: string, patch: WorkflowMetaUpdate) =>
     req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
-  moveNode: (id: string, nodeId: string, position: { x: number; y: number }) =>
-    req<{ ok: boolean }>("PATCH", `/api/expert-workflows/${id}/nodes/${nodeId}/position`, position),
+  moveNode: (id: string, nodeId: string, position: { x: number; y: number }, layer: "sop" | "task" = "sop") =>
+    req<{ ok: boolean }>("PATCH", `/api/expert-workflows/${id}/nodes/${nodeId}/position?layer=${layer}`, position),
   postTurn: (id: string, text: string, rawTranscript?: string) =>
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text, raw_transcript: rawTranscript ?? null }),
   reopenWorkflow: (id: string) =>
@@ -111,6 +111,8 @@ export const api = {
     req<ExperimentDetail>("POST", `/api/experiments/${id}/regenerate-explanation`),
   compareExperiments: (experimentIds: string[]) =>
     req<ComparisonResult>("POST", "/api/experiments/compare", { experiment_ids: experimentIds }),
+
+  polishSpeech: (text: string) => req<{ text: string; polished: boolean }>("POST", "/api/voice/polish", { text }),
 
   getSettings: () => req<Settings>("GET", "/api/settings"),
   updateSettings: (patch: Record<string, unknown>) => req<Settings>("PUT", "/api/settings", patch),

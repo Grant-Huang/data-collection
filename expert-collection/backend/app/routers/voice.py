@@ -17,6 +17,9 @@ preview) and ...completed (transcript).
 Not verified against the real service in this sandbox (no DashScope key or network) -- only
 against a fake upstream that speaks the same event protocol. `QWEN_ASR_WS_BASE` exists so
 tests can point the relay at that fake upstream.
+
+Also carries the polish endpoint for voice icon ① ("专家原话经过大模型整理以后进入输入框") --
+see app/speech_polish.py for the LLM call + honest fallback.
 """
 from __future__ import annotations
 
@@ -28,6 +31,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import connect as ws_connect
 
 from .. import settings as app_settings
+from .. import speech_polish
+from ..models import SpeechPolishRequest, SpeechPolishResponse
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
@@ -73,6 +78,13 @@ def voice_status() -> dict:
     """Lets the frontend decide between the Qwen relay and the browser's own recognizer."""
     voice = _voice_config()
     return {"configured": bool(voice.get("api_key")), "model": voice.get("realtime_model") or DEFAULT_MODEL}
+
+
+@router.post("/polish", response_model=SpeechPolishResponse)
+def polish(req: SpeechPolishRequest) -> SpeechPolishResponse:
+    """Voice icon ① -- see app/speech_polish.py for the LLM call + honest fallback."""
+    text, polished = speech_polish.polish_transcript(req.text)
+    return SpeechPolishResponse(text=text, polished=polished)
 
 
 async def _send_error(ws: WebSocket, code: str, message: str) -> None:

@@ -5,6 +5,8 @@ import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
+import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
+import { RealtimeVoiceIcon } from "../voice/icons";
 
 interface Props {
   active: WorkflowRecord | null;
@@ -23,6 +25,7 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   // While recording, the voice capsule takes the whole input row -- next to the text input it
   // overflowed a 390px-wide screen and pushed its stop/send buttons off-screen.
   const [recording, setRecording] = useState(false);
+  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
   const nextQuestion = active?.unresolved[0] ?? null;
@@ -119,6 +122,29 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
             }
           }}
         />
+        {!recording && (
+        <button
+          aria-label="实时语音会话"
+          title="开始实时语音会话"
+          disabled={confirmed || !active}
+          onClick={() => setVoiceDialogOpen(true)}
+          style={{
+            border: "none", background: "#eef4fc", color: "#2a78d6", width: 40, height: 40,
+            borderRadius: "50%", flexShrink: 0, cursor: confirmed || !active ? "default" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <RealtimeVoiceIcon size={22} />
+        </button>
+        )}
+        {voiceDialogOpen && (
+          <RealtimeVoiceDialog
+            turns={active?.turns ?? []}
+            sending={sending}
+            onSend={(text) => handleSend(text, text)}
+            onClose={() => setVoiceDialogOpen(false)}
+          />
+        )}
         {!recording && (
         <button
           aria-label="发送"

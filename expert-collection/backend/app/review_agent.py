@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,12 +38,31 @@ from typing import Any
 from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, review_gaps
 from . import settings as app_settings
 
+logger = logging.getLogger(__name__)
+
 EXTRACT_SLOT = "graph_regenerate"   # C_standard by default
 REVIEW_SLOT = "guide_service"       # C_standard by default since section 17
-EXTRACT_TIMEOUT = 90.0
-REVIEW_TIMEOUT = 60.0
+EXTRACT_TIMEOUT = 180.0  # was 90.0; C_standard 27B on long narratives needs ~90-120s for prompt eval + structured output
+REVIEW_TIMEOUT = 180.0  # was 60.0; 35B MoE + reasoning mode needs ~60-90s for long prompts
 MIN_NARRATIVE_CHARS = 60
 MAX_SNAPSHOTS = 30
+
+
+def _timed_chat_completion_json(label: str, cfg: dict, messages: list[dict[str, str]], *, timeout: float) -> dict:
+    """`llm_client.chat_completion_json` plus a wall-clock log line either way -- EXTRACT_TIMEOUT
+    and REVIEW_TIMEOUT have both already been bumped once (90->180, 60->180) purely from
+    someone's guess at "how slow is the local model", with no actual timing data behind either
+    guess. Logging real elapsed time here means the next such change has evidence instead of
+    another guess.
+    """
+    started = time.monotonic()
+    try:
+        result = llm_client.chat_completion_json(cfg, messages, timeout=timeout)
+    except llm_client.LLMError as e:
+        logger.warning("%s: %s call failed after %.1fs (%s): %s", label, cfg.get("level"), time.monotonic() - started, e.kind, e)
+        raise
+    logger.info("%s: %s call took %.1fs", label, cfg.get("level"), time.monotonic() - started)
+    return result
 
 REASON_TAGS = ["missing_step", "extra_step", "wrong_order", "duplicate", "wrong_branch",
                "wrong_role", "unclear_label", "out_of_scope", "other"]
@@ -268,7 +289,7 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
     if not _usable(cfg):
         raise llm_client.LLMError("not_configured", "「整理流程图」环节未配置可用的模型（系统管理 → 模型配置）")
     narrative = "\n\n".join(narrative_texts)
-    parsed = llm_client.chat_completion_json(cfg, [
+    parsed = _timed_chat_completion_json("extract_from_narrative", cfg, [
         {"role": "system", "content": _EXTRACT_PROMPT},
         {"role": "user", "content": narrative},
     ], timeout=EXTRACT_TIMEOUT)
@@ -364,7 +385,7 @@ def _call_review_model(state: dict, graph: dict, turns: list[dict], text: str, o
     recent = [f"{'对方' if t['role'] == 'expert' else '助手'}：{t['text']}" for t in turns[-12:]]
     user = (f"背景（JSON）：{json.dumps(context, ensure_ascii=False)}\n\n最近的对话：\n" + "\n".join(recent) +
             f"\n\n对方刚说：{text}")
-    return llm_client.chat_completion_json(cfg, [
+    return _timed_chat_completion_json("_call_review_model", cfg, [
         {"role": "system", "content": system}, {"role": "user", "content": user},
     ], timeout=REVIEW_TIMEOUT)
 

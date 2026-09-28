@@ -128,24 +128,39 @@ export function useWorkflowSession() {
     [active],
   );
 
-  // Manual drag on the DAG. Optimistic + local-only: unlike the other actions here, this
-  // never refetches the whole record -- a drag is a view preference, not a conversation turn,
-  // so it must not clobber an in-flight sendTurn's optimistic append or reset scroll position.
+  // Manual drag on either DAG tab (section 18: SOP step graph or task graph). Optimistic +
+  // local-only: unlike the other actions here, this never refetches the whole record -- a drag
+  // is a view preference, not a conversation turn, so it must not clobber an in-flight
+  // sendTurn's optimistic append or reset scroll position.
   const moveNode = useCallback(
-    (nodeId: string, position: { x: number; y: number }) => {
+    (nodeId: string, position: { x: number; y: number }, layer: "sop" | "task" = "sop") => {
       if (!active) return;
-      setActive((prev) =>
-        prev
-          ? {
-              ...prev,
+      setActive((prev) => {
+        if (!prev) return prev;
+        if (layer === "task") {
+          if (!prev.task_workflow) return prev;
+          return {
+            ...prev,
+            task_workflow: {
+              ...prev.task_workflow,
               graph: {
-                ...prev.graph,
-                nodes: prev.graph.nodes.map((n) => (n.node_id === nodeId ? { ...n, manual_position: position } : n)),
+                ...prev.task_workflow.graph,
+                nodes: prev.task_workflow.graph.nodes.map((n) =>
+                  n.node_id === nodeId ? { ...n, manual_position: position } : n,
+                ),
               },
-            }
-          : prev,
-      );
-      api.moveNode(active.id, nodeId, position).catch((e) => setError(String(e)));
+            },
+          };
+        }
+        return {
+          ...prev,
+          graph: {
+            ...prev.graph,
+            nodes: prev.graph.nodes.map((n) => (n.node_id === nodeId ? { ...n, manual_position: position } : n)),
+          },
+        };
+      });
+      api.moveNode(active.id, nodeId, position, layer).catch((e) => setError(String(e)));
     },
     [active],
   );

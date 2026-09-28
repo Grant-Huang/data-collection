@@ -98,6 +98,12 @@ def _mark_confirmed(record: dict) -> None:
         node["expert_confirmed"] = True
     for edge in record["graph"]["edges"]:
         edge["expert_confirmed"] = True
+    # The task layer (IMPLEMENTATION_PLAN.md section 18) is confirmed together with the step
+    # graph -- the expert reviewed both tabs.
+    task_graph = (record.get("task_workflow") or {}).get("graph")
+    if task_graph:
+        for item in task_graph["nodes"] + task_graph["edges"]:
+            item["expert_confirmed"] = True
     if record.get("_review"):
         record["_review"]["phase"] = "done"
         record["stage"] = "review_done"
@@ -228,18 +234,26 @@ def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpda
 
 
 @router.patch("/{workflow_id}/nodes/{node_id}/position")
-def update_node_position(workflow_id: str, node_id: str, req: NodePositionUpdateRequest) -> dict:
-    """A manual drag on the DAG (DagView's onNodeMove) -- purely a view-layer preference, not a
-    content edit, so it bypasses review_agent/turns entirely: no clarifying question spent, no
-    entry in the change list, no relayout of anything else. This is also the *only* way a
-    node's position can change -- review_agent.sanitize_ops's update_node patch whitelist
-    (label / actor_roles / node_type / decision_question) never includes position, so an
-    LLM-driven edit can rename, rewire, or delete a node around it, but never move it.
+def update_node_position(workflow_id: str, node_id: str, req: NodePositionUpdateRequest, layer: str = "sop") -> dict:
+    """A manual drag on either DAG tab (DagView's onNodeMove, section 18's SOP / task layers) --
+    purely a view-layer preference, not a content edit, so it bypasses review_agent/turns
+    entirely: no clarifying question spent, no entry in the change list, no relayout of
+    anything else. This is also the *only* way a node's position can change --
+    review_agent.sanitize_ops's update_node patch whitelist (label / actor_roles / node_type /
+    decision_question) never includes position, so an LLM-driven edit can rename, rewire, or
+    delete a node around it, but never move it.
     """
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
-    node = next((n for n in record["graph"]["nodes"] if n["node_id"] == node_id), None)
+    if layer == "task":
+        task_workflow = record.get("task_workflow")
+        graph = task_workflow["graph"] if task_workflow else None
+    else:
+        graph = record.get("graph")
+    if not graph:
+        raise HTTPException(status_code=404, detail="graph not found")
+    node = next((n for n in graph["nodes"] if n["node_id"] == node_id), None)
     if not node:
         raise HTTPException(status_code=404, detail="node not found")
     node["manual_position"] = {"x": req.x, "y": req.y}
@@ -324,6 +338,7 @@ def _rollback_to_turn(record: dict, turn_id: str) -> dict:
     record["_guide_state"] = state_before
     record["stage"] = state_before["stage"]
     record["case_context"] = state_before.get("pending", {}).get("case_context")
+    record["task_workflow"] = state_before.get("pending", {}).get("task_workflow")
     return original_turn
 
 
@@ -363,6 +378,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
             record["case_context"] = new_state.get("pending", {}).get("case_context")
+            record["task_workflow"] = new_state.get("pending", {}).get("task_workflow")
         elif options[picked] is None:
             # "不是，这是新的一步" -- resume normal processing of the original text at the
             # original stage, as if the correction check had never fired.
@@ -379,6 +395,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
             record["case_context"] = new_state.get("pending", {}).get("case_context")
+            record["task_workflow"] = new_state.get("pending", {}).get("task_workflow")
         else:
             original_turn = _rollback_to_turn(record, options[picked])
             original_question = original_turn.get("question") or original_turn["text"]
@@ -391,6 +408,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
             record["_guide_state"] = new_state
             record["stage"] = new_state["stage"]
             record["case_context"] = new_state.get("pending", {}).get("case_context")
+            record["task_workflow"] = new_state.get("pending", {}).get("task_workflow")
     else:
         record.setdefault("_turn_state_log", []).append(
             {"turn_id": expert_turn_id, "state_before": state, "graph_before": graph_before})
@@ -401,6 +419,7 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         record["_guide_state"] = new_state
         record["stage"] = new_state["stage"]
         record["case_context"] = new_state.get("pending", {}).get("case_context")
+        record["task_workflow"] = new_state.get("pending", {}).get("task_workflow")
 
         if new_state["stage"] == "awaiting_turn_selection_setup":
             # guide_service asked to defer to a turn picker but can't build the candidate list
@@ -598,6 +617,7 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     record["_guide_state"] = new_state
     record["stage"] = new_state["stage"]
     record["case_context"] = new_state.get("pending", {}).get("case_context")
+    record["task_workflow"] = new_state.get("pending", {}).get("task_workflow")
     record["unresolved"] = [next_question] if next_question else []
     record["turns"].append(_assistant_turn(reply, next_question))
     # Per-turn rollback snapshots hold pre-refresh graphs -- rolling back across the refresh
