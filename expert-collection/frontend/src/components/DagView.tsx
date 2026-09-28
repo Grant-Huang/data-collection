@@ -55,6 +55,9 @@ interface WorkflowNodeData {
   unverified?: boolean;
   // Second line under the label (task-layer tab: owner / step count).
   subtitle?: string;
+  // Stable step number (Node.seq) -- shown so a person can say "第3步" and mean exactly this
+  // node, and the review-loop model is told the same number (review_agent._graph_for_prompt).
+  seq?: number | null;
 }
 
 function WorkflowNode({ data }: { data: WorkflowNodeData }) {
@@ -89,6 +92,18 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      {data.seq != null && (
+        <div
+          title={`第 ${data.seq} 步`}
+          style={{
+            position: "absolute", top: -9, left: -9, width: 20, height: 20, borderRadius: "50%",
+            background: "#fff", border: `1.4px solid ${deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
+            color: "#475569", fontSize: 10.5, fontWeight: 700, lineHeight: "18px", textAlign: "center",
+          }}
+        >
+          {data.seq}
+        </div>
+      )}
       {deco?.badge && (
         <div
           style={{
@@ -144,6 +159,7 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       nodeType: n.node_type,
       confirmed: n.expert_confirmed,
       hasRetry: !!n.retry_semantics?.enabled,
+      seq: n.seq,
     },
   }));
 
@@ -280,6 +296,7 @@ export function DagView({
         decoration: nodeDecorations?.[n.id],
         clickable: !!onNodeTap,
         subtitle: subtitles?.[n.id],
+        seq: src?.seq,
       },
       };
     });

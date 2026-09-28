@@ -672,6 +672,27 @@ Dashboard（13）、实验中心（14）、管理页面（16）、系统设置�
 
 **顺带发现的原有问题（已修复）**：匿名格式把 `provenance.expert_years_experience` 分桶成文字（如"10-20年"），而 schema v2 原先把这个字段定义为数字，所以匿名格式的导出文件过不了 schema 校验。处理方式：schema v2 改为允许数字，或 `anonymize.bucket_experience_years` 产出的五个区间文字之一（5年以下 / 5-10年 / 10-20年 / 20-30年 / 30年以上）；导出测试对三种格式都做 schema 校验，另有测试保证 schema 里的区间列表和分桶函数一致。
 
+### 17.9 节点手动拖动位置持久化
+
+流程图节点此前能拖动（`nodesDraggable`），但拖动结果从未写回：`DagView` 没接 `onNodesChange`，后端也没有对应接口，图内容一变（`layoutKey` 变化触发重新布局）拖动就被冲掉。现在接通了：
+
+- `Node.manual_position`（早先就在，`PRD.md` §11.4）由新接口 `PATCH /api/expert-workflows/{id}/nodes/{node_id}/position`（`?layer=sop|task`）落盘，只改这一个字段，不经过 `review_agent`、不占用澄清轮次、不进改动列表。
+- `DagView` 的 `onNodeDragStop` 把拖动结果上报给 `onNodeMove` 回调；`useWorkflowSession.moveNode` 乐观更新本地 `active.graph` / `active.task_workflow.graph`，再异步保存，不整条记录重新拉取。
+- LLM 改图（`review_agent.sanitize_ops` 的 `update_node` patch 白名单只有 `label / actor_roles / node_type / decision_question`）永远碰不到这个字段——这个接口是唯一的写入路径，移动永远只能是人的动作；新增节点没有 `manual_position`，交给 ELK 自动布局；删除节点时位置随之消失；`graph_ops.apply_ops` 的 `update_node` 是 `dict.update(patch)` 原地合并，没在 patch 里的字段原样保留，所以 LLM 改结构时其它已拖动节点的位置不受影响。
+
+### 17.10 节点稳定编号（`seq`），支持用自然语言按编号改图/标注
+
+专家或标注人想说"第3步"时，此前只能靠模型自己拿这句话去跟每个节点的 `label`做语义匹配——标签相近或用户只说编号不带内容时容易猜错。现在每个节点在创建时就分配一个稳定的编号 `Node.seq`：
+
+- **分配时机**：`graph_ops.assign_missing_seqs`（graph_ops.apply_ops 结尾统一调用，覆盖逐步引导 FSM 和审阅对话的每一次改图操作）+ `guide_service._coerce_regenerated_graph`（覆盖讲述整体抽取、"刷新工作流图"整体重生成）——这是图里节点被创建的仅有的两处地方。历史数据 / 导入数据的兜底：`datasets.py` 的导入确认接口对每条上传记录的图做一次回填；`expert_workflows.py` 的 `GET /{id}` 对没有 `seq` 的旧会话回填并持久化，保证同一条记录以后每次读到的编号一致，不会每次都重算。
+- **只在创建时分配，之后永不重排**：`update_node` 只合并 patch 里给的字段，从不包含 `seq`；改名、连线变化、删除别的节点都不会让编号跳动，所以"第3步"在第 2 轮和第 10 轮说的是同一个节点。代价是删除节点后编号会有空档，且和"从头数"的顺序不一定一致——这是特意的取舍。
+- **模型侧**：`review_agent._graph_for_prompt` 把 `seq` 一起发给模型，并在系统提示里说明"对方说第3步/步骤3就是指 seq=3 的节点，直接按 seq 匹配，但改图操作里仍然用 node_id"。
+- **人看的一侧**：`DagView` 在每个节点左上角画一个小圆圈显示编号；`review_agent.readback()`（确认前的复述）也改成显示 `seq`，不再是每次重新数的位置序号——两处编号对上，用户读到的和说出口的是同一个数字。
+
+### 17.11 标注页复用专家录入的三栏布局
+
+`PriorAnnotationPanel` 原来是一个居中的模态弹窗（图 + 对话左右两栏）。现在"数据标注" tab（`AnnotationTab`）打开一条记录时改用和 `SessionPage`（专家录入）同样的整页三栏、可拖拽布局：左栏是打开这条记录时冻结的那份队列（复用 ←/→ 的同一个 `queue`，点击可以切换）、中间是记录信息 + 对话（或"开始标注"提示）、右栏是流程图（不再是缩放贴合的滚动模式，而是像专家录入一样可以平移缩放）。Dashboard 的"查看全部 → 查看"入口不受影响，继续用原来的居中弹窗（那里是嵌在一个更小的面板里，不是独立 tab，整页布局在那放不下）。两种外观共用同一份状态和业务逻辑，只有最外层的两段渲染代码不同。
+
 ## 18. 双层工作流：任务协作 DAG + SOP 步骤 DAG（一次专家输入同时产出两张图）
 
 依据：《AgentNexus 双层工作流 / 双 DAG 设计 v0.2》评审后，产品负责人确认的范围。

@@ -1371,7 +1371,9 @@ def _coerce_regenerated_graph(parsed: dict) -> dict | None:
     if not isinstance(end_ids, list) or not all(isinstance(s, str) and s in node_ids for s in end_ids):
         end_ids = [n["node_id"] for n in nodes if n["node_type"] == "end"]
 
-    return {"graph_type": "dag", "start_node_ids": start_ids, "end_node_ids": end_ids, "nodes": nodes, "edges": edges}
+    return graph_ops.assign_missing_seqs(
+        {"graph_type": "dag", "start_node_ids": start_ids, "end_node_ids": end_ids, "nodes": nodes, "edges": edges}
+    )
 
 
 def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:

@@ -186,6 +186,11 @@ def get_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
+    # Legacy records collected before `seq` existed -- backfill once, persisted, so every later
+    # read (and the review loop) sees the same numbers instead of them drifting per request.
+    if any(not isinstance(n.get("seq"), int) for n in record["graph"]["nodes"]):
+        graph_ops.assign_missing_seqs(record["graph"])
+        db.save(record)
     in_dataset = bool(dataset_records.versions_containing(workflow_id))
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
 

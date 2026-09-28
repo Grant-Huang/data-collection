@@ -11,14 +11,24 @@
 //
 // Queue workflow: the dashboard passes its current filtered list; ←/→ (when not typing) move
 // between records, Esc closes, and after submitting "下一条" goes straight on.
+//
+// `fullPage` (section 17.4 follow-up, "复用专家录入界面"): the live 数据标注 tab opens this as a
+// full-viewport three-column layout -- queue | chat | graph -- the same shell SessionPage uses
+// for 专家录入 (useResizablePanel + ResizeHandle), instead of the centered modal. Dashboard's
+// "查看全部 -> 查看" keeps the modal (it's nested in a smaller panel of its own, not a tab), so
+// both shapes share the same state/logic below and only the two render branches at the bottom
+// differ.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../api/client";
-import type { PriorRecordDetail, ReviewSession, Role } from "../api/types";
+import type { PriorRecordDetail, PriorRecordSummary, ReviewSession, Role } from "../api/types";
 import { GOLD_STATUS_LABELS, REASON_TAG_LABELS, STAGE_LABELS, VERDICT_LABELS } from "../api/types";
+import { useResizablePanel } from "../hooks/useResizablePanel";
 import { accessFor } from "../utils/annotationAccess";
 import { AnnotationCard, RoundHistory, VERDICT_COLOR } from "./annotation/AnnotationCards";
+import { STAGE_COLOR } from "./AnnotationQueue";
 import { ChatPanel } from "./ChatPanel";
 import { DagView, type NodeDecoration } from "./DagView";
+import { ResizeHandle } from "./ResizeHandle";
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -28,12 +38,16 @@ function isTypingTarget(t: EventTarget | null): boolean {
 const CHANGED_COLOR = "#0f766e";
 
 export function PriorAnnotationPanel({
-  versionId, recordId, role, queue, annotatorName, setAnnotatorName, onClose, onSaved, onNavigate,
+  versionId, recordId, role, queue, records, fullPage, annotatorName, setAnnotatorName, onClose, onSaved, onNavigate,
 }: {
   versionId: string;
   recordId: string;
   role: Role;
   queue: string[];
+  // Only needed (and only passed) for the fullPage left-column list -- the modal's queue nav
+  // is just "上一条/下一条" and never needs to show other records' names/stages.
+  records?: PriorRecordSummary[];
+  fullPage?: boolean;
   annotatorName: string;
   setAnnotatorName: (name: string) => void;
   onClose: () => void;
@@ -160,6 +174,242 @@ export function PriorAnnotationPanel({
   });
   const graphShown = session ? session.graph : detail && detail.stage === "done" && !showOriginal && detail.final_graph ? detail.final_graph : detail?.graph;
 
+  // fullPage's left column: the same frozen `queue` the ←/→ shortcuts walk, resolved back to
+  // each record's display info so it reads like SessionPage's session list, not just ids.
+  const left = useResizablePanel("annotation-queue", 260, 180, 420);
+  const rightViewportWidth = typeof window !== "undefined" ? window.innerWidth : 1440;
+  const right = useResizablePanel("annotation-dag", Math.round(rightViewportWidth * 0.32), 260, 900);
+  const queueRecords = useMemo(
+    () => queue.map((id) => records?.find((r) => r.record_id === id)).filter((r): r is PriorRecordSummary => !!r),
+    [queue, records],
+  );
+
+  // Shared between both render shapes below.
+  const headerBlock = detail && (
+    <div style={{ padding: "12px 20px 8px" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {detail.name}
+        <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px", background: "#eef4fc", color: "#2a78d6" }}>
+          {STAGE_LABELS[detail.stage]}
+        </span>
+        {detail.gold_status === "gold" && (
+          <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px", background: "#fff7e6", color: "#b45309" }}>
+            {GOLD_STATUS_LABELS.gold}
+          </span>
+        )}
+        {session && (
+          <span style={{ fontSize: 11.5, color: "#94a3b8", fontWeight: 400 }}>
+            {session.role_in_process === "arbitration" ? "你在仲裁" : "独立标注（看不到其他人的结论）"}
+          </span>
+        )}
+      </div>
+      {detail.signals.length > 0 && (
+        <div style={{ marginTop: 4, fontSize: 12 }}>
+          <button
+            onClick={() => setShowSignals((s) => !s)}
+            style={{ border: "none", background: "none", padding: 0, cursor: "pointer", color: errorSignals ? "#991b1b" : "#92400e", fontSize: 12 }}
+          >
+            {errorSignals ? "✖" : "⚠"} 机器预检信号 {detail.signals.length} 条（结构校验 / 近重复 / 疑似微工作流复用）{showSignals ? "▲" : "▼"}
+          </button>
+          {showSignals && (
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#475569" }}>
+              {detail.signals.map((s, i) => (
+                <li key={i} style={{ color: s.level === "error" ? "#991b1b" : undefined }}>{s.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {access?.reason && detail.stage !== "done" && !session && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 10px" }}>
+          {access.reason}——这条请留给其他人处理，可以按 → 跳到下一条。
+        </div>
+      )}
+      {error && <div style={{ marginTop: 8, color: "#991b1b", fontSize: 12 }}>{error}</div>}
+    </div>
+  );
+
+  const chatPane = session && (
+    <ChatPanel
+      turns={session.turns}
+      graph={session.graph}
+      nextQuestion={null}
+      onSend={send}
+      sending={sending}
+      confirmed={session.status !== "active"}
+      insertText={insert}
+      placeholder={
+        session.status === "active"
+          ? "直接说哪里不对、缺了什么；都对就回复「确认」。Enter 发送，Shift+Enter 换行"
+          : session.status === "submitted" ? "这次标注已提交" : "这次标注已失效"
+      }
+    />
+  );
+
+  const submittedBanner = session && submitted && (
+    <div style={{ padding: "10px 16px", borderTop: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#f6fef6" }}>
+      <div style={{ flex: 1, fontSize: 12.5 }}>
+        已提交：
+        {session.proposal && (
+          <b style={{ color: VERDICT_COLOR[session.proposal.verdict] }}>{VERDICT_LABELS[session.proposal.verdict]}</b>
+        )}
+        {session.proposal?.reason_tags.length
+          ? `（${session.proposal.reason_tags.map((t) => REASON_TAG_LABELS[t]).join("、")}）`
+          : ""}
+      </div>
+      {nextId && (
+        <button
+          onClick={() => onNavigate(nextId)}
+          style={{ border: "none", background: "#2a78d6", color: "#fff", borderRadius: 6, padding: "6px 14px", fontWeight: 600, cursor: "pointer" }}
+        >
+          下一条 →
+        </button>
+      )}
+    </div>
+  );
+
+  if (fullPage) {
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 51, background: "#fff", display: "flex", flexDirection: "column", fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 16px", borderBottom: "1px solid #e5e7eb", flexShrink: 0 }}>
+          <button onClick={onClose} style={{ ...navBtn(true), display: "flex", alignItems: "center", gap: 4 }}>← 返回列表（Esc）</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "#667085" }}>标注人</span>
+            <input
+              value={annotatorName}
+              onChange={(e) => setAnnotatorName(e.target.value)}
+              disabled={!!session}
+              placeholder="你的姓名（会记住）"
+              style={{ width: 140, border: `1px solid ${annotatorName.trim() ? "#d0d5dd" : "#f59e0b"}`, borderRadius: 6, padding: "4px 8px", fontSize: 12 }}
+            />
+          </div>
+        </div>
+
+        {!detail ? (
+          <div style={{ color: error ? "#991b1b" : "#94a3b8", fontSize: 12.5, padding: 40, textAlign: "center" }}>{error ?? "加载中…"}</div>
+        ) : (
+          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+            {/* Left: the queue this record was opened from. */}
+            <div style={{ width: left.collapsed ? 0 : left.width, overflow: "hidden", flexShrink: 0, transition: left.collapsed ? "width 0.15s ease-out" : undefined }}>
+              <div style={{ width: left.width, height: "100%", overflowY: "auto", padding: "8px 0" }}>
+                {queueRecords.map((r) => {
+                  const color = STAGE_COLOR[r.stage];
+                  const active = r.record_id === recordId;
+                  return (
+                    <button
+                      key={r.record_id}
+                      onClick={() => onNavigate(r.record_id)}
+                      style={{
+                        display: "block", width: "100%", textAlign: "left", border: "none", cursor: "pointer",
+                        background: active ? "#eef4fc" : "transparent", borderLeft: `3px solid ${active ? "#2a78d6" : "transparent"}`,
+                        padding: "8px 14px", fontSize: 12.5, color: active ? "#1f2937" : "#475569",
+                      }}
+                    >
+                      <div style={{ fontWeight: active ? 700 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                      <div style={{ marginTop: 3, display: "flex", gap: 4, alignItems: "center" }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 600, borderRadius: 999, padding: "1px 8px", background: color.bg, color: color.fg }}>
+                          {STAGE_LABELS[r.stage]}
+                        </span>
+                        {r.gold_status === "gold" && <span style={{ fontSize: 10.5, color: "#b45309" }}>{GOLD_STATUS_LABELS.gold}</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <ResizeHandle panelSide="left" collapsed={left.collapsed} onToggleCollapse={left.toggleCollapsed} onResize={(dx) => left.resizeBy(dx, 1)} />
+
+            {/* Middle: record header + conversation (or the "start" prompt before one exists). */}
+            <div style={{ flex: 1, minWidth: 0, borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column" }}>
+              {headerBlock}
+              {session?.role_in_process === "arbitration" && roundIndependents.length > 0 && (
+                <details open style={{ margin: "0 20px 10px", fontSize: 12 }}>
+                  <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600 }}>两位标注人的结果</summary>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    {roundIndependents.slice(0, 2).map((a) => <AnnotationCard key={a.annotation_id} a={a} />)}
+                  </div>
+                </details>
+              )}
+              {detail.stage === "done" && !session && (
+                <div style={{ margin: "0 20px 10px", fontSize: 13 }}>
+                  最终结论：
+                  <b style={{ color: detail.final_verdict ? VERDICT_COLOR[detail.final_verdict] : undefined }}>
+                    {detail.final_verdict ? VERDICT_LABELS[detail.final_verdict] : "—"}
+                  </b>
+                  {detail.final_graph && (
+                    <span style={{ marginLeft: 10 }}>
+                      {[false, true].map((orig) => (
+                        <button
+                          key={String(orig)}
+                          onClick={() => setShowOriginal(orig)}
+                          style={{
+                            border: `1px solid ${showOriginal === orig ? "#2a78d6" : "#d0d5dd"}`, color: showOriginal === orig ? "#2a78d6" : "#667085",
+                            background: "#fff", borderRadius: 6, padding: "2px 10px", cursor: "pointer", fontSize: 12, marginLeft: 4,
+                          }}
+                        >
+                          {orig ? "原始图" : "修正后的图"}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                </div>
+              )}
+              {session ? (
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  <div style={{ flex: 1, minHeight: 0 }}>{chatPane}</div>
+                  {submittedBanner}
+                </div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 20px" }}>
+                  {detail.stage === "done" ? (
+                    <RoundHistory detail={detail} />
+                  ) : access?.canAct ? (
+                    <div style={{ fontSize: 12.5, color: "#475569" }}>
+                      {annotatorName.trim() ? (
+                        <button
+                          onClick={startSession}
+                          disabled={starting}
+                          style={{ border: "none", background: "#2a78d6", color: "#fff", borderRadius: 8, padding: "8px 18px", fontWeight: 600, cursor: "pointer" }}
+                        >
+                          {starting ? "正在打开…" : `以「${annotatorName.trim()}」的身份开始标注`}
+                        </button>
+                      ) : (
+                        "先在右上角填写你的姓名，再开始标注。"
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+            <ResizeHandle panelSide="right" collapsed={right.collapsed} onToggleCollapse={right.toggleCollapsed} onResize={(dx) => right.resizeBy(dx, -1)} />
+
+            {/* Right: the graph, panned/zoomed like SessionPage's (not the modal's shrink-to-fit
+                scroll mode -- this column has real height to work with). */}
+            <div style={{ width: right.collapsed ? 0 : right.width, overflow: "hidden", flexShrink: 0, transition: right.collapsed ? "width 0.15s ease-out" : undefined, display: "flex", flexDirection: "column" }}>
+              <div style={{ width: right.width, height: "100%", display: "flex", flexDirection: "column" }}>
+                {session && (
+                  <div style={{ fontSize: 11.5, color: "#94a3b8", padding: "8px 12px 0" }}>
+                    这是你的工作副本，绿色是你改过的步骤。点一下步骤，会把它的名字填进输入框。
+                  </div>
+                )}
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  {graphShown && (
+                    <DagView
+                      graph={graphShown}
+                      readOnly
+                      nodeDecorations={decorations}
+                      onNodeTap={session && !submitted ? (n) => setInsert({ text: `「${n.label}」`, nonce: Date.now() }) : undefined}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.35)", zIndex: 50 }} />
@@ -207,47 +457,7 @@ export function PriorAnnotationPanel({
         ) : (
           <>
             {/* Record header */}
-            <div style={{ padding: "12px 20px 8px" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                {detail.name}
-                <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px", background: "#eef4fc", color: "#2a78d6" }}>
-                  {STAGE_LABELS[detail.stage]}
-                </span>
-                {detail.gold_status === "gold" && (
-                  <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px", background: "#fff7e6", color: "#b45309" }}>
-                    {GOLD_STATUS_LABELS.gold}
-                  </span>
-                )}
-                {session && (
-                  <span style={{ fontSize: 11.5, color: "#94a3b8", fontWeight: 400 }}>
-                    {session.role_in_process === "arbitration" ? "你在仲裁" : "独立标注（看不到其他人的结论）"}
-                  </span>
-                )}
-              </div>
-              {detail.signals.length > 0 && (
-                <div style={{ marginTop: 4, fontSize: 12 }}>
-                  <button
-                    onClick={() => setShowSignals((s) => !s)}
-                    style={{ border: "none", background: "none", padding: 0, cursor: "pointer", color: errorSignals ? "#991b1b" : "#92400e", fontSize: 12 }}
-                  >
-                    {errorSignals ? "✖" : "⚠"} 机器预检信号 {detail.signals.length} 条（结构校验 / 近重复 / 疑似微工作流复用）{showSignals ? "▲" : "▼"}
-                  </button>
-                  {showSignals && (
-                    <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "#475569" }}>
-                      {detail.signals.map((s, i) => (
-                        <li key={i} style={{ color: s.level === "error" ? "#991b1b" : undefined }}>{s.message}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {access?.reason && detail.stage !== "done" && !session && (
-                <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 10px" }}>
-                  {access.reason}——这条请留给其他人处理，可以按 → 跳到下一条。
-                </div>
-              )}
-              {error && <div style={{ marginTop: 8, color: "#991b1b", fontSize: 12 }}>{error}</div>}
-            </div>
+            {headerBlock}
 
             <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: session ? "1fr 1fr" : "1fr", borderTop: "1px solid #f1f3f5" }}>
               {/* Graph column */}
@@ -321,43 +531,8 @@ export function PriorAnnotationPanel({
               {/* Conversation column */}
               {session && (
                 <div style={{ minHeight: 0, display: "flex", flexDirection: "column" }}>
-                  <div style={{ flex: 1, minHeight: 0 }}>
-                    <ChatPanel
-                      turns={session.turns}
-                      graph={session.graph}
-                      nextQuestion={null}
-                      onSend={send}
-                      sending={sending}
-                      confirmed={session.status !== "active"}
-                      insertText={insert}
-                      placeholder={
-                        session.status === "active"
-                          ? "直接说哪里不对、缺了什么；都对就回复「确认」。Enter 发送，Shift+Enter 换行"
-                          : session.status === "submitted" ? "这次标注已提交" : "这次标注已失效"
-                      }
-                    />
-                  </div>
-                  {submitted && (
-                    <div style={{ padding: "10px 16px", borderTop: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#f6fef6" }}>
-                      <div style={{ flex: 1, fontSize: 12.5 }}>
-                        已提交：
-                        {session.proposal && (
-                          <b style={{ color: VERDICT_COLOR[session.proposal.verdict] }}>{VERDICT_LABELS[session.proposal.verdict]}</b>
-                        )}
-                        {session.proposal?.reason_tags.length
-                          ? `（${session.proposal.reason_tags.map((t) => REASON_TAG_LABELS[t]).join("、")}）`
-                          : ""}
-                      </div>
-                      {nextId && (
-                        <button
-                          onClick={() => onNavigate(nextId)}
-                          style={{ border: "none", background: "#2a78d6", color: "#fff", borderRadius: 6, padding: "6px 14px", fontWeight: 600, cursor: "pointer" }}
-                        >
-                          下一条 →
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <div style={{ flex: 1, minHeight: 0 }}>{chatPane}</div>
+                  {submittedBanner}
                 </div>
               )}
             </div>

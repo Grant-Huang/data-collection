@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import annotation_signals, anonymize, audit, db, dataset_records, explain, gold_annotation, import_pipeline, quality, settings as settings_module
+from .. import annotation_signals, anonymize, audit, db, dataset_records, explain, gold_annotation, graph_ops, import_pipeline, quality, settings as settings_module
 from ..models import (
     DatasetVersionListResponse,
     DatasetVersionSummary,
@@ -357,6 +357,12 @@ def import_confirm(req: ImportConfirmRequest) -> DatasetVersionSummary:
     records = [r for r in req.payload["records"] if r.get("record_id") in importable_ids]
     if not records:
         raise HTTPException(status_code=400, detail="没有可导入的记录")
+    # An uploaded file's nodes never went through graph_ops.apply_ops, so they never picked up
+    # a `seq` -- give them one now, in the order the file listed them, so annotation's
+    # natural-language node references ("第3步") work on imported records the same as on ones
+    # collected through the app.
+    for r in records:
+        graph_ops.assign_missing_seqs(r["graph"])
 
     dataset_meta = req.payload["dataset_meta"]
     source_type = dataset_meta["source_type"]

@@ -179,12 +179,19 @@ def _topo_order(graph: dict) -> list[dict]:
 
 def readback(graph: dict) -> str:
     """The whole graph as numbered plain-language lines -- generated from the graph itself so
-    what the person confirms is exactly what gets saved."""
+    what the person confirms is exactly what gets saved.
+
+    The number shown is each node's stable `seq` (see graph_ops.assign_missing_seqs), not a
+    freshly counted position -- lines are still walked in topological order for readability,
+    but the numbers themselves must match what's on the DagView node and what the model was
+    told, or "第3步" would mean a different thing in the readback than everywhere else. Falls
+    back to the walk position only for the handful of legacy graphs never backfilled with seq.
+    """
     by_id = {n["node_id"]: n for n in graph.get("nodes", [])}
     lines = []
     for i, n in enumerate(_topo_order(graph), 1):
         actors = f"（{'、'.join(n['actor_roles'])}）" if n.get("actor_roles") else ""
-        text = f"{i}. {n['label']}{actors}"
+        text = f"{n.get('seq') or i}. {n['label']}{actors}"
         outs = [e for e in graph.get("edges", []) if e["from"] == n["node_id"]]
         if n["node_type"] == "decision" and outs:
             parts = [f"{e.get('condition') or '（条件未说明）'} → {by_id.get(e['to'], {}).get('label', e['to'])}" for e in outs]
@@ -327,6 +334,9 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
 
 
 _REVIEW_PROMPT = """你是制造业流程审阅助手。你面前有一张流程图，对方（{who}）正在和你对话，目的是把这张图改到完全符合实际。
+流程图 JSON 里每个节点除了 node_id、label，还带一个 seq——这是人看的步骤编号，对方说"第3步"
+"步骤3"就是指 seq=3 的那个节点，直接按 seq 匹配，不用去猜标签像不像。但改图操作（ops）里引用节点
+永远用 node_id，seq 只用来听懂对方指的是哪一步，不出现在 ops 里。
 
 你要做的：
 1. 理解对方这句话：是在纠正/补充（intent=edit）、回答你刚才的问题（intent=answer）、表示满意没什么要改了（intent=satisfied）{reject_line}{adopt_line}，还是别的（intent=other）。
@@ -350,7 +360,7 @@ _REVIEW_PROMPT = """你是制造业流程审阅助手。你面前有一张流程
 
 def _graph_for_prompt(graph: dict) -> str:
     return json.dumps({
-        "nodes": [{k: n.get(k) for k in ("node_id", "node_type", "label", "actor_roles", "decision_question")} |
+        "nodes": [{k: n.get(k) for k in ("node_id", "seq", "node_type", "label", "actor_roles", "decision_question")} |
                   ({"retry_semantics": n["retry_semantics"]} if n.get("retry_semantics") else {})
                   for n in graph.get("nodes", [])],
         "edges": [{k: e.get(k) for k in ("edge_id", "from", "to", "edge_type", "condition")} for e in graph.get("edges", [])],
