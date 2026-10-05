@@ -405,3 +405,13 @@ def test_both_dag_prompts_carry_the_label_rules():
     from app import guide_service
     assert guide_service.DAG_LABEL_RULES in review_agent._EXTRACT_PROMPT
     assert guide_service.DAG_LABEL_RULES in guide_service._REGENERATE_SYSTEM_PROMPT
+
+
+def test_label_rules_do_not_fold_approvals_into_ends_or_call_exclusive_merges_complete():
+    """Two rule wordings from the first end-to-end round that the second round showed backfiring:
+    an approval used as the example of an end label (the model then dropped the approval node),
+    and "××都完成" applied to exclusive merges (reads as if every branch happened)."""
+    from app import guide_service
+    rules = guide_service.DAG_LABEL_RULES
+    assert "不要直接当成 end" in rules
+    assert "merge" in rules and "不要写\"都完成\"" in rules
