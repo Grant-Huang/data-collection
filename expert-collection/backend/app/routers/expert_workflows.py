@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent
+from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent, review_gaps
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -359,6 +359,18 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         return _post_review_turn(record, req)
 
     state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
+    if state.get("stage") == "review" and review_agent.available():
+        # The step-by-step guide has nothing left to ask, and it can't turn "第3步其实是班长做的"
+        # into a graph edit. With a model configured, continue in the review loop's edit mode
+        # (the same one 「继续修改」 uses) so asking for a change in the chat actually changes
+        # the graph. Its own clarification items are dropped except structural ones: the
+        # sweeps already asked the coverage questions, and these steps came verbatim from the
+        # expert's answers, so "我没找到原话" would be a false alarm.
+        review = review_agent.new_state("edit")
+        review["gaps"] = [g if g["kind"] in ("validator", "decision_condition") else {**g, "status": "dismissed"}
+                          for g in review_gaps.refresh([], record["graph"], mode="edit")]
+        record["_review"] = review
+        return _post_review_turn(record, req)
     expert_turn_id = uuid.uuid4().hex[:8]
     history = list(record["turns"])
     graph_before = copy.deepcopy(record["graph"])

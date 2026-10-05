@@ -89,7 +89,12 @@ _CHIP_LABEL_MAX = 16
 
 REVIEW_TEXT = ("两张图都整理好了：「任务协作」看谁负责哪一段、怎么交接，「SOP 步骤」看每一步具体怎么做。"
                "请在右边切换着从头到尾看一遍：有不对的地方直接告诉我，没问题就点「确认并提交」。")
-REVIEW_REPEAT_TEXT = "已经在最终确认阶段了——有需要修改的地方，直接说，我来改图；没问题的话可以点「确认并提交」。"
+# Only reached when no model is configured: with one, routers/expert_workflows.py hands
+# review-stage messages to the review loop (review_agent, "edit" mode), which does edit the
+# graph. Without one there is nothing that can turn free text into graph edits, so don't
+# promise it.
+REVIEW_REPEAT_TEXT = ("已经在最终确认阶段了。目前没有配置 AI 模型，我没法按对话内容改图——没问题的话可以点「确认并提交」；"
+                      "需要修改的话，请先在「系统管理 → 模型配置」里配置模型，再告诉我要改哪里。")
 
 
 @dataclass
@@ -1315,9 +1320,10 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 def _coerce_regenerated_graph(parsed: dict) -> dict | None:
     """Validates + normalizes the model's raw JSON into the same shape `graph_ops.new_graph()`
     produces (so it can replace `record["graph"]` directly and go through the usual
-    `graph_validator.validate` afterward). Returns None on any structural problem -- the
-    caller turns that into an `LLMError("bad_response", ...)`, same spirit as
-    `_llm_understand_step`'s None-on-bad-shape contract.
+    `graph_validator.validate` afterward). Returns None when the nodes themselves are unusable
+    (missing/duplicate id, unknown type, empty label) -- the caller turns that into an
+    `LLMError("bad_response", ...)`, same spirit as `_llm_understand_step`'s
+    None-on-bad-shape contract. A single bad *edge* is dropped instead (see below).
     """
     raw_nodes = parsed.get("nodes")
     raw_edges = parsed.get("edges")
@@ -1351,12 +1357,16 @@ def _coerce_regenerated_graph(parsed: dict) -> dict | None:
         if not isinstance(e, dict):
             return None
         edge_id, from_id, to_id, edge_type = e.get("edge_id"), e.get("from"), e.get("to"), e.get("edge_type")
-        if not isinstance(edge_id, str) or not edge_id or edge_id in edge_ids:
-            return None
-        if from_id not in node_ids or to_id not in node_ids:
-            return None
+        # One bad edge (a typo'd endpoint, a self-loop) used to throw away the whole draft --
+        # the expert got "格式不符合要求" for a single slip. Drop just that edge: whatever
+        # it leaves unconnected is reported by graph_validator (dangling_head / dangling_tail)
+        # and asked about, never guessed.
+        if from_id not in node_ids or to_id not in node_ids or from_id == to_id:
+            continue
         if edge_type not in _VALID_EDGE_TYPES:
-            return None
+            edge_type = "conditional" if isinstance(e.get("condition"), str) and e["condition"].strip() else "normal"
+        if not isinstance(edge_id, str) or not edge_id or edge_id in edge_ids:
+            edge_id = next(f"e_{i}" for i in range(len(raw_edges) + len(edge_ids) + 1) if f"e_{i}" not in edge_ids)
         edge_ids.add(edge_id)
         edges.append({
             "edge_id": edge_id, "from": from_id, "to": to_id, "edge_type": edge_type,
@@ -1429,4 +1439,8 @@ def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
     # reads it back the same way extract_from_narrative does for the narrative-based path.
     raw_nodes = {n.get("node_id"): n for n in parsed.get("nodes", []) if isinstance(n, dict)}
     _apply_retry_semantics(graph, raw_nodes)
+    # Same structural clean-up as the narrative draft (review_agent.extract_from_narrative):
+    # a back-edge becomes retry_semantics instead of failing validation, a missing start/end
+    # is added, start/end id lists follow node types.
+    graph_ops.normalize_draft(graph)
     return graph

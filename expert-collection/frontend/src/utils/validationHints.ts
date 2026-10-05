@@ -11,6 +11,8 @@ const HINTS: Record<string, string> = {
   parallel_join_needs_two: "回到会话里确认一下，两边完成后是怎么汇合的。",
   merge_needs_two: "回到会话里告诉我，还有哪条路径也会汇入这一步。",
   isolated_node: "回到会话里说明这一步和前后是怎么连起来的。",
+  dangling_head: "回到会话里告诉我：这一步是在哪一步之后做的？",
+  dangling_tail: "回到会话里告诉我：这一步做完之后接着做什么，还是到这里就结束了？",
   empty_condition: "回到会话里说清楚这条分支具体的判断条件是什么。",
   cycle_detected: "回到会话里换个说法描述返工，不用说“回到第几步重做”，直接说“如果不合格会怎样”。",
   duplicate_node_id: "这是系统内部问题，无需专家处理，请联系管理员。",

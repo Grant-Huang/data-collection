@@ -204,6 +204,12 @@ def readback(graph: dict) -> str:
         if retry.get("enabled"):
             target = by_id.get(retry.get("rework_reference_node_id") or "", {}).get("label")
             text += f"；{retry.get('condition') or '不合格'}时回到「{target}」重做" if target else "；可能需要返工"
+        # Make a broken connection visible in what the person confirms, instead of a list
+        # that reads fine while a step hangs off the side of the graph.
+        if n["node_type"] not in ("start",) and not any(e["to"] == n["node_id"] for e in graph.get("edges", [])):
+            text += "（前面没有接上任何步骤）"
+        if n["node_type"] not in ("end",) and not outs:
+            text += "（之后没有接下去）"
         lines.append(text)
     return "\n".join(lines)
 
@@ -218,8 +224,18 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
     removed = [b_nodes[i] for i in b_nodes if i not in a_nodes]
     added = [a_nodes[i] for i in a_nodes if i not in b_nodes]
     survivors_text = " ".join(n["label"] for n in a_nodes.values())
+    added_ids = {n["node_id"] for n in added}
     for n in added:
-        out.append(f"新增步骤「{n['label']}」")
+        # Say where the new step sits -- "新增步骤「X」" alone, next to "去掉了「A」→「B」",
+        # read like the edit had cut the graph instead of inserting into it.
+        prev = [a_nodes[e["from"]]["label"] for e in after.get("edges", [])
+                if e["to"] == n["node_id"] and e["from"] in a_nodes and e["from"] not in added_ids]
+        nxt = [a_nodes[e["to"]]["label"] for e in after.get("edges", [])
+               if e["from"] == n["node_id"] and e["to"] in a_nodes and e["to"] not in added_ids]
+        where = "、".join(f"「{x}」" for x in prev[:2])
+        then = "、".join(f"「{x}」" for x in nxt[:2])
+        pos = f"（接在{where}之后" + (f"，然后接{then}" if then else "") + "）" if where else (f"（之后接{then}）" if then else "")
+        out.append(f"新增步骤「{n['label']}」{pos}")
         cats.add("missing_step" if n["node_type"] != "decision" else "wrong_branch")
     for n in removed:
         if n["label"] and n["label"] in survivors_text:
@@ -262,8 +278,25 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
         elif (e.get("condition") or "") != (b_edges[k].get("condition") or ""):
             out.append(f"「{name(k[0])}」→「{name(k[1])}」的条件改为「{e.get('condition') or '无'}」")
             cats.add("wrong_branch")
+
+    def through_added(src: str, dst: str) -> bool:
+        """A -> (new steps) -> B: the old A -> B was split by an insertion, not cut."""
+        queue, seen = [k[1] for k in a_edges if k[0] == src and k[1] in added_ids], set()
+        while queue:
+            x = queue.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            for k2 in a_edges:
+                if k2[0] == x:
+                    if k2[1] == dst:
+                        return True
+                    if k2[1] in added_ids:
+                        queue.append(k2[1])
+        return False
+
     for k in b_edges:
-        if k not in a_edges and k[0] not in touched and k[1] not in touched:
+        if k not in a_edges and k[0] not in touched and k[1] not in touched and not through_added(*k):
             out.append(f"去掉了「{name(k[0])}」→「{name(k[1])}」")
             cats.add("wrong_order")
     return out, cats
@@ -319,9 +352,20 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
                 "condition": retry.get("condition") if isinstance(retry.get("condition"), str) else None,
                 "description": retry.get("description") if isinstance(retry.get("description"), str) else None,
             }
-    for e in graph["edges"]:
-        e["source_turn_ids"] = [turn_id]
+    # Structural clean-up the model so often gets wrong (back-edge for rework, no start/end,
+    # stale start/end id lists) -- see graph_ops.normalize_draft. Runs after the model's own
+    # retry_semantics are read above, so a node that already has one keeps it.
+    report = graph_ops.normalize_draft(graph)
+    for item in graph["nodes"] + graph["edges"]:
+        item["source_turn_ids"] = [turn_id]
     gaps = []
+    if report["end"] and report["end_from"]:
+        names = "、".join(f"「{x}」" for x in report["end_from"][:4])
+        gaps.append(review_gaps.model_gap(f"我把{names}当成最后一步，做到这里整件事就算结束了吗？", [report["end"]]))
+    labels = {n["node_id"]: n["label"] for n in graph["nodes"]}
+    for e in report["cycles"]:
+        gaps.append(review_gaps.model_gap(
+            f"「{labels.get(e['from'], '')}」不行的话，是回到「{labels.get(e['to'], '')}」重新做吗？", [e["from"]]))
     for u in parsed.get("uncertainties") or []:
         if isinstance(u, dict) and isinstance(u.get("question"), str) and u["question"].strip():
             ids = [i for i in (u.get("node_ids") or []) if i in by_id]
@@ -420,23 +464,44 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
                 taken.add(nid)
                 return nid
 
+    edge_map: dict[str, str] = {}
+
     def ref(x: Any) -> str | None:
         if not isinstance(x, str):
             return None
         return id_map.get(x, x if x in node_ids else None)
 
-    for op in raw_ops if isinstance(raw_ops, list) else []:
+    def eref(x: Any) -> str | None:
+        if not isinstance(x, str):
+            return None
+        return edge_map.get(x, x if x in edge_ids else None)
+
+    def valid_new_node(op: Any) -> bool:
+        n = op.get("node") if isinstance(op, dict) and op.get("op") == "add_node" else None
+        return (isinstance(n, dict) and isinstance(n.get("label"), str) and bool(n["label"].strip())
+                and n.get("node_type") in _NODE_TYPES)
+
+    raw_ops = raw_ops if isinstance(raw_ops, list) else []
+    # New node ids are mapped up front and add_node ops are emitted first: models don't
+    # reliably list a node before the add_edge that references it, and resolving references
+    # in list order used to drop such an edge silently -- leaving the new step unconnected.
+    raw_ops = [op for op in raw_ops if valid_new_node(op)] + [op for op in raw_ops if not valid_new_node(op)]
+    for op in raw_ops:
+        if valid_new_node(op) and isinstance(op["node"].get("node_id"), str) and op["node"]["node_id"] not in id_map:
+            id_map[op["node"]["node_id"]] = fresh("n", node_ids)
+
+    for op in raw_ops:
         if not isinstance(op, dict):
             continue
         kind = op.get("op")
         if kind == "add_node" and isinstance(op.get("node"), dict):
             n = op["node"]
-            label = n.get("label")
-            if not isinstance(label, str) or not label.strip() or n.get("node_type") not in _NODE_TYPES:
+            if not valid_new_node(op):
                 continue
-            new_id = fresh("n", node_ids)
-            if isinstance(n.get("node_id"), str):
-                id_map[n["node_id"]] = new_id
+            label = n["label"]
+            new_id = id_map.get(n.get("node_id")) if isinstance(n.get("node_id"), str) else None
+            if new_id is None or any(o["op"] == "add_node" and o["node"]["node_id"] == new_id for o in ops):
+                new_id = fresh("n", node_ids)
             quote = evidence.get(n.get("node_id")) if isinstance(evidence, dict) else None
             ok = isinstance(quote, str) and quote_found(quote, sources)
             if not ok and n["node_type"] not in ("start", "end"):
@@ -472,12 +537,15 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
             src, dst = ref(e.get("from")), ref(e.get("to"))
             if not src or not dst or src == dst or e.get("edge_type") not in _EDGE_TYPES:
                 continue
+            new_eid = fresh("e", edge_ids)
+            if isinstance(e.get("edge_id"), str):
+                edge_map[e["edge_id"]] = new_eid
             ops.append({"op": "add_edge", "edge": {
-                "edge_id": fresh("e", edge_ids), "from": src, "to": dst, "edge_type": e["edge_type"],
+                "edge_id": new_eid, "from": src, "to": dst, "edge_type": e["edge_type"],
                 "condition": e.get("condition") if isinstance(e.get("condition"), str) and e["condition"].strip() else None,
                 "confidence": 0.8, "expert_confirmed": False, "source_turn_ids": [turn_id],
             }})
-        elif kind == "update_edge" and op.get("edge_id") in edge_ids and isinstance(op.get("patch"), dict):
+        elif kind == "update_edge" and eref(op.get("edge_id")) and isinstance(op.get("patch"), dict):
             p, patch = op["patch"], {}
             for key in ("from", "to"):
                 if key in p and ref(p[key]):
@@ -487,9 +555,9 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
             if "condition" in p and (p["condition"] is None or isinstance(p["condition"], str)):
                 patch["condition"] = p["condition"]
             if patch:
-                ops.append({"op": "update_edge", "edge_id": op["edge_id"], "patch": patch})
-        elif kind == "remove_edge" and op.get("edge_id") in edge_ids:
-            ops.append({"op": "remove_edge", "edge_id": op["edge_id"]})
+                ops.append({"op": "update_edge", "edge_id": eref(op["edge_id"]), "patch": patch})
+        elif kind == "remove_edge" and eref(op.get("edge_id")):
+            ops.append({"op": "remove_edge", "edge_id": eref(op["edge_id"])})
         elif kind == "set_retry_semantics" and ref(op.get("node_id")) and isinstance(op.get("retry_semantics"), dict):
             r = op["retry_semantics"]
             ops.append({"op": "set_retry_semantics", "node_id": ref(op["node_id"]), "retry_semantics": {
@@ -658,9 +726,17 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
                       "pending_gap_id": last["pending_gap_id"], "proposal": last.get("proposal")})
         return TurnResult(body="已撤销上一轮的修改，流程图恢复到之前的样子。", graph=last["graph"], state=state)
     if intent == "confirm":
-        if any(i["level"] == "error" for i in graph_validator.validate(graph)):
+        # A "丢弃" verdict says the record can't be used at all -- its graph is not what gets
+        # saved, so structural problems must not block submitting that verdict.
+        rejecting = (state.get("proposal") or {}).get("verdict") == "rejected"
+        errors = [i for i in graph_validator.validate(graph) if i["level"] == "error"]
+        if errors and not rejecting:
             state["gaps"] = review_gaps.refresh(state["gaps"], graph, mode=mode)
-            result = TurnResult(body="流程图还有结构上的问题，暂时不能提交。", state=state)
+            # Name the problems: once the clarification list is used up, the follow-up below is
+            # the generic read-back, and "there's a problem" alone gives nothing to act on.
+            listed = "；".join(dict.fromkeys(i["message"] for i in errors[:4]))
+            result = TurnResult(body=f"流程图还有结构上的问题，暂时不能提交：{listed}。请告诉我该怎么接，我来改。",
+                                state=state)
             return _next_question(state, graph, result, None)
         state["phase"] = "done"
         return TurnResult(body="好的，已确认。", state=state, finished=True)
@@ -696,6 +772,9 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         ops, unverified = sanitize_ops(out.get("ops"), graph, out.get("evidence") or {}, [text] + person_texts, turn_id)
         if ops:
             candidate = graph_ops.apply_ops(copy.deepcopy(graph), ops)
+            # Finish the wiring the model left half-done (removed step not bridged, new step
+            # connected on one side only) before judging the edit -- see rewire_after_edit.
+            graph_ops.rewire_after_edit(graph, candidate, turn_id=turn_id)
             introduced = _error_keys(candidate) - _error_keys(graph)
             if introduced:
                 msgs = {i["message"] for i in graph_validator.validate(candidate) if (i["code"], i.get("node_id"), i.get("edge_id")) in introduced}
