@@ -360,3 +360,48 @@ def test_rule_guide_review_hands_off_to_review_loop_when_model_configured(client
     assert rec["stage"] == "review_final_confirm"
     rec = _turn(client, rec["id"], "确认")
     assert rec["status"] == "expert_confirmed"
+
+
+# --- end-to-end findings (narration -> DAG -> restated by a second model from the DAG alone) --
+
+def test_trigger_is_carried_onto_a_generic_start_label(client, model):
+    raw = _variant(lambda g: (g["nodes"][0].__setitem__("label", "开始"),
+                              g.__setitem__("case_context", {"scenario_trigger": "3号加工中心报警、尺寸超差"})))
+    rec = _draft(client, model, raw)
+    start = next(n for n in rec["graph"]["nodes"] if n["node_type"] == "start")
+    assert start["label"] == "3号加工中心报警、尺寸超差"
+
+
+def test_specific_start_label_is_kept(client, model):
+    raw = _variant(lambda g: g.__setitem__("case_context", {"scenario_trigger": "夜班报警"}))
+    rec = _draft(client, model, raw)
+    assert next(n for n in rec["graph"]["nodes"] if n["node_type"] == "start")["label"] == "设备报警"
+
+
+def test_experience_notes_are_kept(client, model):
+    rec = _draft(client, model, _variant(lambda g: g.__setitem__(
+        "case_context", {"experience_notes": "判断刀具还是夹具靠听声音和看切屑"})))
+    assert rec["case_context"]["experience_notes"] == "判断刀具还是夹具靠听声音和看切屑"
+
+
+def test_structural_nodes_are_not_asked_about_as_unverified(client, model):
+    def add_join(g):
+        g["nodes"].append({"node_id": "j", "node_type": "merge", "label": "处理完成汇合", "actor_roles": []})
+        g["edges"] = [e for e in g["edges"] if e["to"] != "n8"] + [
+            _e("a", "n4", "j", "conditional", "复测正常"), _e("b", "n7", "j", "merge"), _e("c", "j", "n8")]
+    rec = _draft(client, model, _variant(add_join))
+    assert not any("处理完成汇合" in t for t in review_agent_gap_texts(client, rec["id"]))
+
+
+def test_readback_reads_each_branch_through():
+    lines = review_agent.readback(_graph()).splitlines()
+    labels = [line.split(". ", 1)[1].split("：")[0].split("（")[0] for line in lines]
+    # The "超差" branch is read start to finish before anything else follows.
+    i = labels.index("查主轴和夹具")
+    assert labels[i:i + 3] == ["查主轴和夹具", "换刀", "试切首件"]
+
+
+def test_both_dag_prompts_carry_the_label_rules():
+    from app import guide_service
+    assert guide_service.DAG_LABEL_RULES in review_agent._EXTRACT_PROMPT
+    assert guide_service.DAG_LABEL_RULES in guide_service._REGENERATE_SYSTEM_PROMPT

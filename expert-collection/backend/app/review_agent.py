@@ -155,24 +155,30 @@ def rule_intent(text: str, *, phase: str, mode: str, question_pending: bool = Fa
 # --- read-back and change descriptions (deterministic) -------------------------------------
 
 def _topo_order(graph: dict) -> list[dict]:
+    """Topological order that finishes one branch before starting the next (a node becomes
+    ready -> it is read next), so the read-back walks each path through instead of jumping
+    between the branches of a decision line by line. Branches keep their edge order."""
     nodes = graph.get("nodes", [])
+    by_id = {n["node_id"]: n for n in nodes}
     indeg = {n["node_id"]: 0 for n in nodes}
     for e in graph.get("edges", []):
         if e["to"] in indeg:
             indeg[e["to"]] += 1
-    order, ready = [], [n for n in nodes if indeg[n["node_id"]] == 0]
-    seen = set()
-    while ready:
-        n = ready.pop(0)
+    order, seen = [], set()
+    stack = [n for n in reversed(nodes) if indeg[n["node_id"]] == 0]
+    while stack:
+        n = stack.pop()
         if n["node_id"] in seen:
             continue
         seen.add(n["node_id"])
         order.append(n)
+        ready = []
         for e in graph.get("edges", []):
             if e["from"] == n["node_id"] and e["to"] in indeg:
                 indeg[e["to"]] -= 1
                 if indeg[e["to"]] == 0:
-                    ready.append(next(x for x in nodes if x["node_id"] == e["to"]))
+                    ready.append(by_id[e["to"]])
+        stack += reversed(ready)
     order += [n for n in nodes if n["node_id"] not in seen]  # cycles: still list them
     return order
 
@@ -313,13 +319,14 @@ _EXTRACT_PROMPT = """你是制造业专家访谈助手的流程整理模块。�
 - 判断节点（decision）的每条出边用 conditional 类型并写清 condition；同时进行用 parallel_split/parallel_join。
 - 对讲述里含糊、没说清楚的地方，放进 uncertainties，写成一个口语化的问题（不要用"分支/并行/节点"这类术语）。
 
+""" + guide_service.DAG_LABEL_RULES + """- 主要靠经验、不是照规定做的判断（如"靠听声音和看切屑"），写进 case_context.experience_notes，不要放进 constraints。
 只输出一个 JSON object：
 {"nodes":[{"node_id":"n1","node_type":"start|activity|decision|parallel_split|parallel_join|merge|approval|handoff|wait|end","label":"...","actor_roles":["..."],"decision_question":null,"evidence":"原话摘抄","retry_semantics":null 或 {"enabled":true,"rework_reference_node_id":"nX","condition":"...","description":"..."}}],
  "edges":[{"edge_id":"e1","from":"n1","to":"n2","edge_type":"normal|conditional|parallel|merge|handoff|approval|timeout|exception_forward","condition":null}],
  "start_node_ids":["n1"],"end_node_ids":["nK"],
  "summary":"用两三句话复述你理解的整个过程（第二人称“您”，不加评价）",
  "uncertainties":[{"question":"...","node_ids":["nX"]}],
- "case_context":{"scenario_trigger":"起因或null","scenario_goal":"目标或null","constraints":"限制条件或null"}}
+ "case_context":{"scenario_trigger":"起因或null","scenario_goal":"目标或null","constraints":"限制条件或null","experience_notes":"靠经验判断的地方或null"}}
 只输出 JSON。"""
 
 
@@ -372,9 +379,22 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
             gaps.append(review_gaps.model_gap(u["question"].strip()[:150], ids))
     cc = parsed.get("case_context") if isinstance(parsed.get("case_context"), dict) else {}
     case_context = {k: v.strip() for k, v in cc.items()
-                    if k in ("scenario_trigger", "scenario_goal", "constraints") and isinstance(v, str) and v.strip()}
+                    if k in ("scenario_trigger", "scenario_goal", "constraints", "experience_notes")
+                    and isinstance(v, str) and v.strip()}
+    # End-to-end tests (narration -> graph -> a second model restating the process from the
+    # graph alone) showed the trigger was the piece most often lost: models put it only into
+    # case_context and label the start node just "开始", so the graph itself no longer says
+    # how the process begins. Carry it onto a generically labelled start node.
+    trigger = case_context.get("scenario_trigger")
+    if trigger:
+        for n in graph["nodes"]:
+            if n["node_type"] == "start" and _norm(n["label"]).lower() in _GENERIC_START_LABELS:
+                n["label"] = trigger[:60]
     summary = parsed.get("summary") if isinstance(parsed.get("summary"), str) else ""
     return {"graph": graph, "summary": summary.strip()[:400], "gaps": gaps[:6], "case_context": case_context}
+
+
+_GENERIC_START_LABELS = {"开始", "流程开始", "起点", "start", ""}
 
 
 _REVIEW_PROMPT = """你是制造业流程审阅助手。你面前有一张流程图，对方（{who}）正在和你对话，目的是把这张图改到完全符合实际。

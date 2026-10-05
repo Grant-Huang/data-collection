@@ -1300,6 +1300,24 @@ _VALID_EDGE_TYPES = {
     "timeout", "exception_forward",
 }
 
+# How node labels must read so the graph stands on its own -- shared by both model prompts that
+# draft a whole DAG (review_agent._EXTRACT_PROMPT for a narration, _REGENERATE_SYSTEM_PROMPT below
+# for 「刷新工作流图」). Each rule targets a loss seen in end-to-end runs where a second model
+# restated the process from the graph alone: trigger missing from the start node, several
+# outcomes sharing one "结束", two actions in one node, qualifying details (time limits,
+# standards) dropped, nested conditions flattened, an escalation drawn as an ending.
+DAG_LABEL_RULES = """label 怎么写（流程图要能脱离讲述单独读懂）：
+- start 节点的 label 写**这件事是怎么开始的**（触发事件，用专家原话，如"3号加工中心报警、尺寸超差"），不要只写"开始"。
+- end 节点的 label 写**做到什么程度算结束**（如"班组长签字放行"）。结局不同就建不同的 end 节点（如"转为可发货"和"整批扣下走不合格品流程"），不要几种结局共用一个"结束"；也不要再另建一个和 end 意思相同的步骤。
+- 一个节点只写一件事，写成"动作+对象"（如"复测尺寸""联系供应商安排退货"）；专家说了两个动作就拆成两个节点。
+- 专家说出的限定细节要留在 label 里：数量、时限、标准、检查项（如"等供应商来车拉走（约两三天）""按图纸量尺寸、看外观"）。
+- 汇合/并行节点只表示"汇到一起"，label 写成"××都完成"；汇合之后真正要做的事（如"碰结果"）另建一个步骤。
+- 检验/审批有"不合格"的后果时：不合格要重做就在该节点写 retry_semantics；每次都要做的复查（如"处理完再点检一遍"）画成后面单独的一步，不要写成返工。
+- 条件有层次时（"能修的自己修，备件没库存就先采购"），下一层的情况挂在对应那条路后面新的判断节点上，不要和上一层的情况并列。
+- "超过多久没完成就找谁升级"这类规则不是一种结局：从被等待的那一步用 edge_type=timeout 连到升级步骤，升级后接回主流程，不要直接连到结束。
+"""
+
+
 _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程图整理模块。下面会给你一整段专家访谈的对话记录（助手的提问 + 专家的回答），请你根据专家实际说过的内容，重新整理出一张完整的流程图（DAG，有向无环图）。
 
 严格规则：
@@ -1307,6 +1325,8 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 - 每个节点的 label 用专家自己的措辞提炼，不要整句话不加处理地照抄，也不要过度概括丢掉关键信息。
 - 图必须是有向无环图：不允许出现环——返工/重试请通过 retry_semantics 表达语义，不要建一条指回之前节点的边。
 - 必须有且只应有你能从对话里确认的 start 和 end 节点。
+
+""" + DAG_LABEL_RULES + """
 
 只输出一个 JSON object，字段：
 - "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）, "retry_semantics": null 或 {"enabled":true,"rework_reference_node_id":"要重做的那个节点的 node_id","condition":"什么情况下需要重做","description":"字符串或 null"}——这是表达"返工/重试"的**唯一**方式，永远不要为此另外建一条指回之前节点的边}
