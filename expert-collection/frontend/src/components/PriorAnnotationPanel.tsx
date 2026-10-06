@@ -108,14 +108,14 @@ export function PriorAnnotationPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail]);
 
-  async function send(text: string, raw?: string) {
+  async function send(text: string, raw?: string, fromReadback = false) {
     if (!session) return;
     setSending(true);
     setError(null);
     // Optimistic: show the message immediately.
     setSession((s) => s && { ...s, turns: [...s.turns, { turn_id: `local-${Date.now()}`, role: "expert", text, raw_transcript: raw ?? null }] });
     try {
-      const next = await api.reviewSessionTurn(versionId, session.session_id, text, raw);
+      const next = await api.reviewSessionTurn(versionId, session.session_id, text, raw, fromReadback);
       setSession(next);
       if (next.status === "submitted") {
         onSaved();

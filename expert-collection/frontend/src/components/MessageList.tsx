@@ -29,9 +29,12 @@ interface Props {
   sending?: boolean;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
   emptyState?: ReactNode;
+  // 「修改这段流程」: put the latest read-back into the input box for in-place editing. Omit to
+  // hide the button (e.g. after the session was confirmed).
+  onEditReadback?: (readback: string) => void;
 }
 
-export function MessageList({ turns, graph, activeQuestion, onChipPick, sending, onHighlightNodes, emptyState }: Props) {
+export function MessageList({ turns, graph, activeQuestion, onChipPick, sending, onHighlightNodes, emptyState, onEditReadback }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message (and the typing indicator) in view.
@@ -47,6 +50,16 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
       .filter((n) => (n.source_turn_ids ?? []).includes(turnId) && CONTENT_NODE_TYPES.has(n.node_type))
       .map((n) => n.node_id);
   }
+
+  // Only the newest read-back is editable: it is the one the backend kept a snapshot of, so an
+  // older copy could no longer be aligned with the current graph.
+  // A later reply that changed the graph makes it outdated too (the backend would refuse it).
+  let latestReadback = -1;
+  turns.forEach((t, i) => {
+    if (t.role !== "assistant") return;
+    if (t.readback) latestReadback = i;
+    else if (t.changes?.length) latestReadback = -1;
+  });
 
   return (
     <div ref={listRef} className="chat-list" aria-live="polite">
@@ -108,6 +121,18 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
               </div>
             </div>
             {isLast && t.why && <div className="chat-why">为什么问：{t.why}</div>}
+            {i === latestReadback && onEditReadback && (
+              <div className="chat-readback-actions">
+                <button
+                  className="chat-readback-edit"
+                  disabled={sending}
+                  onClick={() => onEditReadback(t.readback!)}
+                  title="把上面这段流程放进输入框，直接在文字上改"
+                >
+                  修改这段流程
+                </button>
+              </div>
+            )}
             {interactive && activeQuestion ? (
               <QuickReplies question={activeQuestion} onPick={onChipPick!} />
             ) : (

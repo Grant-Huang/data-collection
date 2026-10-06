@@ -52,8 +52,10 @@ export const api = {
     req<WorkflowRecord>("PATCH", `/api/expert-workflows/${id}`, patch),
   moveNode: (id: string, nodeId: string, position: { x: number; y: number }, layer: "sop" | "task" = "sop") =>
     req<{ ok: boolean }>("PATCH", `/api/expert-workflows/${id}/nodes/${nodeId}/position?layer=${layer}`, position),
-  postTurn: (id: string, text: string, rawTranscript?: string) =>
-    req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text, raw_transcript: rawTranscript ?? null }),
+  postTurn: (id: string, text: string, rawTranscript?: string, fromReadback = false) =>
+    req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, {
+      text, raw_transcript: rawTranscript ?? null, from_readback: fromReadback,
+    }),
   reopenWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/reopen`),
   confirmWorkflow: (id: string) =>
@@ -149,9 +151,9 @@ export const api = {
     req<ReviewSession>("POST", `/api/datasets/versions/${versionId}/records/${recordId}/review-session`, {
       annotator_name: annotatorName, actor_role: actorRole ?? null,
     }),
-  reviewSessionTurn: (versionId: string, sessionId: string, text: string, rawTranscript?: string) =>
+  reviewSessionTurn: (versionId: string, sessionId: string, text: string, rawTranscript?: string, fromReadback = false) =>
     req<ReviewSession>("POST", `/api/datasets/versions/${versionId}/review-sessions/${sessionId}/turns`, {
-      text, raw_transcript: rawTranscript ?? null,
+      text, raw_transcript: rawTranscript ?? null, from_readback: fromReadback,
     }),
   getAnnotationSummary: (versionId: string) =>
     req<AnnotationSummary>("GET", `/api/datasets/versions/${versionId}/annotation-summary`),

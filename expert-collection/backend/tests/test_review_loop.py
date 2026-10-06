@@ -141,7 +141,7 @@ def test_narrate_extract_clarify_confirm(client, model):
     rec = _turn(client, wid, "没问题了")
     assert rec["stage"] == "review_final_confirm" and rec["status"] == "needs_confirmation"
     body = rec["turns"][-1]["body"]
-    assert "1. 设备报警" in body and "复测正常 → 恢复生产" in body
+    assert "[1]【开始】设备报警" in body and "复测正常 → [7]" in body and "[7]【结束】恢复生产" in body
     rec = _turn(client, wid, "确认")
     assert rec["status"] == "expert_confirmed" and rec["stage"] == "review_done"
     assert all(n["expert_confirmed"] for n in rec["graph"]["nodes"])

@@ -33,13 +33,27 @@ def assign_missing_seqs(graph: dict) -> dict:
     edited a few times -- both are accepted trade-offs for the number actually staying attached
     to the same node for the rest of a conversation, so "第3步" still means the same thing on
     turn 10 as it did on turn 2.
+
+    Numbers are never reused either: `graph["next_seq"]` only ever goes up, so deleting the
+    highest-numbered step and adding a new one gives the new step a fresh number. (Counting from
+    "current max + 1" handed the deleted step's number to the new one, so an edited read-back
+    or an expert's "第9步" written before the deletion would silently land on a different step.)
     """
-    next_seq = max((n["seq"] for n in graph["nodes"] if isinstance(n.get("seq"), int)), default=0) + 1
+    highest = max((n["seq"] for n in graph["nodes"] if isinstance(n.get("seq"), int)), default=0)
+    next_seq = max(highest + 1, graph.get("next_seq") or 1)
     for n in graph["nodes"]:
         if not isinstance(n.get("seq"), int):
             n["seq"] = next_seq
             next_seq += 1
+    graph["next_seq"] = next_seq
     return graph
+
+
+def carry_seq_counter(restored: dict, current: dict) -> dict:
+    """Restoring an earlier graph (undo, rollback to an earlier turn) must not rewind the number
+    counter -- numbers handed out since then stay retired. Returns `restored`."""
+    restored["next_seq"] = max(restored.get("next_seq") or 1, current.get("next_seq") or 1)
+    return assign_missing_seqs(restored)
 
 
 def apply_ops(graph: dict, ops: list[dict]) -> dict:

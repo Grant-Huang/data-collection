@@ -75,7 +75,8 @@ def _review_turn(result: review_agent.TurnResult, *, sample: str | None = None) 
     """Assistant transcript entry for a review-loop reply (section 17): understanding (ack),
     the concrete graph changes, a body (read-back / notices) and one question -- no chips."""
     turn = {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": result.text,
-            "ack": result.ack, "question": result.question, "changes": result.changes or None, "body": result.body}
+            "ack": result.ack, "question": result.question, "changes": result.changes or None, "body": result.body,
+            "readback": result.readback}
     if sample:
         turn["sample"] = sample
     return turn
@@ -324,7 +325,7 @@ def _rollback_to_turn(record: dict, turn_id: str) -> dict:
         for e in record["graph"]["edges"] if cutoff_ids & set(e.get("source_turn_ids", []))
     ]
     if "graph_before" in log[idx]:
-        record["graph"] = copy.deepcopy(log[idx]["graph_before"])
+        record["graph"] = graph_ops.carry_seq_counter(copy.deepcopy(log[idx]["graph_before"]), record["graph"])
     else:
         record["graph"] = graph_ops.apply_ops(record["graph"], remove_ops)
 
@@ -484,7 +485,8 @@ def _post_review_turn(record: dict, req: TurnRequest) -> TurnResponse:
         expert_turn["raw_transcript"] = req.raw_transcript
     record["turns"].append(expert_turn)
 
-    result = review_agent.handle_turn(record["_review"], record["graph"], record["turns"], req.text, expert_turn_id)
+    result = review_agent.handle_turn(record["_review"], record["graph"], record["turns"], req.text, expert_turn_id,
+                                      from_readback=req.from_readback)
     before = len(record["graph"]["nodes"]) + len(record["graph"]["edges"])
     if result.graph is not None:
         record["graph"] = result.graph

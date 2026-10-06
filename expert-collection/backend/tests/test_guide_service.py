@@ -193,8 +193,10 @@ def test_rollback_restores_snapshot_after_sweep_rewire(client, monkeypatch):
     pick = next(c for c in chips if "复测尺寸" in c)
     _turn(client, wid, pick)
     graph = _record(client, wid)["graph"]
-    # Restored exactly: no half-rewired decision left behind, still a valid graph.
-    assert graph == before_branch
+    # Restored exactly: no half-rewired decision left behind, still a valid graph. Only the
+    # step-number counter moves on -- numbers handed out since then stay retired.
+    assert {k: v for k, v in graph.items() if k != "next_seq"} == {k: v for k, v in before_branch.items() if k != "next_seq"}
+    assert graph["next_seq"] > before_branch["next_seq"]
     assert graph_validator.is_valid(graph)
 
 

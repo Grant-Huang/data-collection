@@ -74,7 +74,7 @@ def _rename_n3(new_label):
 def test_both_accept_is_gold_and_blind(client, version):
     s1 = _start(client, version, "rec_0", "alice")
     assert s1["phase"] == "final_confirm" and s1["proposal"]["verdict"] == "accepted"
-    assert "1. " in s1["turns"][0]["body"]  # read-back of the graph under review
+    assert "[1]" in s1["turns"][0]["body"]  # read-back of the graph under review
     s1 = _say(client, version, s1["session_id"], "确认")  # no model needed
     assert s1["status"] == "submitted"
 

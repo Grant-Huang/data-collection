@@ -10,6 +10,7 @@ exactly one sensible reading, or reported and kept from being confirmed -- never
 silently.
 """
 import copy
+import re
 
 import pytest
 
@@ -395,7 +396,7 @@ def test_structural_nodes_are_not_asked_about_as_unverified(client, model):
 
 def test_readback_reads_each_branch_through():
     lines = review_agent.readback(_graph()).splitlines()
-    labels = [line.split(". ", 1)[1].split("：")[0].split("（")[0] for line in lines]
+    labels = [re.sub(r"^\[\d+\](【[^】]*】)?", "", line).split("：")[0].split("（")[0].split("；")[0] for line in lines]
     # The "超差" branch is read start to finish before anything else follows.
     i = labels.index("查主轴和夹具")
     assert labels[i:i + 3] == ["查主轴和夹具", "换刀", "试切首件"]

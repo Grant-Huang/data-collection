@@ -35,7 +35,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, review_gaps
+from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, readback_edit, review_gaps
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -187,37 +187,25 @@ def readback(graph: dict) -> str:
     """The whole graph as numbered plain-language lines -- generated from the graph itself so
     what the person confirms is exactly what gets saved.
 
-    The number shown is each node's stable `seq` (see graph_ops.assign_missing_seqs), not a
-    freshly counted position -- lines are still walked in topological order for readability,
-    but the numbers themselves must match what's on the DagView node and what the model was
-    told, or "第3步" would mean a different thing in the readback than everywhere else. Falls
-    back to the walk position only for the handful of legacy graphs never backfilled with seq.
+    Each line starts with the node's stable `seq` in brackets and, for anything but a plain
+    step, a type tag (【判断】【审批】...) -- see readback_edit.render. The numbers match what's on
+    the DagView node and what the model was told, so "第3步" means the same thing everywhere;
+    branch and rework targets are written as those numbers too. Lines are walked in
+    topological order, one branch at a time.
     """
-    by_id = {n["node_id"]: n for n in graph.get("nodes", [])}
-    lines = []
-    for i, n in enumerate(_topo_order(graph), 1):
-        actors = f"（{'、'.join(n['actor_roles'])}）" if n.get("actor_roles") else ""
-        text = f"{n.get('seq') or i}. {n['label']}{actors}"
-        outs = [e for e in graph.get("edges", []) if e["from"] == n["node_id"]]
-        if n["node_type"] == "decision" and outs:
-            parts = [f"{e.get('condition') or '（条件未说明）'} → {by_id.get(e['to'], {}).get('label', e['to'])}" for e in outs]
-            text += "：" + "；".join(parts)
-        elif n["node_type"] == "parallel_split" and outs:
-            text += "，同时进行：" + "、".join(by_id.get(e["to"], {}).get("label", e["to"]) for e in outs)
-        elif n["node_type"] == "approval":
-            text += "（需要签字/确认）"
-        retry = n.get("retry_semantics") or {}
-        if retry.get("enabled"):
-            target = by_id.get(retry.get("rework_reference_node_id") or "", {}).get("label")
-            text += f"；{retry.get('condition') or '不合格'}时回到「{target}」重做" if target else "；可能需要返工"
-        # Make a broken connection visible in what the person confirms, instead of a list
-        # that reads fine while a step hangs off the side of the graph.
-        if n["node_type"] not in ("start",) and not any(e["to"] == n["node_id"] for e in graph.get("edges", [])):
-            text += "（前面没有接上任何步骤）"
-        if n["node_type"] not in ("end",) and not outs:
-            text += "（之后没有接下去）"
-        lines.append(text)
-    return "\n".join(lines)
+    return readback_edit.render(graph, _topo_order(graph))[0]
+
+
+READBACK_EDIT_RULES = ("每行开头的 [编号] 和【】里的标签不能改：删掉整行表示删掉这一步，新加一行（不要带编号）表示新增一步，"
+                       "其余文字都可以改。")
+
+
+def _show_readback(state: dict, graph: dict) -> str:
+    """Render the read-back for display *and* remember exactly what was shown, so an edited
+    copy sent back with 「修改这段流程」 can be aligned against it line by line."""
+    text, snapshot = readback_edit.render(graph, _topo_order(graph))
+    state["readback_snapshot"] = snapshot
+    return text
 
 
 def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
@@ -614,6 +602,7 @@ class TurnResult:
     state: dict | None = None
     finished: bool = False                     # person confirmed -> caller commits
     case_context: dict | None = None
+    readback: str | None = None                # editable copy of the read-back shown in `body`
 
     @property
     def text(self) -> str:
@@ -638,23 +627,27 @@ def opening(state: dict, graph: dict) -> TurnResult:
         return TurnResult(body=INTRO_TEXT, state=state)
     if mode == "edit":
         state["gaps"] = review_gaps.refresh([], graph, mode=mode)
-        return TurnResult(body="这是目前的流程：\n" + readback(graph), question="想改哪里直接告诉我；没问题的话说「没问题」。", state=state)
+        rb = _show_readback(state, graph)
+        return TurnResult(body="这是目前的流程：\n" + rb, question="想改哪里直接告诉我；没问题的话说「没问题」。",
+                          state=state, readback=rb)
     state["gaps"] = review_gaps.refresh([], graph, mode=mode)
     if mode == "annotate":
         state["phase"] = "final_confirm"
         state["proposal"] = {"verdict": "accepted", "reason_tags": []}
+        rb = _show_readback(state, graph)
         return TurnResult(
-            body="这是待审的流程：\n" + readback(graph),
+            body="这是待审的流程：\n" + rb, readback=rb,
             question="有不对、缺漏或多余的地方直接说，我来改；都对的话回复「确认」，结论就是「采纳」。说「这条不能用」则结论为「丢弃」。",
             state=state)
-    lines = ["两位标注人的结论不一致（或修改不同），需要您来仲裁。待审的原始流程：", readback(graph), ""]
+    rb = _show_readback(state, graph)
+    lines = ["两位标注人的结论不一致（或修改不同），需要您来仲裁。待审的原始流程：", rb, ""]
     for c in state.get("candidates", []):
         lines.append(f"· {c['annotator_name']}：{VERDICT_LABELS.get(c['verdict'], c['verdict'])}"
                      + (f"（原因：{'、'.join(REASON_LABELS.get(t, t) for t in c.get('reason_tags', []))}）" if c.get("reason_tags") else "")
                      + (f"；改动：{'；'.join(c.get('changes', [])[:8])}" if c.get("changes") else ""))
     return TurnResult(body="\n".join(lines),
                       question="您可以说「用某某的版本」、在某一份上继续改、采纳原图，或说「这条不能用」。",
-                      state=state)
+                      state=state, readback=rb)
 
 
 def _snapshot(state: dict, graph: dict, turn_id: str) -> None:
@@ -687,10 +680,12 @@ def _final_confirm(state: dict, graph: dict, result: TurnResult, *, rejected: bo
         if v["verdict"] == "rejected":
             result.body = f"我的标注结论：丢弃{why}。"
         else:
-            result.body = f"修改后的完整流程：\n{readback(graph)}\n\n我的标注结论：{VERDICT_LABELS[v['verdict']]}{why}。"
+            result.readback = _show_readback(state, graph)
+            result.body = f"修改后的完整流程：\n{result.readback}\n\n我的标注结论：{VERDICT_LABELS[v['verdict']]}{why}。"
         result.question = "没问题的话回复「确认」提交标注；要改结论或流程，直接告诉我。"
     else:
-        result.body = "我整理的完整流程是：\n" + readback(graph)
+        result.readback = _show_readback(state, graph)
+        result.body = "我整理的完整流程是：\n" + result.readback
         result.question = "这样对吗？没问题的话回复「确认」就提交；要改的话直接告诉我。"
     return result
 
@@ -710,9 +705,14 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
     return _final_confirm(state, graph, result, model_tags=model_tags)
 
 
-def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str) -> TurnResult:
+def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str,
+                *, from_readback: bool = False) -> TurnResult:
     """One person message -> agent reply. `turns` is the transcript *including* this message.
-    Never raises for model failures: they come back as an honest notice with nothing changed."""
+    Never raises for model failures: they come back as an honest notice with nothing changed.
+
+    `from_readback`: the message is the read-back text the person edited in place (the
+    「修改这段流程」 button) -- see readback_edit. It is aligned against the read-back it was
+    rendered from by number, in code; the model only interprets changed / added lines."""
     state = copy.deepcopy(state)
     mode, phase = state["mode"], state["phase"]
     person_texts = [t["text"] for t in turns if t["role"] == "expert"]
@@ -735,8 +735,28 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
                             graph=new_graph, state=state, case_context=extracted["case_context"])
         return _next_question(state, new_graph, result, None)
 
+    # 1b. An edited read-back: align by number first; refuse rather than guess.
+    pre_ops: list[dict] = []
+    model_text = text
+    needs_model = True
+    if from_readback:
+        snap = state.get("readback_snapshot")
+        if not snap or snap.get("sig") != readback_edit.graph_signature(graph):
+            return TurnResult(body="这份流程文字是之前那一版的，流程图在那之后已经改过，没法逐行对上，所以没有改图。"
+                                   "请点最新一段流程下面的「修改这段流程」重新改。", state=state)
+        diff = readback_edit.parse(text, snap)
+        if diff.errors:
+            return TurnResult(body="没有改图：" + "；".join(diff.errors[:5]) + "。\n" + READBACK_EDIT_RULES, state=state)
+        if diff.empty:
+            return TurnResult(body="这份流程文字和原来的一样，没看到改动。",
+                              question="要改的话直接在文字里改；没问题就回复「确认」。", state=state)
+        pre_ops = [{"op": "remove_node", "node_id": d["node_id"]} for d in diff.deleted]
+        model_text = readback_edit.describe_for_model(diff)
+        needs_model = bool(diff.changed or diff.added)
+
     # 2. Rule intents for short replies (no model needed).
-    intent = rule_intent(text, phase=phase, mode=mode, question_pending=bool(state.get("pending_gap_id")))
+    intent = None if from_readback else rule_intent(text, phase=phase, mode=mode,
+                                                   question_pending=bool(state.get("pending_gap_id")))
     if intent == "undo":
         snaps = state.get("snapshots") or []
         if not snaps:
@@ -744,7 +764,8 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         last = snaps.pop()
         state.update({"snapshots": snaps, "gaps": last["gaps"], "phase": last["phase"], "questions_asked": last["questions_asked"],
                       "pending_gap_id": last["pending_gap_id"], "proposal": last.get("proposal")})
-        return TurnResult(body="已撤销上一轮的修改，流程图恢复到之前的样子。", graph=last["graph"], state=state)
+        restored = graph_ops.carry_seq_counter(copy.deepcopy(last["graph"]), graph)
+        return TurnResult(body="已撤销上一轮的修改，流程图恢复到之前的样子。", graph=restored, state=state)
     if intent == "confirm":
         # A "丢弃" verdict says the record can't be used at all -- its graph is not what gets
         # saved, so structural problems must not block submitting that verdict.
@@ -766,7 +787,8 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
     # 3. Model turn.
     offered = review_gaps.open_gaps(state["gaps"])[:5]
     try:
-        out = _call_review_model(state, graph, turns, text, offered)
+        out = (_call_review_model(state, graph, turns, model_text, offered) if needs_model
+               else {"intent": "edit", "ops": []})
     except llm_client.LLMError as e:
         if e.kind == "not_configured":
             return TurnResult(body="当前没有配置可用的 AI 模型，只能处理「没问题 / 确认 / 撤销" +
@@ -775,6 +797,10 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
 
     intent = out.get("intent") if out.get("intent") in ("edit", "answer", "satisfied", "reject", "adopt", "other") else "other"
     understanding = out.get("understanding") if isinstance(out.get("understanding"), str) else None
+    if from_readback:
+        # The person rewrote the flow -- whatever the model calls it, this turn is an edit.
+        intent = "edit"
+        understanding = understanding or "按您改过的流程文字更新了流程图。"
     model_tags = [t for t in (out.get("reason_tags") or []) if isinstance(t, str)]
     result = TurnResult(ack=(understanding or "").strip()[:200] or None, state=state)
     _snapshot(state, graph, turn_id)
@@ -790,6 +816,9 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
             result.changes = [f"按 {cand['annotator_name']} 的结论，使用原始流程"]
     else:
         ops, unverified = sanitize_ops(out.get("ops"), graph, out.get("evidence") or {}, [text] + person_texts, turn_id)
+        # Deletions from an edited read-back are applied last, so a model op on a neighbour
+        # still resolves; rewire_after_edit then bridges the gap they leave.
+        ops += pre_ops
         if ops:
             candidate = graph_ops.apply_ops(copy.deepcopy(graph), ops)
             # Finish the wiring the model left half-done (removed step not bridged, new step
@@ -828,7 +857,13 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         # Still confirming; the person asked something that didn't change the graph.
         return _final_confirm(state, new_graph, result, model_tags=model_tags)
     preferred = _valid_question(out.get("question"), {g["id"] for g in offered})
-    return _next_question(state, new_graph, result, preferred, model_tags=model_tags)
+    result = _next_question(state, new_graph, result, preferred, model_tags=model_tags)
+    if from_readback and result.graph is not None and result.readback is None:
+        # The person is editing the flow as text: hand back the updated version right away, so
+        # the next round of edits starts from a current copy instead of the now-outdated one.
+        result.readback = _show_readback(state, new_graph)
+        result.body = "改好之后的完整流程：\n" + result.readback
+    return result
 
 
 def progress(state: dict) -> float:
