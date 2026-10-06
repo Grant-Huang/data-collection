@@ -35,6 +35,7 @@ _VALIDATOR_QUESTIONS = {
     "cycle_detected": "流程里有一处绕回了前面的步骤，这是要回头重做吗？回到哪一步？",
     "isolated_node": "「{label}」这一步是在哪一步之后做的？",
     "dangling_head": "「{label}」这一步是在哪一步之后做的？",
+    "retry_target_missing": "「{label}」不合格时，要回到哪一步重新做？",
     "dangling_tail": "「{label}」做完之后接着做哪一步？还是做到这里整件事就结束了？",
     "decision_needs_two_branches": "「{label}」这里判断之后，另一种情况是怎么处理的？",
     "parallel_split_needs_two": "「{label}」之后同时进行的是哪几件事？",

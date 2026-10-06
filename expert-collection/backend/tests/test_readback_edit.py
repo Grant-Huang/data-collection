@@ -206,3 +206,38 @@ def test_successful_edit_hands_back_a_fresh_editable_copy(client, model):
     rec = _send(client, wid, "\n".join(l for l in reply["readback"].splitlines() if not l.startswith("[7]")),
                 from_readback=True)
     assert "试切首件" not in {n["label"] for n in rec["graph"]["nodes"]}
+
+
+# --- deleting a rework target ---------------------------------------------------------------
+
+def _with_rework_to(target):
+    g = _graph()
+    next(n for n in g["nodes"] if n["node_id"] == "n7")["retry_semantics"] = {
+        "enabled": True, "rework_reference_node_id": target, "condition": "首件不合格", "description": None}
+    return g
+
+
+def test_dangling_rework_target_is_a_validation_error():
+    from app import graph_ops
+    g = graph_ops.apply_ops(_with_rework_to("n6"), [{"op": "remove_node", "node_id": "n6"}])
+    issue = next(i for i in graph_validator.validate(g) if i["code"] == "retry_target_missing")
+    assert issue["node_id"] == "n7" and "不在图里" in issue["message"]
+
+
+def test_deleting_a_rework_target_is_refused_with_the_reason(client, model, monkeypatch):
+    rec = client.post("/api/expert-workflows", json={}).json()
+    wid = rec["id"]
+    base = copy.deepcopy(GOOD)
+    next(n for n in base["nodes"] if n["node_id"] == "n7")["retry_semantics"] = {
+        "enabled": True, "rework_reference_node_id": "n6", "condition": "首件不合格", "description": None}
+    monkeypatch.setattr(llm_client, "chat_completion_json",
+                        lambda cfg, messages, timeout=None: copy.deepcopy(base) if "流程整理模块" in messages[0]["content"] else model(cfg, messages))
+    _send(client, wid, NARRATIVE)
+    rec = _send(client, wid, "没问题")
+    rb = rec["turns"][-1]["readback"]
+    assert "首件不合格时回到 [6] 重做" in rb
+    before = rec["graph"]
+    rec = _send(client, wid, "\n".join(l for l in rb.splitlines() if not l.startswith("[6]")), from_readback=True)
+    body = rec["turns"][-1]["body"]
+    assert "没有改图" in body and "不合格时要回到的那一步已经不在图里了" in body
+    assert rec["graph"] == before
