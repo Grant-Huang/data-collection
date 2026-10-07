@@ -167,3 +167,26 @@ def test_unrelated_reply_does_not_write_fields(client, model):
     model.review_responses.append({**_answer(), "intent": "other"})
     rec = _turn(client, wid, "你说的超时是指什么？")
     assert not _node(rec, "n5").get("sla_config")
+
+
+def test_readback_shows_captured_details():
+    graph = {**EXTRACTED, "nodes": [
+        dict(n, evaluation_criteria=[{"id": "c1", "description": "超过 20.05mm 就不行"}]) if n["node_id"] == "n4"
+        else dict(n, sla_config={"type": "deadline", "description": "2小时内要签"}) if n["node_id"] == "n5" else n
+        for n in EXTRACTED["nodes"]]}
+    body = review_agent.readback(graph)
+    assert "判断标准：「超过 20.05mm 就不行」" in body and "时限：「2小时内要签」" in body
+
+
+def test_ontology_question_is_asked_when_next_even_if_model_prefers_another():
+    """With a real model, the model kept preferring its own fresh uncertainties, so the rule-ranked
+    threshold / time-limit questions were never reached. When one is next in line, it is asked."""
+    state = review_agent.new_state("create")
+    state["phase"] = "review"
+    state["gaps"] = review_gaps.refresh([], EXTRACTED, mode="create",
+                                        new_model_gaps=[review_gaps.model_gap("返工时谁来确认？", ["n6"])])
+    # Settle everything ranked above the ontology questions.
+    state["gaps"] = [dict(g, status="resolved") if g["priority"] < review_gaps.PRIORITY["criterion"] else g for g in state["gaps"]]
+    model_gap = next(g for g in state["gaps"] if g["kind"] == "model")
+    result = review_agent._next_question(state, EXTRACTED, review_agent.TurnResult(state=state), (model_gap["id"], "返工时谁来确认？"))
+    assert state["pending_gap_id"] == "criterion:n4" and "尺寸是否合格" in result.question

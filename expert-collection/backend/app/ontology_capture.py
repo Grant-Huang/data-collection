@@ -123,7 +123,11 @@ def parse_duration(text: str) -> Optional[str]:
 
 # --- Answer -> node patch (shared by the step-by-step guide and the narrate-first review loop)
 
-_NEGATIVE_RE = re.compile(r"^(没有|没|无|不是|不用|不需要|不会|都不|否)")
+# A "no" at the start of the answer, allowing spoken filler before it ("这个没有明确的时间要求"
+# -- seen in an end-to-end run with a real model), or an explicit "没有…要求/标准" anywhere.
+_NEGATIVE_RE = re.compile(
+    r"^(?:这个|这|那个|嗯|呃|额|其实|好像|这块|这一步|这里)?[，,、\s]*(?:没有|没|无|不是|不用|不需要|不会|都不|否)"
+    r"|没有?(?:什么|明确|具体|固定|硬性)?的?(?:时间|时限|数值|标准|要求)")
 # "超时了就找车间主任" / "报给质量经理" -> the role named right after the verb, verbatim.
 _ESCALATE_TO_RE = re.compile(r"(?:找|报给|上报给?|通知|升级到|升级给|交给|叫)\s*([^\s，。,；;、！!？?]{2,12})")
 
@@ -133,7 +137,7 @@ def criterion_from_answer(node: dict, text: str) -> Optional[dict[str, Any]]:
     expert declined ("没有，靠经验" -- a "no" that carries no number). "没超过 0.05mm 就行"
     opens like a no but carries a number, so it is an answer."""
     parsed = parse_criterion_answer(text)
-    if _NEGATIVE_RE.match(text.strip()) and not parsed["limits"] and not parsed["expected"]:
+    if _NEGATIVE_RE.search(text.strip()) and not parsed["limits"] and not parsed["expected"]:
         return None
     criterion: dict[str, Any] = {
         "id": f"c{len(node.get('evaluation_criteria') or []) + 1}",
@@ -155,7 +159,7 @@ def sla_from_answer(text: str) -> Optional[dict[str, Any]]:
     said there is no time requirement. The escalation target is only filled in when the answer
     names someone after 找/报给/通知…; otherwise it stays unset rather than guessed."""
     duration = parse_duration(text)
-    if _NEGATIVE_RE.match(text.strip()) and not duration:
+    if _NEGATIVE_RE.search(text.strip()) and not duration:
         return None
     sla: dict[str, Any] = {"type": "deadline", "from_trigger": "previous_node_completed", "description": text}
     if duration:

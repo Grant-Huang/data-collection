@@ -204,6 +204,13 @@ def readback(graph: dict) -> str:
         if retry.get("enabled"):
             target = by_id.get(retry.get("rework_reference_node_id") or "", {}).get("label")
             text += f"；{retry.get('condition') or '不合格'}时回到「{target}」重做" if target else "；可能需要返工"
+        # Captured ontology details, in the expert's own words, so the read-back they confirm
+        # covers everything that gets saved.
+        for c in n.get("evaluation_criteria") or []:
+            if c.get("description"):
+                text += f"；判断标准：「{c['description']}」"
+        if (n.get("sla_config") or {}).get("description"):
+            text += f"；时限：「{n['sla_config']['description']}」"
         lines.append(text)
     return "\n".join(lines)
 
@@ -620,6 +627,11 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
     open_ = review_gaps.open_gaps(state["gaps"])
     if open_ and state["questions_asked"] < state["max_questions"]:
         chosen = next((g for g in open_ if preferred and g["id"] == preferred[0]), open_[0])
+        # Ontology follow-ups are rule-ranked: when one is next in line, ask it even if the model
+        # preferred something else (in trial runs the model always preferred its own fresh
+        # uncertainties, so the threshold / time-limit questions were never asked).
+        if open_[0]["kind"] in review_gaps.ONTOLOGY_KINDS and chosen["kind"] not in review_gaps.ONTOLOGY_KINDS:
+            chosen = open_[0]
         text = preferred[1] if preferred and preferred[0] == chosen["id"] and preferred[1] else chosen["text"]
         state["gaps"] = review_gaps.mark(state["gaps"], [chosen["id"]], "asked")
         state["questions_asked"] += 1

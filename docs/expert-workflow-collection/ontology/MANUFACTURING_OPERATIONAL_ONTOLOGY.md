@@ -290,10 +290,11 @@ flowchart TB
 | `criterion`：判断标准（阈值 + 预期值） | 初稿里有判断（decision）步骤，且该步骤还没有 `evaluation_criteria` | 「X」这里判断走哪条路时，有具体的标准吗？比如正常应该是多少、到多少就不行？ | 判断节点的 `evaluation_criteria[]`：`limits`、`expected`、`unit`、原话 `description` |
 | `timing`：时限 + 超时升级 | 初稿里有审批（approval）步骤，且该步骤还没有 `sla_config` | 「X」要等人确认，一般最晚多久要有结果？超时了会找谁？ | 审批节点的 `sla_config`：`duration`（ISO 8601）、原话 `description`；回答里说了「找/报给/通知某人」时再写 `violation_action=escalate` + `escalate_to_role` |
 
-- **优先级**：排在结构问题（未核实步骤、校验错误、判断条件、模型提出的疑问、覆盖性问题）之后、「谁来做」之前（`PRIORITY` 中 criterion=55、timing=56），因为它们只是给已经确定的步骤补细节。
+- **优先级**：排在结构问题（未核实步骤、校验错误、判断条件）之后，模型自己提出的疑问之前（`PRIORITY` 中 criterion=35、timing=36）。用真实模型试跑时，专家几乎每回答一句，模型都会再提一个新疑问（优先级 40），排在它后面的问题在 `max_questions` 用完前一直轮不到。同一次试跑里，模型挑下一个问题时也总是挑自己的新疑问，所以当清单里排第一的是这两类问题时，由代码直接选它，模型只负责措辞。
 - **数量**：每类最多问前 2 个步骤，整轮仍受 `max_questions` 上限约束，避免拖长访谈。
 - **谁来写字段**：LLM 只负责判断专家这句话是不是在回答刚才的问题（`intent=answer`，或把该条目列进 `resolved_gap_ids`）；写进节点的内容由代码用 `ontology_capture.criterion_from_answer` / `sla_from_answer` 从专家原话解析，LLM 的改图操作（`sanitize_ops` 白名单）不能直接写这些字段。专家反问或说别的事（`intent=other`）时什么也不写。
 - **只问一次**：专家答「没有具体数值，靠经验看」「没有明确的时间要求」时不写字段，但该条目已标记为已问/已解决，不会再问。
+- **最后的复述**：确认前的整图复述会带上记下的判断标准和时限原话，专家确认的就是将要保存的内容。
 - 只有在审阅别人的图（annotate / arbitrate）时不问这两类，与其他覆盖性问题一致。
 
 没有配置 LLM 时，系统退回逐步引导（`app/guide_service.py`），同样的两类追问以扫查（sweep）形式出现：分情况 → 同时进行 → 等人确认 → 返工 → **判断标准 → 时限/升级** → 经验，答案用同一套解析函数处理。

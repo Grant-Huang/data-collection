@@ -41,15 +41,18 @@ _VALIDATOR_QUESTIONS = {
 }
 
 # Ontology follow-ups (docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md
-# section 9): asked after the structure is settled, since they only add detail to steps that
-# already exist. The expert's answer is turned into node fields by review_agent (via
+# section 9): asked once the structure is valid (after unverified steps, validator errors and
+# missing branch conditions) but before the model's own uncertainties -- in a trial run with a
+# real model, almost every answer produced a new uncertainty (priority 40), so anything ranked
+# below "model" was never reached within max_questions. The expert's answer is turned into node fields by review_agent (via
 # ontology_capture), never by the model.
 CRITERION_QUESTION = "「{label}」这里判断走哪条路时，有具体的标准吗？比如正常应该是多少、到多少就不行？没有具体数值、靠经验看也可以直接说。"
 TIMING_QUESTION = "「{label}」要等人确认，一般最晚多久要有结果？超时了会找谁？没有明确的时间要求也可以直接说。"
+ONTOLOGY_KINDS = ("criterion", "timing")
 MAX_ONTOLOGY_GAPS_PER_KIND = 2  # keep the interview short: only the first few decision / approval steps
 
-PRIORITY = {"unverified_node": 10, "validator": 20, "decision_condition": 30, "model": 40, "coverage": 50,
-            "criterion": 55, "timing": 56, "missing_actor": 60}
+PRIORITY = {"unverified_node": 10, "validator": 20, "decision_condition": 30, "criterion": 35, "timing": 36,
+            "model": 40, "coverage": 50, "missing_actor": 60}
 
 
 def _gap(kind: str, text: str, node_ids: Iterable[str] = (), *, source: str = "rule", key: str = "") -> dict:

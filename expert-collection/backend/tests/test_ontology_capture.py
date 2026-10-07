@@ -4,7 +4,7 @@ import pytest
 
 from app import guide_service
 from app.guide_service import END_CHIP, NO_PARALLEL_CHIP
-from app.ontology_capture import parse_criterion_answer, parse_duration
+from app.ontology_capture import criterion_from_answer, parse_criterion_answer, parse_duration, sla_from_answer
 
 
 @pytest.mark.parametrize("text,limits,expected,unit", [
@@ -93,3 +93,22 @@ def test_unparseable_answers_are_kept_verbatim_without_numbers(client):
     sla = _node(client, wid, "approval")["sla_config"]
     assert "duration" not in sla and sla["description"] == "一个班之内" and sla["violation_action"] == "none"
     assert r["next_question"]["target"] == "experience_discovery"
+
+
+# Declines phrased the way experts actually answered in an end-to-end run with a real model:
+# filler before the "no", or "没有…要求" mid-sentence. A "no" that carries a number still counts.
+@pytest.mark.parametrize("text", ["这个没有明确的时间要求，班组长一般就在现场。", "时间上没有硬性要求", "没有明确的时间要求"])
+def test_sla_decline_with_filler(text):
+    assert sla_from_answer(text) is None
+
+
+def test_sla_answers_still_recorded():
+    assert sla_from_answer("没超过两小时就行")["duration"] == "PT2H"
+    sla = sla_from_answer("首件送过去以后半小时内质检要给结论，半小时还没签就打电话报给质量主管。")
+    assert sla["duration"] == "PT30M" and sla["escalate_to_role"] == "质量主管"
+    assert sla_from_answer("当天要签完") == {"type": "deadline", "from_trigger": "previous_node_completed", "description": "当天要签完"}
+
+
+def test_criterion_decline_with_filler():
+    assert criterion_from_answer({"label": "x"}, "这个没有具体数值，靠经验看") is None
+    assert criterion_from_answer({"label": "x"}, "主要看铁屑颜色")["type"] == "text"
