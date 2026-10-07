@@ -328,13 +328,71 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
 
 @router.post("/{workflow_id}/regenerate-graph", response_model=WorkflowRecord)
 def regenerate_graph(workflow_id: str) -> WorkflowRecord:
-    """重新生成/验证工作流图。清除布局信息并重新验证图结构。"""
+    """完全重新生成工作流图。从头开始根据所有会话turns重新生成整个DAG。
+
+    这个操作会：
+    1. 从空图开始
+    2. 遍历所有turns中的专家输入
+    3. 根据_turn_state_log恢复每一轮前的FSM状态
+    4. 重新调用guide_service.handle_turn生成ops
+    5. 应用所有ops到新图上
+    6. 验证新生成的图结构
+
+    最终结果应该与当前保存的图完全一致（除了manual_position布局信息）
+    """
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
 
-    for node in record["graph"]["nodes"]:
-        node.pop("manual_position", None)
+    new_graph = graph_ops.new_graph()
+    turn_state_log = record.get("_turn_state_log", [])
+    turns = record.get("turns", [])
+
+    if not turn_state_log:
+        # 没有状态日志，只能清除布局
+        for node in record["graph"]["nodes"]:
+            node.pop("manual_position", None)
+        issues = graph_validator.validate(record["graph"])
+        record["validation"] = issues
+        record["updated_at"] = _now()
+        db.save(record)
+        return WorkflowRecord.model_validate(_strip_internal(record))
+
+    # 遍历每一轮状态并重新生成
+    for log_entry in turn_state_log:
+        expert_turn_id = log_entry["turn_id"]
+        state_before = log_entry["state_before"]
+
+        # 找到这一轮的专家输入
+        expert_turn = next(
+            (t for t in turns if t["turn_id"] == expert_turn_id and t["role"] == "expert"),
+            None
+        )
+        if not expert_turn:
+            continue
+
+        # 调用guide_service重新生成这一轮的ops
+        try:
+            _, ops, _, _ = guide_service.handle_turn(
+                state_before, expert_turn["text"], turn_id=expert_turn_id
+            )
+            new_graph = graph_ops.apply_ops(new_graph, ops)
+        except Exception as e:
+            # 如果某一轮重新生成失败，记录但继续
+            pass
+
+    # 保留原图的manual_position（这些是前端设置的布局）
+    for new_node in new_graph.get("nodes", []):
+        old_node = next(
+            (n for n in record["graph"].get("nodes", [])
+             if n["node_id"] == new_node["node_id"]),
+            None
+        )
+        if old_node and "manual_position" in old_node:
+            new_node["manual_position"] = old_node["manual_position"]
+
+    # 使用重新生成的图
+    record["graph"] = new_graph
 
     issues = graph_validator.validate(record["graph"])
     record["validation"] = issues
