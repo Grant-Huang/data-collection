@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DAG with SLA & Evaluation Rules - Interactive Prototype</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #F9FAFB;
+            color: #1F2937;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #E5E7EB;
+        }
+
+        .header {
+            padding: 16px 24px;
+            border-bottom: 1px solid #E5E7EB;
+            background: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .mode-toggle {
+            display: flex;
+            gap: 8px;
+        }
+
+        .mode-toggle button {
+            padding: 6px 12px;
+            border: 1px solid #D1D5DB;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .mode-toggle button.active {
+            background: #3B82F6;
+            color: white;
+            border-color: #3B82F6;
+        }
+
+        .dag-canvas {
+            flex: 1;
+            padding: 32px;
+            overflow: auto;
+            background: white;
+            position: relative;
+        }
+
+        svg {
+            width: 100%;
+            height: auto;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .node:hover rect,
+        .node:hover circle {
+            filter: brightness(0.95);
+        }
+
+        .node.highlighted rect,
+        .node.highlighted circle {
+            filter: brightness(0.9);
+        }
+
+        .node-rect {
+            fill: white;
+            stroke: #CBD5E1;
+            stroke-width: 2;
+            rx: 8;
+        }
+
+        .node.type-decision .node-rect {
+            fill: #FFFBEB;
+            stroke: #F59E0B;
+        }
+
+        .node.type-activity .node-rect {
+            fill: white;
+            stroke: #CBD5E1;
+        }
+
+        .node-text-main {
+            font-size: 14px;
+            font-weight: 600;
+            fill: #1F2937;
+            text-anchor: middle;
+        }
+
+        .node-text-role {
+            font-size: 11px;
+            fill: #6B7280;
+            text-anchor: middle;
+        }
+
+        .node-text-sla {
+            font-size: 11px;
+            fill: #DC2626;
+            text-anchor: middle;
+            font-weight: 500;
+        }
+
+        .edge {
+            stroke: #94A3B8;
+            stroke-width: 1.5;
+            fill: none;
+            marker-end: url(#arrowhead);
+        }
+
+        .edge.conditional {
+            stroke-dasharray: 4,2;
+        }
+
+        #arrowhead {
+            fill: #94A3B8;
+        }
+
+        .edge-label {
+            font-size: 11px;
+            fill: #6B7280;
+            background: white;
+            padding: 2px 4px;
+        }
+
+        .detail-panel {
+            width: 380px;
+            background: white;
+            border-left: 1px solid #E5E7EB;
+            display: flex;
+            flex-direction: column;
+            box-shadow: -2px 0 4px rgba(0,0,0,0.05);
+            overflow-y: auto;
+            transform: translateX(0);
+            transition: transform 0.3s;
+        }
+
+        .detail-panel.closed {
+            display: none;
+        }
+
+        .panel-header {
+            padding: 16px;
+            border-bottom: 1px solid #E5E7EB;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .panel-close {
+            background: none;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            color: #6B7280;
+        }
+
+        .panel-content {
+            padding: 16px;
+        }
+
+        .section {
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #1F2937;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .section-title .icon {
+            font-size: 16px;
+        }
+
+        .basic-info {
+            display: grid;
+            gap: 8px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .info-label {
+            color: #6B7280;
+            font-weight: 500;
+        }
+
+        .info-value {
+            color: #1F2937;
+        }
+
+        .sla-section {
+            border-left: 3px solid;
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+            background: #FAFAFA;
+            border-radius: 4px;
+        }
+
+        .sla-section.deadline {
+            border-left-color: #DC2626;
+            background: #FEF2F2;
+        }
+
+        .sla-section.target {
+            border-left-color: #EA580C;
+            background: #FFFBEB;
+        }
+
+        .sla-type {
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #1F2937;
+        }
+
+        .sla-detail {
+            font-size: 12px;
+            color: #6B7280;
+            line-height: 1.6;
+        }
+
+        .sla-detail strong {
+            color: #1F2937;
+            font-weight: 500;
+        }
+
+        .evaluation-item {
+            margin-bottom: 12px;
+            border: 1px solid #E5E7EB;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .evaluation-header {
+            padding: 10px 12px;
+            background: #F9FAFB;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 500;
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .evaluation-header:hover {
+            background: #F3F4F6;
+        }
+
+        .evaluation-header.expanded {
+            background: #EFF6FF;
+            border-bottom-color: #3B82F6;
+        }
+
+        .evaluation-header-left {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .evaluation-expand-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+
+        .evaluation-header.expanded .evaluation-expand-icon {
+            transform: rotate(180deg);
+        }
+
+        .eval-checkbox {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #10B981;
+            border-radius: 3px;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #10B981;
+        }
+
+        .evaluation-header-right {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            font-size: 11px;
+            color: #6B7280;
+        }
+
+        .logic-tag {
+            background: #F3F4F6;
+            padding: 2px 6px;
+            border-radius: 3px;
+            border: 1px solid #D1D5DB;
+        }
+
+        .evaluation-content {
+            padding: 12px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .evaluation-header.expanded + .evaluation-content {
+            display: block;
+        }
+
+        .eval-field {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+
+        .eval-label {
+            color: #6B7280;
+            font-weight: 500;
+        }
+
+        .eval-value {
+            color: #1F2937;
+        }
+
+        .threshold-list {
+            margin-left: 12px;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        .threshold-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .threshold-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .threshold-dot.normal {
+            background: #10B981;
+        }
+
+        .threshold-dot.warning {
+            background: #F59E0B;
+        }
+
+        .threshold-dot.critical {
+            background: #EF4444;
+        }
+
+        .divider {
+            height: 1px;
+            background: #E5E7EB;
+            margin: 16px 0;
+        }
+
+        .legend {
+            padding: 16px;
+            border-top: 1px solid #E5E7EB;
+            background: #F9FAFB;
+            font-size: 11px;
+            color: #6B7280;
+            line-height: 1.6;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .legend-icon {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="main-area">
+            <div class="header">
+                <h1>初评流程 - SLA & 评估规则可视化</h1>
+                <div class="mode-toggle">
+                    <button class="active" onclick="switchMode('full')">完整视图</button>
+                    <button onclick="switchMode('graph')">仅图表</button>
+                </div>
+            </div>
+
+            <div class="dag-canvas" id="dagCanvas">
+                <svg width="800" height="600" viewBox="0 0 800 600">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#94A3B8"/>
+                        </marker>
+                    </defs>
+
+                    <!-- 边 -->
+                    <line x1="200" y1="100" x2="200" y2="160" class="edge"/>
+                    <line x1="200" y1="220" x2="200" y2="280" class="edge"/>
+                    <line x1="200" y1="340" x2="200" y2="400" class="edge"/>
+
+                    <!-- 节点 1: 分类 -->
+                    <g class="node type-activity" onclick="showDetail(this, 'n1')">
+                        <rect x="120" y="20" width="160" height="80" class="node-rect"/>
+                        <text x="200" y="45" class="node-text-main">分类</text>
+                        <text x="200" y="65" class="node-text-role">操作员</text>
+                        <text x="200" y="85" class="node-text-role">（无 SLA）</text>
+                    </g>
+
+                    <!-- 节点 2: 初评 (有 SLA) -->
+                    <g class="node type-decision" onclick="showDetail(this, 'n2')">
+                        <rect x="120" y="160" width="160" height="100" class="node-rect"/>
+                        <text x="200" y="185" class="node-text-main">初评</text>
+                        <text x="200" y="205" class="node-text-role">值班工程师</text>
+                        <text x="200" y="225" class="node-text-sla">⏱ 2h deadline</text>
+                    </g>
+
+                    <!-- 节点 3: 汇总 -->
+                    <g class="node type-activity" onclick="showDetail(this, 'n3')">
+                        <rect x="120" y="280" width="160" height="80" class="node-rect"/>
+                        <text x="200" y="305" class="node-text-main">汇总分析</text>
+                        <text x="200" y="325" class="node-text-role">质量主管</text>
+                    </g>
+
+                    <!-- 节点 4: 试产 (有 SLA) -->
+                    <g class="node type-activity" onclick="showDetail(this, 'n4')">
+                        <rect x="120" y="400" width="160" height="100" class="node-rect"/>
+                        <text x="200" y="425" class="node-text-main">试产并检验</text>
+                        <text x="200" y="445" class="node-text-role">操作员</text>
+                        <text x="200" y="465" class="node-text-sla">⏱ 4h deadline</text>
+                    </g>
+
+                    <!-- 右侧补充信息 -->
+                    <text x="420" y="30" style="font-size: 12px; fill: #6B7280;">图例：</text>
+                    <rect x="420" y="40" width="12" height="12" style="fill: white; stroke: #CBD5E1; stroke-width: 1; rx: 2;"/>
+                    <text x="440" y="50" style="font-size: 11px; fill: #6B7280;">Activity（活动）</text>
+
+                    <rect x="420" y="60" width="12" height="12" style="fill: #FFFBEB; stroke: #F59E0B; stroke-width: 1; rx: 2;"/>
+                    <text x="440" y="70" style="font-size: 11px; fill: #6B7280;">Decision（决策）</text>
+
+                    <text x="420" y="95" style="font-size: 12px; fill: #6B7280;">⏱ 表示有时间约束 (SLA)</text>
+                </svg>
+            </div>
+
+            <div class="legend">
+                <div class="legend-item">
+                    <span class="legend-icon">⏱</span>
+                    <span>节点有硬性时间约束（Deadline）</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-icon">📋</span>
+                    <span>节点有结构化的评估规则</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-icon">🔄</span>
+                    <span>节点有返工/重试条件</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 详情面板 -->
+        <div class="detail-panel" id="detailPanel">
+            <div class="panel-header">
+                <h2 id="nodeName">初评</h2>
+                <button class="panel-close" onclick="closeDetail()">×</button>
+            </div>
+
+            <div class="panel-content">
+                <!-- 基本信息 -->
+                <div class="section">
+                    <div class="section-title">基本信息</div>
+                    <div class="basic-info">
+                        <div class="info-row">
+                            <span class="info-label">节点类型</span>
+                            <span class="info-value" id="nodeType">Activity</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">执行角色</span>
+                            <span class="info-value" id="nodeRole">值班工程师</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">描述</span>
+                            <span class="info-value" id="nodeDesc" style="text-align: right; max-width: 200px;">对分类产品进行质量初步评估</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- 时间约束 -->
+                <div class="section" id="slaSection">
+                    <div class="section-title"><span class="icon">⏱</span>时间约束</div>
+                    <div class="sla-section deadline" id="slaContent"></div>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- 评估规则 -->
+                <div class="section" id="evaluationSection">
+                    <div class="section-title"><span class="icon">📋</span>评估规则</div>
+                    <div id="evaluationContent"></div>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- 关联规则 -->
+                <div class="section" id="rulesSection" style="display: none;">
+                    <div class="section-title"><span class="icon">📚</span>关联规则</div>
+                    <div class="basic-info">
+                        <a href="#" style="font-size: 12px; color: #3B82F6;">SOP-QC-001: 初评流程标准</a>
+                        <a href="#" style="font-size: 12px; color: #3B82F6;">SOP-QC-002: 缺陷判定标准</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const nodeData = {
+            n1: {
+                name: '分类',
+                type: 'Activity',
+                role: '操作员',
+                desc: '对采集到的产品进行分类整理',
+                hasSLA: false,
+                hasEval: false
+            },
+            n2: {
+                name: '初评',
+                type: 'Decision',
+                role: '值班工程师',
+                desc: '对分类产品进行质量初步评估',
+                hasSLA: true,
+                sla: {
+                    type: 'deadline',
+                    duration: '2小时',
+                    trigger: '前序节点完成',
+                    action: '升级报告',
+                    desc: '必须在分类完成后2小时内完成初评'
+                },
+                hasEval: true,
+                eval: [
+                    {
+                        id: 'defect_density',
+                        name: '缺陷密度',
+                        type: '数值指标',
+                        required: true,
+                        unit: 'defects/mm²',
+                        thresholds: [
+                            { level: 'normal', label: 'Normal', value: '< 10 defects/mm²' },
+                            { level: 'warning', label: 'Warning', value: '10-20 defects/mm²' },
+                            { level: 'critical', label: 'Critical', value: '> 20 defects/mm²' }
+                        ],
+                        desc: '检查单位面积内的缺陷数量',
+                        logic: 'AND'
+                    },
+                    {
+                        id: 'die_location',
+                        name: 'Die 位置',
+                        type: '分类选项',
+                        required: true,
+                        allowed: ['Core', 'Periphery', 'Edge'],
+                        desc: '缺陷落在芯片哪个区域',
+                        logic: 'AND'
+                    },
+                    {
+                        id: 'critical_layer',
+                        name: '关键层标记',
+                        type: '是/否',
+                        required: true,
+                        desc: '是否落在关键工艺层',
+                        logic: null
+                    }
+                ]
+            },
+            n3: {
+                name: '汇总分析',
+                type: 'Activity',
+                role: '质量主管',
+                desc: '汇总各部分的分析结果并形成总体评估',
+                hasSLA: false,
+                hasEval: false
+            },
+            n4: {
+                name: '试产并检验',
+                type: 'Activity',
+                role: '操作员',
+                desc: '根据分析结果进行试产，并对首件进行检验',
+                hasSLA: true,
+                sla: {
+                    type: 'deadline',
+                    duration: '4小时',
+                    trigger: '前序节点完成',
+                    action: '升级报告',
+                    desc: '必须在汇总完成后4小时内完成首件检验'
+                },
+                hasEval: true,
+                eval: [
+                    {
+                        id: 'dimension_conformance',
+                        name: '尺寸合格度',
+                        type: '数值指标',
+                        required: true,
+                        unit: '%',
+                        thresholds: [
+                            { level: 'normal', label: 'Normal', value: '>= 95%' },
+                            { level: 'warning', label: 'Warning', value: '85-95%' },
+                            { level: 'critical', label: 'Critical', value: '< 85%' }
+                        ],
+                        desc: '首件检验中尺寸合格的特征点比例',
+                        logic: 'AND'
+                    },
+                    {
+                        id: 'surface_defects',
+                        name: '表面缺陷密度',
+                        type: '数值指标',
+                        required: true,
+                        unit: 'defects/mm²',
+                        thresholds: [
+                            { level: 'normal', label: 'Normal', value: '< 5 defects/mm²' },
+                            { level: 'warning', label: 'Warning', value: '5-10 defects/mm²' },
+                            { level: 'critical', label: 'Critical', value: '> 10 defects/mm²' }
+                        ],
+                        desc: '检查表面缺陷（划伤、污渍等）的密度',
+                        logic: null
+                    }
+                ]
+            }
+        };
+
+        function showDetail(element, nodeId) {
+            const data = nodeData[nodeId];
+            if (!data) return;
+
+            document.getElementById('nodeName').textContent = data.name;
+            document.getElementById('nodeType').textContent = data.type;
+            document.getElementById('nodeRole').textContent = data.role;
+            document.getElementById('nodeDesc').textContent = data.desc;
+
+            // SLA 部分
+            const slaSection = document.getElementById('slaSection');
+            const slaContent = document.getElementById('slaContent');
+            if (data.hasSLA) {
+                slaSection.style.display = 'block';
+                const sla = data.sla;
+                slaContent.className = `sla-section ${sla.type === 'deadline' ? 'deadline' : 'target'}`;
+                slaContent.innerHTML = `
+                    <div class="sla-type">• 类型：${sla.type === 'deadline' ? '硬性 Deadline' : '目标时长'}</div>
+                    <div class="sla-detail">
+                        <strong>时长：</strong> ${sla.duration}<br>
+                        <strong>起点：</strong> ${sla.trigger}<br>
+                        <strong>超期处理：</strong> ${sla.action}<br>
+                        <strong>说明：</strong> ${sla.desc}
+                    </div>
+                `;
+            } else {
+                slaSection.style.display = 'none';
+            }
+
+            // 评估规则部分
+            const evalSection = document.getElementById('evaluationSection');
+            const evalContent = document.getElementById('evaluationContent');
+            if (data.hasEval) {
+                evalSection.style.display = 'block';
+                evalContent.innerHTML = data.eval.map((criterion, idx) => `
+                    <div class="evaluation-item">
+                        <div class="evaluation-header" onclick="toggleEval(this)">
+                            <div class="evaluation-header-left">
+                                <span class="evaluation-expand-icon">▼</span>
+                                <span class="eval-checkbox">✓</span>
+                                <span>${criterion.name}</span>
+                            </div>
+                            <div class="evaluation-header-right">
+                                ${criterion.logic ? `<span class="logic-tag">${criterion.logic}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="evaluation-content">
+                            <div class="eval-field">
+                                <span class="eval-label">类型：</span>
+                                <span class="eval-value">${criterion.type}</span>
+                            </div>
+                            ${criterion.unit ? `<div class="eval-field">
+                                <span class="eval-label">单位：</span>
+                                <span class="eval-value">${criterion.unit}</span>
+                            </div>` : ''}
+                            ${criterion.thresholds ? `<div class="eval-field">
+                                <span class="eval-label">阈值：</span>
+                                <div class="threshold-list">
+                                    ${criterion.thresholds.map(t => `
+                                        <div class="threshold-item">
+                                            <span class="threshold-dot ${t.level}"></span>
+                                            <span><strong>${t.label}:</strong> ${t.value}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>` : ''}
+                            ${criterion.allowed ? `<div class="eval-field">
+                                <span class="eval-label">允许值：</span>
+                                <span class="eval-value">${criterion.allowed.join(', ')}</span>
+                            </div>` : ''}
+                            <div class="eval-field">
+                                <span class="eval-label">说明：</span>
+                                <span class="eval-value">${criterion.desc}</span>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                evalSection.style.display = 'none';
+            }
+
+            // 显示关联规则部分
+            document.getElementById('rulesSection').style.display = nodeId === 'n2' ? 'block' : 'none';
+
+            document.getElementById('detailPanel').classList.remove('closed');
+        }
+
+        function toggleEval(header) {
+            header.classList.toggle('expanded');
+        }
+
+        function closeDetail() {
+            document.getElementById('detailPanel').classList.add('closed');
+        }
+
+        function switchMode(mode) {
+            document.querySelectorAll('.mode-toggle button').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (mode === 'graph') {
+                document.getElementById('detailPanel').classList.add('closed');
+            }
+        }
+    </script>
+</body>
+</html>

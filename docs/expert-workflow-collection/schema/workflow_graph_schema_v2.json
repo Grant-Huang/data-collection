@@ -421,7 +421,15 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "（已弃用，保留向后兼容）简单文本形式的决策标准。建议迁移到 evaluation_criteria（结构化形式）。"
+        },
+        "evaluation_criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluation_criterion"
+          },
+          "description": "结构化的评估标准，取代 decision_criteria。包含指标定义、阈值、逻辑关系等。"
         },
         "rule_ids": {
           "type": "array",
@@ -436,7 +444,12 @@
           }
         },
         "expected_duration": {
-          "type": "string"
+          "type": "string",
+          "description": "预期工作时长（自然语言，如'2h'）。建议迁移到 sla_config（结构化形式）。"
+        },
+        "sla_config": {
+          "$ref": "#/$defs/sla_config",
+          "description": "服务级别协议配置：时间约束、deadline、SLA 类型等。"
         },
         "is_optional": {
           "type": "boolean"
@@ -709,6 +722,102 @@
         },
         "uri_or_reference": {
           "type": "string"
+        }
+      }
+    },
+    "sla_config": {
+      "type": "object",
+      "description": "服务级别协议（SLA）配置：定义节点的时间约束、deadline 类型及其含义",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["deadline", "target", "warn_threshold"],
+          "description": "deadline=硬性截止时间；target=目标时长；warn_threshold=预警阈值"
+        },
+        "duration": {
+          "type": "string",
+          "description": "时长表示（ISO 8601 格式或自然语言，如'PT2H'或'2h'）"
+        },
+        "from_trigger": {
+          "type": "string",
+          "enum": ["previous_node_completed", "workflow_start", "manual_start"],
+          "description": "时间计算的起点：从前序节点完成开始、从工作流开始、还是手动开始"
+        },
+        "enforced": {
+          "type": "boolean",
+          "description": "是否为硬性约束（违反会导致流程异常），还是仅作为参考"
+        },
+        "violation_action": {
+          "type": "string",
+          "enum": ["escalate", "notify", "auto_reassign", "none"],
+          "description": "超期时的处理方式：升级、通知、自动转派、不处理"
+        },
+        "description": {
+          "type": "string",
+          "description": "人类可读的 SLA 说明，如'必须在前序节点完成后2小时内完成初评'"
+        }
+      }
+    },
+    "evaluation_criterion": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "description": "单个评估标准或决策条件",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "标准的唯一标识符（如'defect_density'）"
+        },
+        "name": {
+          "type": "string",
+          "description": "人类可读的标准名称（如'缺陷密度'）"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["metric", "categorical", "boolean", "text", "numeric_range"],
+          "description": "标准的数据类型：metric(指标)、categorical(分类)、boolean(是否)、text(文本)、numeric_range(数值区间)"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "是否为必填项"
+        },
+        "unit": {
+          "type": "string",
+          "description": "单位（如'defects/mm²'、'%'）"
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "数值型标准的阈值定义（如normal/warning/critical等级）",
+          "properties": {
+            "normal": {
+              "type": "string"
+            },
+            "warning": {
+              "type": "string"
+            },
+            "critical": {
+              "type": "string"
+            }
+          }
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "分类型标准的允许值列表"
+        },
+        "logic": {
+          "type": "string",
+          "enum": ["AND", "OR"],
+          "description": "该标准与下一个标准的逻辑关系（默认 AND）"
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "依赖的前置标准 id（如果有条件依赖）"
+        },
+        "description": {
+          "type": "string",
+          "description": "标准的详细说明或评估方法"
         }
       }
     }
