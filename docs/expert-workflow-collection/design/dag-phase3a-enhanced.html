@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DAG with Phase 3-A Enhanced - SLA, Approval, Aggregation, Temporary Measures</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #F9FAFB;
+            color: #1F2937;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            position: relative;
+        }
+
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .header {
+            margin-bottom: 20px;
+            padding: 12px 16px;
+            background: white;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .header p {
+            font-size: 12px;
+            color: #6B7280;
+        }
+
+        .dag-canvas {
+            flex: 1;
+            background: white;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            padding: 20px;
+            overflow: auto;
+            position: relative;
+        }
+
+        svg {
+            width: 100%;
+            height: auto;
+            min-height: 600px;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .node:hover rect {
+            filter: brightness(0.95);
+        }
+
+        .node-rect {
+            fill: white;
+            stroke: #CBD5E1;
+            stroke-width: 2;
+            rx: 6;
+        }
+
+        .node-rect.approval {
+            stroke: #8B5CF6;
+            stroke-width: 2.5;
+        }
+
+        .node-text {
+            font-size: 12px;
+            font-weight: 500;
+            text-anchor: middle;
+            fill: #1F2937;
+        }
+
+        .node-label {
+            font-size: 11px;
+            fill: #6B7280;
+        }
+
+        .node-icon {
+            font-size: 14px;
+            text-anchor: middle;
+        }
+
+        .edge-line {
+            stroke: #CBD5E1;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#arrowhead);
+        }
+
+        #arrowhead {
+            fill: #CBD5E1;
+        }
+
+        /* 详情面板 */
+        .detail-panel {
+            position: fixed;
+            width: 380px;
+            max-height: 70vh;
+            background: white;
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            padding: 16px;
+            right: 20px;
+            top: 20px;
+            z-index: 1000;
+            overflow-y: auto;
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .detail-panel.open {
+            display: flex;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #E5E7EB;
+            padding-bottom: 12px;
+            margin-bottom: 8px;
+        }
+
+        .panel-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .panel-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #9CA3AF;
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #1F2937;
+            margin-top: 8px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .info-item {
+            font-size: 11px;
+            margin-bottom: 6px;
+            line-height: 1.6;
+        }
+
+        .info-item strong {
+            color: #374151;
+            display: inline-block;
+            width: 80px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #FEE2E2;
+            color: #DC2626;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .badge.approval {
+            background: #F3E8FF;
+            color: #8B5CF6;
+        }
+
+        .badge.temporary {
+            background: #FEF3C7;
+            color: #F59E0B;
+        }
+
+        .badge.trend {
+            background: #DFF6FF;
+            color: #0369A1;
+        }
+
+        /* 权限矩阵 */
+        .approval-matrix {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 6px;
+        }
+
+        .approval-item {
+            padding: 8px;
+            border: 1px solid #E5E7EB;
+            border-radius: 4px;
+            background: #FAFAFA;
+            font-size: 10px;
+        }
+
+        .approval-step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
+            font-weight: 600;
+            color: #1F2937;
+        }
+
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #8B5CF6;
+            color: white;
+            font-size: 9px;
+        }
+
+        /* 聚合条件 */
+        .aggregation-info {
+            padding: 8px;
+            background: #EEF2FF;
+            border-left: 3px solid #3B82F6;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .aggregation-detail {
+            line-height: 1.5;
+        }
+
+        .mini-chart {
+            margin-top: 6px;
+            height: 40px;
+            border: 1px solid #BFDBFE;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        /* 临时措施 */
+        .temporary-info {
+            padding: 8px;
+            background: #FEF3C7;
+            border-left: 3px solid #F59E0B;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .countdown-display {
+            margin-top: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .countdown-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+        }
+
+        progress {
+            flex: 1;
+            height: 4px;
+            border-radius: 2px;
+        }
+
+        progress::-webkit-progress-bar {
+            background-color: #E5E7EB;
+            border-radius: 2px;
+        }
+
+        progress::-webkit-progress-value {
+            background-color: #F59E0B;
+            border-radius: 2px;
+        }
+
+        /* 隔离范围 */
+        .containment-info {
+            padding: 8px;
+            background: #DBEAFE;
+            border-left: 3px solid #06B6D4;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .highlight {
+            color: #DC2626;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="main-area">
+            <div class="header">
+                <h1>🔄 Expert Workflow DAG - Phase 3-A Enhanced</h1>
+                <p>展示 SLA、权限矩阵、聚合条件、临时措施、隔离范围</p>
+            </div>
+            <div class="dag-canvas">
+                <svg id="dagSvg">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#CBD5E1"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+
+        <div class="detail-panel" id="detailPanel">
+            <div class="panel-header">
+                <h2 id="nodeName">节点信息</h2>
+                <button class="panel-close" onclick="closePanel()">×</button>
+            </div>
+
+            <div id="basicInfo"></div>
+            <div id="slaSection"></div>
+            <div id="approvalSection"></div>
+            <div id="evaluationSection"></div>
+            <div id="temporarySection"></div>
+            <div id="containmentSection"></div>
+        </div>
+    </div>
+
+    <script>
+        const nodeData = {
+            n1: {
+                id: 'n1',
+                name: '分类',
+                type: 'Activity',
+                role: '操作员',
+                desc: '对采集到的产品进行分类'
+            },
+            n2: {
+                id: 'n2',
+                name: '初评',
+                type: 'Decision',
+                role: '值班工程师',
+                desc: '进行质量初步评估',
+                hasSLA: true,
+                sla: {
+                    type: 'deadline',
+                    duration: '2小时',
+                    desc: '必须在前序节点完成后2小时内完成初评'
+                },
+                hasApprovalMatrix: false,
+                hasAggregation: true,
+                aggregation: {
+                    method: 'metric',
+                    description: '缺陷密度评估'
+                }
+            },
+            n3: {
+                id: 'n3',
+                name: 'Release批准',
+                type: 'Approval',
+                role: '工程师团队',
+                desc: '产品Release的多角色批准流程',
+                hasApprovalMatrix: true,
+                approvalMatrix: [
+                    {
+                        type: '设备批准',
+                        roles: ['设备工程师'],
+                        sequence: 'sequential',
+                        criteria: '设备状态正常、无报警'
+                    },
+                    {
+                        type: '工艺批准',
+                        roles: ['工艺工程师'],
+                        sequence: 'sequential',
+                        criteria: '工艺参数在范围内'
+                    },
+                    {
+                        type: '质量批准',
+                        roles: ['质量工程师'],
+                        sequence: 'sequential',
+                        criteria: '首件检验合格'
+                    }
+                ]
+            },
+            n4: {
+                id: 'n4',
+                name: '试产',
+                type: 'Activity',
+                role: '操作员',
+                desc: '根据分析结果进行试产',
+                hasSLA: true,
+                sla: {
+                    type: 'deadline',
+                    duration: '4小时',
+                    desc: '必须在4小时内完成试产和首件检验'
+                }
+            },
+            n5: {
+                id: 'n5',
+                name: '临时Bypass',
+                type: 'Activity',
+                role: '设备工程师',
+                desc: '设备故障期间的临时测试Bypass',
+                hasTemporary: true,
+                temporary: {
+                    expiration: {
+                        duration: 'PT72H',
+                        lotCount: 3,
+                        trigger: 'duration_or_count'
+                    },
+                    revocation: {
+                        type: 'reoccurrence',
+                        days: 30,
+                        desc: '30天内同问题再现则失效'
+                    }
+                }
+            },
+            n6: {
+                id: 'n6',
+                name: '产品隔离',
+                type: 'Activity',
+                role: '质量工程师',
+                desc: '根据根因隔离受影响产品',
+                hasContainment: true,
+                containment: {
+                    dimension: 'equipment_id',
+                    rule: '此设备上加工的所有产品',
+                    affectedProducts: 847
+                }
+            }
+        };
+
+        function drawDAG() {
+            const svg = document.getElementById('dagSvg');
+            svg.innerHTML = '<defs><marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><polygon points="0 0, 10 3, 0 6" fill="#CBD5E1"/></marker></defs>';
+
+            const positions = {
+                n1: { x: 50, y: 150 },
+                n2: { x: 50, y: 250 },
+                n3: { x: 250, y: 150 },
+                n4: { x: 250, y: 250 },
+                n5: { x: 450, y: 150 },
+                n6: { x: 450, y: 250 }
+            };
+
+            // 绘制边
+            const edges = [
+                { from: 'n1', to: 'n2' },
+                { from: 'n2', to: 'n3' },
+                { from: 'n3', to: 'n4' },
+                { from: 'n4', to: 'n5' },
+                { from: 'n4', to: 'n6' }
+            ];
+
+            edges.forEach(edge => {
+                const from = positions[edge.from];
+                const to = positions[edge.to];
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', from.x + 100);
+                line.setAttribute('y1', from.y + 30);
+                line.setAttribute('x2', to.x + 20);
+                line.setAttribute('y2', to.y + 30);
+                line.setAttribute('class', 'edge-line');
+                svg.appendChild(line);
+            });
+
+            // 绘制节点
+            Object.entries(nodeData).forEach(([id, data]) => {
+                const pos = positions[id];
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'node');
+                g.setAttribute('data-id', id);
+                g.style.cursor = 'pointer';
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', pos.x);
+                rect.setAttribute('y', pos.y);
+                rect.setAttribute('width', 140);
+                rect.setAttribute('height', 60);
+                rect.setAttribute('class', `node-rect ${data.type === 'Approval' ? 'approval' : ''}`);
+                g.appendChild(rect);
+
+                const nameText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                nameText.setAttribute('x', pos.x + 70);
+                nameText.setAttribute('y', pos.y + 18);
+                nameText.setAttribute('class', 'node-text');
+                nameText.textContent = data.name;
+                g.appendChild(nameText);
+
+                const roleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                roleText.setAttribute('x', pos.x + 70);
+                roleText.setAttribute('y', pos.y + 35);
+                roleText.setAttribute('class', 'node-label');
+                roleText.textContent = data.role.substring(0, 10);
+                g.appendChild(roleText);
+
+                // 添加维度指示图标
+                const icons = [];
+                if (data.hasSLA) icons.push('⏱');
+                if (data.hasApprovalMatrix) icons.push('🔐');
+                if (data.hasAggregation) icons.push('📊');
+                if (data.hasTemporary) icons.push('⏳');
+                if (data.hasContainment) icons.push('📍');
+
+                if (icons.length > 0) {
+                    const iconText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    iconText.setAttribute('x', pos.x + 70);
+                    iconText.setAttribute('y', pos.y + 52);
+                    iconText.setAttribute('class', 'node-icon');
+                    iconText.textContent = icons.join(' ');
+                    g.appendChild(iconText);
+                }
+
+                g.addEventListener('click', () => showDetail(id));
+                svg.appendChild(g);
+            });
+
+            // 调整SVG高度
+            svg.setAttribute('viewBox', '0 0 700 350');
+        }
+
+        function showDetail(nodeId) {
+            const data = nodeData[nodeId];
+            if (!data) return;
+
+            document.getElementById('nodeName').textContent = data.name;
+
+            // 基本信息
+            let html = `
+                <div>
+                    <div class="section-title">📌 基本信息</div>
+                    <div class="info-item"><strong>类型：</strong>${data.type}</div>
+                    <div class="info-item"><strong>角色：</strong>${data.role}</div>
+                    <div class="info-item"><strong>描述：</strong>${data.desc}</div>
+                </div>
+            `;
+
+            // SLA信息
+            if (data.hasSLA) {
+                html += `
+                    <div>
+                        <div class="section-title">⏱ 时间约束</div>
+                        <div class="info-item"><strong>类型：</strong><span class="badge">Deadline</span></div>
+                        <div class="info-item"><strong>时长：</strong>${data.sla.duration}</div>
+                        <div class="info-item"><strong>说明：</strong>${data.sla.desc}</div>
+                    </div>
+                `;
+            }
+
+            // 权限矩阵
+            if (data.hasApprovalMatrix) {
+                html += `<div><div class="section-title">🔐 权限和签字</div>`;
+                html += '<div class="approval-matrix">';
+                data.approvalMatrix.forEach((approval, i) => {
+                    html += `
+                        <div class="approval-item">
+                            <div class="approval-step">
+                                <span class="step-number">${i + 1}</span>
+                                <strong>${approval.type}</strong>
+                            </div>
+                            <div class="info-item"><strong>角色：</strong>${approval.roles.join(', ')}</div>
+                            <div class="info-item"><strong>顺序：</strong>${approval.sequence === 'sequential' ? '顺序' : '并行'}</div>
+                            <div class="info-item"><strong>标准：</strong>${approval.criteria}</div>
+                        </div>
+                    `;
+                });
+                html += '</div></div>';
+            }
+
+            // 聚合条件
+            if (data.hasAggregation) {
+                html += `
+                    <div>
+                        <div class="section-title">📊 聚合条件</div>
+                        <div class="aggregation-info">
+                            <div class="aggregation-detail">
+                                <strong>说明：</strong> ${data.aggregation.description}
+                            </div>
+                            <div class="mini-chart">
+                                <svg viewBox="0 0 100 40" style="width: 100%; height: 100%;">
+                                    <polyline points="5,35 15,25 25,20 35,25 45,10 55,5 65,15 75,8 85,18 95,10"
+                                              fill="none" stroke="#3B82F6" stroke-width="1.5"/>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 临时措施
+            if (data.hasTemporary) {
+                const temp = data.temporary;
+                html += `
+                    <div>
+                        <div class="section-title">⏳ 临时措施</div>
+                        <div class="temporary-info">
+                            <div class="info-item"><span class="badge temporary">临时措施</span></div>
+                            <div class="info-item"><strong>有效期：</strong>${temp.expiration.duration} OR ${temp.expiration.lotCount} lot</div>
+                            <div class="info-item"><strong>失效条件：</strong>${temp.revocation.desc}</div>
+                            <div class="countdown-display">
+                                <div class="countdown-row">
+                                    <span>时间</span>
+                                    <progress value="33" max="100"></progress>
+                                    <span>33%</span>
+                                </div>
+                                <div class="countdown-row">
+                                    <span>产品数</span>
+                                    <progress value="33" max="100"></progress>
+                                    <span>1/3</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 隔离范围
+            if (data.hasContainment) {
+                const cont = data.containment;
+                html += `
+                    <div>
+                        <div class="section-title">📍 隔离和追溯</div>
+                        <div class="containment-info">
+                            <div class="info-item"><strong>维度：</strong>${cont.dimension}</div>
+                            <div class="info-item"><strong>规则：</strong>${cont.rule}</div>
+                            <div class="info-item"><strong>影响：</strong><span class="highlight">${cont.affectedProducts} 件产品</span></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('basicInfo').innerHTML = html;
+            document.getElementById('detailPanel').classList.add('open');
+        }
+
+        function closePanel() {
+            document.getElementById('detailPanel').classList.remove('open');
+        }
+
+        // 点击面板外关闭
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('detailPanel');
+            if (!panel.contains(e.target) && !e.target.closest('.node')) {
+                closePanel();
+            }
+        });
+
+        // 初始化
+        drawDAG();
+    </script>
+</body>
+</html>
