@@ -633,6 +633,10 @@ export interface Settings {
     audit_log_retention_days: number;
     mobile_session_timeout_minutes: number | null;
   };
+  llm_timeouts: {
+    regenerate_graph_seconds: number;
+    guide_service_seconds: number;
+  };
 }
 
 export const LLM_SLOT_LABELS: Record<string, string> = {
