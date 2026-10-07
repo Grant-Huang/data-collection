@@ -640,32 +640,58 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
 
 
-@router.get("/{workflow_id}/schema/export")
-def export_workflow_schema(workflow_id: str) -> dict:
-    """导出单个workflow的DAG schema为JSON格式。包含完整的graph结构及workflow元数据。"""
-    from fastapi import Response
-    import json
-
+@router.get("/{workflow_id}/schema", response_model=dict)
+def export_dag_schema(workflow_id: str, format: str = "json") -> dict:
+    """导出DAG schema。支持格式：json"""
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
 
-    export_payload = {
-        "workflow_meta": {
-            "id": record["id"],
-            "name": record["name"],
-            "status": record["status"],
-            "created_at": record["created_at"],
-            "updated_at": record["updated_at"],
-        },
-        "graph": record["graph"],
-        "task_workflow": record.get("task_workflow"),
-        "schema_version": "2.0",
-    }
+    graph = record["graph"]
 
-    body = json.dumps(export_payload, ensure_ascii=False, indent=2)
-    return Response(
-        content=body,
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{workflow_id}_schema.json"'},
-    )
+    if format == "json":
+        schema = {
+            "metadata": {
+                "workflow_id": record["id"],
+                "workflow_name": record["name"],
+                "status": record["status"],
+                "created_at": record["created_at"],
+                "updated_at": record["updated_at"],
+            },
+            "graph": {
+                "type": graph.get("graph_type", "dag"),
+                "start_node_ids": graph.get("start_node_ids", []),
+                "end_node_ids": graph.get("end_node_ids", []),
+                "node_count": len(graph.get("nodes", [])),
+                "edge_count": len(graph.get("edges", [])),
+            },
+            "nodes": [
+                {
+                    "id": node["node_id"],
+                    "type": node["node_type"],
+                    "label": node["label"],
+                    "actor_roles": node.get("actor_roles", []),
+                    "confidence": node.get("confidence", 1.0),
+                    "expert_confirmed": node.get("expert_confirmed", False),
+                    "decision_question": node.get("decision_question"),
+                    "retry_semantics": node.get("retry_semantics"),
+                }
+                for node in graph.get("nodes", [])
+            ],
+            "edges": [
+                {
+                    "id": edge["edge_id"],
+                    "from": edge["from"],
+                    "to": edge["to"],
+                    "type": edge["edge_type"],
+                    "condition": edge.get("condition"),
+                    "confidence": edge.get("confidence", 1.0),
+                    "expert_confirmed": edge.get("expert_confirmed", False),
+                }
+                for edge in graph.get("edges", [])
+            ],
+            "validation": record.get("validation", []),
+        }
+        return schema
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")

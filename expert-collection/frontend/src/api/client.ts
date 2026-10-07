@@ -58,6 +58,10 @@ export const api = {
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/reopen`),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
+  regenerateGraph: (id: string) =>
+    req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/regenerate-graph`),
+  exportDagSchema: (id: string, format: string = "json") =>
+    req<Record<string, unknown>>("GET", `/api/expert-workflows/${id}/schema?format=${format}`),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
     req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
   regenerateGraphCheck: (id: string) =>

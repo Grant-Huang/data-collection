@@ -40,7 +40,7 @@ export function SessionPage() {
 
   const handleExport = async (workflowId: string) => {
     try {
-      const res = await fetch(`${BASE}/api/expert-workflows/${workflowId}/schema/export`);
+      const res = await fetch(`${BASE}/api/expert-workflows/${workflowId}/schema`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`导出失败: ${res.status} ${text}`);
