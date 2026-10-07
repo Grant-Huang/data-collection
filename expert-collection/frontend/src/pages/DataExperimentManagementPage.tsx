@@ -149,7 +149,7 @@ export function DataExperimentManagementPage() {
                   />
                   <NumberField
                     label="Agent 主动澄清问题上限（个）"
-                    value={settings.review?.max_clarify_questions ?? 20}
+                    value={settings.review?.max_clarify_questions ?? 12}
                     tip="专家讲述之后（或标注时），Agent 最多主动追问多少个问题，问完就复述整个流程请对方确认。对方随时可以继续提修改，不受这个数字限制。"
                     onSave={async (v) => {
                       setSaving(true);

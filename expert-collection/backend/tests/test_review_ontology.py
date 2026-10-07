@@ -68,6 +68,13 @@ def _turn(client, wid, text):
     return client.get(f"/api/expert-workflows/{wid}").json()
 
 
+def _narrate(client, wid, text=NARRATIVE):
+    """Tell the story (one piece is enough here), then say 「讲完了」 -- the draft is only built
+    on that signal, so the expert can tell it in several pieces."""
+    _turn(client, wid, text)
+    return _turn(client, wid, "讲完了")
+
+
 def _node(rec, nid):
     return next(n for n in rec["graph"]["nodes"] if n["node_id"] == nid)
 
@@ -107,7 +114,7 @@ def test_rule_gaps_cap_counts_steps():
 
 def test_answers_become_node_fields_and_ontology(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)
+    rec = _narrate(client, rec["id"])
     wid = rec["id"]
     assert rec["stage"] == "review_review"
 
@@ -143,7 +150,7 @@ def test_answers_become_node_fields_and_ontology(client, model):
 
 def test_declined_answer_records_nothing_and_is_not_asked_again(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)
+    rec = _narrate(client, rec["id"])
     wid = rec["id"]
     rec = _answer_until(client, model, rec, "尺寸是否合格")
     model.review_responses.append(_answer())
@@ -161,7 +168,7 @@ def test_declined_answer_records_nothing_and_is_not_asked_again(client, model):
 def test_unrelated_reply_does_not_write_fields(client, model):
     """A reply the model doesn't read as an answer (e.g. a question back) records nothing."""
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)
+    rec = _narrate(client, rec["id"])
     wid = rec["id"]
     rec = _answer_until(client, model, rec, "工艺工程师签字放行")
     model.review_responses.append({**_answer(), "intent": "other"})

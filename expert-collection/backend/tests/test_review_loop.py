@@ -67,6 +67,13 @@ def _turn(client, wid, text):
     return client.get(f"/api/expert-workflows/{wid}").json()
 
 
+def _narrate(client, wid, text=NARRATIVE):
+    """Tell the story (one piece is enough here), then say 「讲完了」 -- the draft is only built
+    on that signal, so the expert can tell it in several pieces."""
+    _turn(client, wid, text)
+    return _turn(client, wid, "讲完了")
+
+
 def _labels(rec):
     return {n["label"] for n in rec["graph"]["nodes"]}
 
@@ -85,7 +92,13 @@ def test_narrate_extract_clarify_confirm(client, model):
     rec = _turn(client, rec["id"], "我讲一下设备报警怎么处理")  # too short: ask for the full story, no model call
     assert model.calls == [] and rec["stage"] == "review_narrative"
 
+    # A real narration piece is only acknowledged -- no model call until the expert says
+    # they are done, so the story can be told in several pieces.
     rec = _turn(client, rec["id"], NARRATIVE)
+    assert model.calls == [] and rec["stage"] == "review_narrative"
+    assert "讲完了" in rec["turns"][-1]["body"]
+
+    rec = _turn(client, rec["id"], "讲完了")
     wid = rec["id"]
     assert model.calls == ["extract"] and rec["stage"] == "review_review"
     nodes = {n["label"]: n for n in rec["graph"]["nodes"]}
@@ -149,7 +162,7 @@ def test_narrate_extract_clarify_confirm(client, model):
 
 def test_model_failure_changes_nothing(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)
+    rec = _narrate(client, rec["id"])
     model.review_responses.append(llm_client.LLMError("timeout", "推理服务请求超时"))
     before = rec["graph"]
     rec = _turn(client, rec["id"], "第三步其实是班长做的")
@@ -160,7 +173,7 @@ def test_clarification_cap_moves_to_readback(client, model, monkeypatch):
     from app import settings as app_settings
     app_settings.save_settings({"review": {"max_clarify_questions": 1}})
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)  # first question asked (1/1)
+    rec = _narrate(client, rec["id"])  # first question asked (1/1)
     model.review_responses.append({"intent": "answer", "understanding": "明白。", "ops": [], "evidence": {},
                                    "resolved_gap_ids": [], "question": None, "new_uncertainties": []})
     rec = _turn(client, rec["id"], "那一步是我说错了，没有")
@@ -170,7 +183,7 @@ def test_clarification_cap_moves_to_readback(client, model, monkeypatch):
 def test_reopen_confirmed_workflow_for_editing(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
     wid = rec["id"]
-    _turn(client, wid, NARRATIVE)
+    _narrate(client, wid)
     _turn(client, wid, "没问题")
     rec = _turn(client, wid, "确认")
     assert rec["status"] == "expert_confirmed"

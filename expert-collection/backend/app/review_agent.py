@@ -46,6 +46,7 @@ EXTRACT_TIMEOUT = 180.0  # was 90.0; C_standard 27B on long narratives needs ~90
 REVIEW_TIMEOUT = 180.0  # was 60.0; 35B MoE + reasoning mode needs ~60-90s for long prompts
 MIN_NARRATIVE_CHARS = 60
 MAX_SNAPSHOTS = 30
+DEFAULT_MAX_QUESTIONS = 12  # was 20; adjustable in 数据与实验管理 → 系统设置
 
 
 def _timed_chat_completion_json(label: str, cfg: dict, messages: list[dict[str, str]], *, timeout: float) -> dict:
@@ -107,11 +108,11 @@ def available() -> bool:
 
 
 def max_questions() -> int:
-    value = (app_settings.get_effective_settings().get("review") or {}).get("max_clarify_questions", 20)
+    value = (app_settings.get_effective_settings().get("review") or {}).get("max_clarify_questions", DEFAULT_MAX_QUESTIONS)
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
-        return 20
+        return DEFAULT_MAX_QUESTIONS
 
 
 _PUNCT = re.compile(r"[\s，。、；：！？,.;:!?\"“”'‘’（）()《》<>【】\[\]—\-…·]+")
@@ -134,6 +135,17 @@ _AFFIRM = re.compile(r"^(确认|确定|是|是的|对|对的|没错|没问题|�
 _SATISFIED = re.compile(r"(没问题|都对|可以了|满意|没有要改|不用改|就这样吧?|挺好)")
 _REJECT = re.compile(r"(丢弃|不能用|没法用|用不了|作废|不要这条)")
 _UNDO = re.compile(r"(撤销|撤回|退回上一步|恢复到上一步|刚才的?改动不要)")
+
+
+# "I'm done telling it" during the narrative phase (also what the 「讲完了」 button sends), and
+# "重试" after a failed extraction. Only short messages count, so a narration that happens to
+# contain these words is never mistaken for the signal.
+_NARRATIVE_DONE = re.compile(r"^(我)?(讲完了?|说完了?|就这些|就这么多|没有了|没了|完了|好了|整理吧|开始整理|重试)(吧|了|啦|啊|呀)?$")
+
+
+def is_narrative_done(text: str) -> bool:
+    t = _norm(text)
+    return len(t) <= 10 and bool(_NARRATIVE_DONE.match(t))
 
 
 def rule_intent(text: str, *, phase: str, mode: str, question_pending: bool = False) -> str | None:
@@ -365,8 +377,8 @@ _REVIEW_PROMPT = """你是制造业流程审阅助手。你面前有一张流程
    每个新增节点，在 evidence 里给出对方原话中能证明它的**原样摘抄**。
 3. understanding：用一句话复述你理解的对方意思（“您是说……”），不评价，不编造。
 4. resolved_gap_ids：对方这句话已经说清楚了下面清单里的哪些项。
-5. question：如果还有需要问的，从下面的待澄清清单里选**一项**，用口语问出来（一个问题，不用"分支/并行/节点"这类术语）；清单为空或对方表示满意就给 null。
-6. new_uncertainties：对方的话里又出现了哪些没说清楚、需要以后确认的点（最多 2 个，写成问题）。{tags_line}
+5. question：待澄清清单已经按重要程度排好序。如果还有需要问的，只问清单里的**第一项**（gap_id 必须是第一项的），用口语问出来（一个问题，不用"分支/并行/节点"这类术语）；清单为空或对方表示满意就给 null。
+6. new_uncertainties：对方的话里又出现的、会影响整个流程是否完整的没说清楚的点（最多 1 个，写成问题；没有就给空数组）。不要围绕对方刚回答的那一步继续追问细节。{tags_line}
 
 只输出一个 JSON object：{{"intent":"...","understanding":"...","ops":[...],"evidence":{{"新节点id":"原话摘抄"}},"resolved_gap_ids":[...],"question":{{"gap_id":"...","text":"..."}}或null,"new_uncertainties":[{{"question":"...","node_ids":[]}}]{tags_field}{adopt_field}}}"""
 
@@ -626,12 +638,11 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
                    model_tags: list[str] | None = None) -> TurnResult:
     open_ = review_gaps.open_gaps(state["gaps"])
     if open_ and state["questions_asked"] < state["max_questions"]:
-        chosen = next((g for g in open_ if preferred and g["id"] == preferred[0]), open_[0])
-        # Ontology follow-ups are rule-ranked: when one is next in line, ask it even if the model
-        # preferred something else (in trial runs the model always preferred its own fresh
-        # uncertainties, so the threshold / time-limit questions were never asked).
-        if open_[0]["kind"] in review_gaps.ONTOLOGY_KINDS and chosen["kind"] not in review_gaps.ONTOLOGY_KINDS:
-            chosen = open_[0]
+        # Always the single most severe open item (review_gaps' tiers). The model's suggestion
+        # only supplies *wording*, and only when it is for that same item -- it no longer picks
+        # which item to ask (in trial runs it kept picking its own fresh doubts, so the
+        # completeness questions further down were never reached).
+        chosen = open_[0]
         text = preferred[1] if preferred and preferred[0] == chosen["id"] and preferred[1] else chosen["text"]
         state["gaps"] = review_gaps.mark(state["gaps"], [chosen["id"]], "asked")
         state["questions_asked"] += 1
@@ -671,19 +682,30 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
     mode, phase = state["mode"], state["phase"]
     person_texts = [t["text"] for t in turns if t["role"] == "expert"]
 
-    # 1. Narrative (create, before the first draft).
+    # 1. Narrative (create, before the first draft). The expert may tell it in several pieces;
+    #    each piece is just acknowledged (no model call, instant), and the draft is built only
+    #    once they say they're done -- the 「讲完了」 button sends exactly that. "重试" after a
+    #    failed extraction re-runs it the same way.
     if phase == "narrative":
-        narrative = person_texts
-        if len(_norm("".join(narrative))) < MIN_NARRATIVE_CHARS:
-            return TurnResult(body="能再多讲一些吗？把这件事从开始到结束的经过完整讲一遍，谁先做什么、后做什么、遇到什么情况怎么处理。"
-                                   "想到哪说到哪就好，我整理好之后再跟您确认细节。", state=state)
+        narrative = [t for t in person_texts if not is_narrative_done(t)]
+        told = len(_norm("".join(narrative)))
+        if not is_narrative_done(text):
+            if told < MIN_NARRATIVE_CHARS:
+                return TurnResult(body="记下了。能再多讲一些吗？把这件事从开始到结束的经过完整讲一遍，谁先做什么、后做什么、遇到什么情况怎么处理。"
+                                       "想到哪说到哪就好，可以分几段说。", state=state)
+            return TurnResult(body=f"记下了（目前讲了约 {told} 字）。还有要补充的就接着说；"
+                                   "全部讲完了就点「讲完了」，我再开始整理流程图。", state=state)
+        if told < MIN_NARRATIVE_CHARS:
+            return TurnResult(body="目前讲的内容还比较少，整理不出完整的流程。能再多讲一些吗？"
+                                   "这件事从开始到结束，谁先做什么、后做什么、遇到什么情况怎么处理。", state=state)
         try:
             extracted = extract_from_narrative(narrative, turn_id)
         except llm_client.LLMError as e:
-            return TurnResult(body=f"整理流程图时 AI 服务出错（{e}）。您讲的内容已经保存，稍后发一句「重试」我再整理一次。", state=state)
+            return TurnResult(body=f"整理流程图时 AI 服务出错（{e}）。您讲的内容已经保存，稍后点「讲完了」或发一句「重试」，我再整理一次。", state=state)
         new_graph = extracted["graph"]
         state["phase"] = "review"
-        state["gaps"] = review_gaps.refresh([], new_graph, mode=mode, new_model_gaps=extracted["gaps"])
+        state["gaps"] = review_gaps.refresh([], new_graph, mode=mode,
+                                            new_model_gaps=extracted["gaps"][:review_gaps.MAX_MODEL_GAPS])
         result = TurnResult(ack=extracted["summary"] or None,
                             changes=[f"根据您的讲述整理出 {sum(1 for n in new_graph['nodes'] if n['node_type'] not in ('start', 'end'))} 个步骤"],
                             graph=new_graph, state=state, case_context=extracted["case_context"])
@@ -748,7 +770,8 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
             result.changes, _ = describe_changes(graph, new_graph)
             for nid in unverified:
                 label = next((n["label"] for n in new_graph["nodes"] if n["node_id"] == nid), nid)
-                state["gaps"].append(review_gaps.model_gap(f"我加的「{label}」这一步，您刚才的话里我没对上原话，是这个意思吗？", [nid]))
+                state["gaps"].append(review_gaps.unverified_model_node_gap(
+                    f"我加的「{label}」这一步，您刚才的话里我没对上原话，是这个意思吗？", nid))
 
     # The model only reports *that* the pending ontology question was answered; what gets
     # written to the step is decided by ontology_capture from the expert's literal words.
@@ -767,9 +790,10 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
     if intent == "answer" and state.get("pending_gap_id"):
         resolved.append(state["pending_gap_id"])
     new_gaps = [review_gaps.model_gap(u["question"].strip()[:150], [i for i in (u.get("node_ids") or []) if isinstance(i, str)])
-                for u in (out.get("new_uncertainties") or [])[:2]
+                for u in (out.get("new_uncertainties") or [])[:1]
                 if isinstance(u, dict) and isinstance(u.get("question"), str) and u["question"].strip()
                 and not any(j in u["question"] for j in _JARGON)]
+    new_gaps = review_gaps.admit_model_gaps(state["gaps"], new_gaps, answered=pending)
     state["gaps"] = review_gaps.refresh(review_gaps.mark(state["gaps"], resolved, "resolved"), new_graph, mode=mode, new_model_gaps=new_gaps)
     result.graph = new_graph if new_graph is not graph else None
 

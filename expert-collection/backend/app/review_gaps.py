@@ -51,16 +51,45 @@ TIMING_QUESTION = "「{label}」要等人确认，一般最晚多久要有结果
 ONTOLOGY_KINDS = ("criterion", "timing")
 MAX_ONTOLOGY_GAPS_PER_KIND = 2  # keep the interview short: only the first few decision / approval steps
 
-PRIORITY = {"unverified_node": 10, "validator": 20, "decision_condition": 30, "criterion": 35, "timing": 36,
-            "model": 40, "coverage": 50, "missing_actor": 60}
+# Severity tiers (lower = asked first). The interview always asks the single most severe open
+# item -- questions that decide whether the graph is usable at all come before structure,
+# structure before detail, and the model's own follow-up doubts come last. New items (rule
+# gaps that appear after an edit, or model doubts) are slotted into the same ordering by tier
+# rather than jumping the queue, so one answer can't pull the interview into a long tangent
+# around a single step while the process as a whole is still incomplete.
+#   Tier 1 (10-19) fatal:     a step nobody said / structural errors (no start or end, isolated
+#                             step, a decision with one way out, a split that never joins)
+#   Tier 2 (20-29) structure: decision conditions, then whether exceptions / approvals /
+#                             rework / simultaneous work exist at all
+#   Tier 3 (30-39) detail:    who does each step, decision thresholds, approval time limits,
+#                             where experience matters
+#   Tier 4 (40+)   model:     doubts the model raised itself
+PRIORITY = {"unverified_node": 10, "validator": 15, "decision_condition": 20, "coverage": 22,
+            "missing_actor": 30, "criterion": 32, "timing": 33, "model": 40}
+
+# Coverage questions differ in how much a "no answer" leaves the graph incomplete: a missing
+# exception path or sign-off changes the shape of the process, "where does experience matter"
+# is valuable detail but never makes the graph wrong.
+COVERAGE_PRIORITY = {"exceptions": 22, "approval": 23, "retry": 24, "parallel": 25, "experience": 38}
+
+TIER_LABELS = ((20, "fatal"), (30, "structure"), (40, "detail"))
 
 
-def _gap(kind: str, text: str, node_ids: Iterable[str] = (), *, source: str = "rule", key: str = "") -> dict:
+def tier(gap: dict) -> str:
+    """"fatal" / "structure" / "detail" / "model" -- for display and logging."""
+    for upper, name in TIER_LABELS:
+        if gap["priority"] < upper:
+            return name
+    return "model"
+
+
+def _gap(kind: str, text: str, node_ids: Iterable[str] = (), *, source: str = "rule", key: str = "",
+         priority: int | None = None) -> dict:
     node_ids = list(node_ids)
     return {
         "id": f"{kind}:{key or ','.join(node_ids)}",
         "kind": kind,
-        "priority": PRIORITY.get(kind.split("/")[0], 50),
+        "priority": priority if priority is not None else PRIORITY.get(kind.split("/")[0], 50),
         "text": text,
         "node_ids": node_ids,
         "status": "open",
@@ -116,7 +145,7 @@ def rule_gaps(graph: dict, *, mode: str) -> list[dict]:
         }
         for key, text in COVERAGE_QUESTIONS.items():
             if not present[key]:
-                out.append(_gap("coverage", text, key=key))
+                out.append(_gap("coverage", text, key=key, priority=COVERAGE_PRIORITY[key]))
 
         # Ontology follow-ups, one per step, for steps the expert hasn't covered yet. Once the
         # gap was asked, its "asked"/"resolved" status carries over by id even when the expert
@@ -141,6 +170,42 @@ def rule_gaps(graph: dict, *, mode: str) -> list[dict]:
 def model_gap(text: str, node_ids: list[str]) -> dict:
     # Deterministic id (not Python's per-process randomized hash) -- ids are persisted.
     return _gap("model", text, node_ids, source="model", key=hashlib.md5(text.encode("utf-8")).hexdigest()[:10])
+
+
+def unverified_model_node_gap(text: str, node_id: str) -> dict:
+    """A step the model added during review whose evidence quote isn't in what the expert said.
+    Same severity as an unverified step from the first draft (tier 1): a step nobody said must
+    be settled before anything about its details is asked."""
+    return _gap("unverified_node", text, [node_id], source="model",
+                key="review:" + hashlib.md5(text.encode("utf-8")).hexdigest()[:10])
+
+
+# At most this many doubts the model raised itself, per session (the first draft's included).
+# They are the bottom tier anyway; the cap keeps a talkative model from turning every answer
+# into a new thread to pull on.
+MAX_MODEL_GAPS = 4
+
+
+def admit_model_gaps(gaps: list[dict], candidates: Iterable[dict], *, answered: dict | None) -> list[dict]:
+    """Which of the model's new doubts get onto the list. Anti-divergence rules:
+    - a doubt about a step that the expert has just been asked about is dropped -- the expert
+      just answered on that step; drilling straight back into it is the tangent we avoid;
+    - a doubt raised while answering one of the model's *own* doubts is dropped (follow-ups
+      are one level deep: a follow-up never spawns another follow-up);
+    - the session total stays within MAX_MODEL_GAPS."""
+    if answered is not None and answered.get("source") == "model":
+        return []
+    answered_nodes = set((answered or {}).get("node_ids") or [])
+    room = MAX_MODEL_GAPS - sum(1 for g in gaps if g["kind"] == "model")
+    out: list[dict] = []
+    for g in candidates:
+        if room <= 0:
+            break
+        if answered_nodes & set(g.get("node_ids") or []):
+            continue
+        out.append(g)
+        room -= 1
+    return out
 
 
 def refresh(existing: list[dict], graph: dict, *, mode: str, new_model_gaps: Iterable[dict] = ()) -> list[dict]:
