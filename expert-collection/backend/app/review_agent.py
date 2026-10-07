@@ -35,7 +35,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, review_gaps
+from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, readback_edit, review_gaps
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -155,24 +155,30 @@ def rule_intent(text: str, *, phase: str, mode: str, question_pending: bool = Fa
 # --- read-back and change descriptions (deterministic) -------------------------------------
 
 def _topo_order(graph: dict) -> list[dict]:
+    """Topological order that finishes one branch before starting the next (a node becomes
+    ready -> it is read next), so the read-back walks each path through instead of jumping
+    between the branches of a decision line by line. Branches keep their edge order."""
     nodes = graph.get("nodes", [])
+    by_id = {n["node_id"]: n for n in nodes}
     indeg = {n["node_id"]: 0 for n in nodes}
     for e in graph.get("edges", []):
         if e["to"] in indeg:
             indeg[e["to"]] += 1
-    order, ready = [], [n for n in nodes if indeg[n["node_id"]] == 0]
-    seen = set()
-    while ready:
-        n = ready.pop(0)
+    order, seen = [], set()
+    stack = [n for n in reversed(nodes) if indeg[n["node_id"]] == 0]
+    while stack:
+        n = stack.pop()
         if n["node_id"] in seen:
             continue
         seen.add(n["node_id"])
         order.append(n)
+        ready = []
         for e in graph.get("edges", []):
             if e["from"] == n["node_id"] and e["to"] in indeg:
                 indeg[e["to"]] -= 1
                 if indeg[e["to"]] == 0:
-                    ready.append(next(x for x in nodes if x["node_id"] == e["to"]))
+                    ready.append(by_id[e["to"]])
+        stack += reversed(ready)
     order += [n for n in nodes if n["node_id"] not in seen]  # cycles: still list them
     return order
 
@@ -181,31 +187,25 @@ def readback(graph: dict) -> str:
     """The whole graph as numbered plain-language lines -- generated from the graph itself so
     what the person confirms is exactly what gets saved.
 
-    The number shown is each node's stable `seq` (see graph_ops.assign_missing_seqs), not a
-    freshly counted position -- lines are still walked in topological order for readability,
-    but the numbers themselves must match what's on the DagView node and what the model was
-    told, or "第3步" would mean a different thing in the readback than everywhere else. Falls
-    back to the walk position only for the handful of legacy graphs never backfilled with seq.
+    Each line starts with the node's stable `seq` in brackets and, for anything but a plain
+    step, a type tag (【判断】【审批】...) -- see readback_edit.render. The numbers match what's on
+    the DagView node and what the model was told, so "第3步" means the same thing everywhere;
+    branch and rework targets are written as those numbers too. Lines are walked in
+    topological order, one branch at a time.
     """
-    by_id = {n["node_id"]: n for n in graph.get("nodes", [])}
-    lines = []
-    for i, n in enumerate(_topo_order(graph), 1):
-        actors = f"（{'、'.join(n['actor_roles'])}）" if n.get("actor_roles") else ""
-        text = f"{n.get('seq') or i}. {n['label']}{actors}"
-        outs = [e for e in graph.get("edges", []) if e["from"] == n["node_id"]]
-        if n["node_type"] == "decision" and outs:
-            parts = [f"{e.get('condition') or '（条件未说明）'} → {by_id.get(e['to'], {}).get('label', e['to'])}" for e in outs]
-            text += "：" + "；".join(parts)
-        elif n["node_type"] == "parallel_split" and outs:
-            text += "，同时进行：" + "、".join(by_id.get(e["to"], {}).get("label", e["to"]) for e in outs)
-        elif n["node_type"] == "approval":
-            text += "（需要签字/确认）"
-        retry = n.get("retry_semantics") or {}
-        if retry.get("enabled"):
-            target = by_id.get(retry.get("rework_reference_node_id") or "", {}).get("label")
-            text += f"；{retry.get('condition') or '不合格'}时回到「{target}」重做" if target else "；可能需要返工"
-        lines.append(text)
-    return "\n".join(lines)
+    return readback_edit.render(graph, _topo_order(graph))[0]
+
+
+READBACK_EDIT_RULES = ("每行开头的 [编号] 和【】里的标签不能改：删掉整行表示删掉这一步，新加一行（不要带编号）表示新增一步，"
+                       "其余文字都可以改。")
+
+
+def _show_readback(state: dict, graph: dict) -> str:
+    """Render the read-back for display *and* remember exactly what was shown, so an edited
+    copy sent back with 「修改这段流程」 can be aligned against it line by line."""
+    text, snapshot = readback_edit.render(graph, _topo_order(graph))
+    state["readback_snapshot"] = snapshot
+    return text
 
 
 def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
@@ -218,8 +218,18 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
     removed = [b_nodes[i] for i in b_nodes if i not in a_nodes]
     added = [a_nodes[i] for i in a_nodes if i not in b_nodes]
     survivors_text = " ".join(n["label"] for n in a_nodes.values())
+    added_ids = {n["node_id"] for n in added}
     for n in added:
-        out.append(f"新增步骤「{n['label']}」")
+        # Say where the new step sits -- "新增步骤「X」" alone, next to "去掉了「A」→「B」",
+        # read like the edit had cut the graph instead of inserting into it.
+        prev = [a_nodes[e["from"]]["label"] for e in after.get("edges", [])
+                if e["to"] == n["node_id"] and e["from"] in a_nodes and e["from"] not in added_ids]
+        nxt = [a_nodes[e["to"]]["label"] for e in after.get("edges", [])
+               if e["from"] == n["node_id"] and e["to"] in a_nodes and e["to"] not in added_ids]
+        where = "、".join(f"「{x}」" for x in prev[:2])
+        then = "、".join(f"「{x}」" for x in nxt[:2])
+        pos = f"（接在{where}之后" + (f"，然后接{then}" if then else "") + "）" if where else (f"（之后接{then}）" if then else "")
+        out.append(f"新增步骤「{n['label']}」{pos}")
         cats.add("missing_step" if n["node_type"] != "decision" else "wrong_branch")
     for n in removed:
         if n["label"] and n["label"] in survivors_text:
@@ -262,8 +272,25 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
         elif (e.get("condition") or "") != (b_edges[k].get("condition") or ""):
             out.append(f"「{name(k[0])}」→「{name(k[1])}」的条件改为「{e.get('condition') or '无'}」")
             cats.add("wrong_branch")
+
+    def through_added(src: str, dst: str) -> bool:
+        """A -> (new steps) -> B: the old A -> B was split by an insertion, not cut."""
+        queue, seen = [k[1] for k in a_edges if k[0] == src and k[1] in added_ids], set()
+        while queue:
+            x = queue.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            for k2 in a_edges:
+                if k2[0] == x:
+                    if k2[1] == dst:
+                        return True
+                    if k2[1] in added_ids:
+                        queue.append(k2[1])
+        return False
+
     for k in b_edges:
-        if k not in a_edges and k[0] not in touched and k[1] not in touched:
+        if k not in a_edges and k[0] not in touched and k[1] not in touched and not through_added(*k):
             out.append(f"去掉了「{name(k[0])}」→「{name(k[1])}」")
             cats.add("wrong_order")
     return out, cats
@@ -280,13 +307,14 @@ _EXTRACT_PROMPT = """你是制造业专家访谈助手的流程整理模块。�
 - 判断节点（decision）的每条出边用 conditional 类型并写清 condition；同时进行用 parallel_split/parallel_join。
 - 对讲述里含糊、没说清楚的地方，放进 uncertainties，写成一个口语化的问题（不要用"分支/并行/节点"这类术语）。
 
+""" + guide_service.DAG_LABEL_RULES + """- 主要靠经验、不是照规定做的判断（如"靠听声音和看切屑"），写进 case_context.experience_notes，不要放进 constraints。
 只输出一个 JSON object：
 {"nodes":[{"node_id":"n1","node_type":"start|activity|decision|parallel_split|parallel_join|merge|approval|handoff|wait|end","label":"...","actor_roles":["..."],"decision_question":null,"evidence":"原话摘抄","retry_semantics":null 或 {"enabled":true,"rework_reference_node_id":"nX","condition":"...","description":"..."}}],
  "edges":[{"edge_id":"e1","from":"n1","to":"n2","edge_type":"normal|conditional|parallel|merge|handoff|approval|timeout|exception_forward","condition":null}],
  "start_node_ids":["n1"],"end_node_ids":["nK"],
  "summary":"用两三句话复述你理解的整个过程（第二人称“您”，不加评价）",
  "uncertainties":[{"question":"...","node_ids":["nX"]}],
- "case_context":{"scenario_trigger":"起因或null","scenario_goal":"目标或null","constraints":"限制条件或null"}}
+ "case_context":{"scenario_trigger":"起因或null","scenario_goal":"目标或null","constraints":"限制条件或null","experience_notes":"靠经验判断的地方或null"}}
 只输出 JSON。"""
 
 
@@ -319,18 +347,42 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
                 "condition": retry.get("condition") if isinstance(retry.get("condition"), str) else None,
                 "description": retry.get("description") if isinstance(retry.get("description"), str) else None,
             }
-    for e in graph["edges"]:
-        e["source_turn_ids"] = [turn_id]
+    # Structural clean-up the model so often gets wrong (back-edge for rework, no start/end,
+    # stale start/end id lists) -- see graph_ops.normalize_draft. Runs after the model's own
+    # retry_semantics are read above, so a node that already has one keeps it.
+    report = graph_ops.normalize_draft(graph)
+    for item in graph["nodes"] + graph["edges"]:
+        item["source_turn_ids"] = [turn_id]
     gaps = []
+    if report["end"] and report["end_from"]:
+        names = "、".join(f"「{x}」" for x in report["end_from"][:4])
+        gaps.append(review_gaps.model_gap(f"我把{names}当成最后一步，做到这里整件事就算结束了吗？", [report["end"]]))
+    labels = {n["node_id"]: n["label"] for n in graph["nodes"]}
+    for e in report["cycles"]:
+        gaps.append(review_gaps.model_gap(
+            f"「{labels.get(e['from'], '')}」不行的话，是回到「{labels.get(e['to'], '')}」重新做吗？", [e["from"]]))
     for u in parsed.get("uncertainties") or []:
         if isinstance(u, dict) and isinstance(u.get("question"), str) and u["question"].strip():
             ids = [i for i in (u.get("node_ids") or []) if i in by_id]
             gaps.append(review_gaps.model_gap(u["question"].strip()[:150], ids))
     cc = parsed.get("case_context") if isinstance(parsed.get("case_context"), dict) else {}
     case_context = {k: v.strip() for k, v in cc.items()
-                    if k in ("scenario_trigger", "scenario_goal", "constraints") and isinstance(v, str) and v.strip()}
+                    if k in ("scenario_trigger", "scenario_goal", "constraints", "experience_notes")
+                    and isinstance(v, str) and v.strip()}
+    # End-to-end tests (narration -> graph -> a second model restating the process from the
+    # graph alone) showed the trigger was the piece most often lost: models put it only into
+    # case_context and label the start node just "开始", so the graph itself no longer says
+    # how the process begins. Carry it onto a generically labelled start node.
+    trigger = case_context.get("scenario_trigger")
+    if trigger:
+        for n in graph["nodes"]:
+            if n["node_type"] == "start" and _norm(n["label"]).lower() in _GENERIC_START_LABELS:
+                n["label"] = trigger[:60]
     summary = parsed.get("summary") if isinstance(parsed.get("summary"), str) else ""
     return {"graph": graph, "summary": summary.strip()[:400], "gaps": gaps[:6], "case_context": case_context}
+
+
+_GENERIC_START_LABELS = {"开始", "流程开始", "起点", "start", ""}
 
 
 _REVIEW_PROMPT = """你是制造业流程审阅助手。你面前有一张流程图，对方（{who}）正在和你对话，目的是把这张图改到完全符合实际。
@@ -420,23 +472,44 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
                 taken.add(nid)
                 return nid
 
+    edge_map: dict[str, str] = {}
+
     def ref(x: Any) -> str | None:
         if not isinstance(x, str):
             return None
         return id_map.get(x, x if x in node_ids else None)
 
-    for op in raw_ops if isinstance(raw_ops, list) else []:
+    def eref(x: Any) -> str | None:
+        if not isinstance(x, str):
+            return None
+        return edge_map.get(x, x if x in edge_ids else None)
+
+    def valid_new_node(op: Any) -> bool:
+        n = op.get("node") if isinstance(op, dict) and op.get("op") == "add_node" else None
+        return (isinstance(n, dict) and isinstance(n.get("label"), str) and bool(n["label"].strip())
+                and n.get("node_type") in _NODE_TYPES)
+
+    raw_ops = raw_ops if isinstance(raw_ops, list) else []
+    # New node ids are mapped up front and add_node ops are emitted first: models don't
+    # reliably list a node before the add_edge that references it, and resolving references
+    # in list order used to drop such an edge silently -- leaving the new step unconnected.
+    raw_ops = [op for op in raw_ops if valid_new_node(op)] + [op for op in raw_ops if not valid_new_node(op)]
+    for op in raw_ops:
+        if valid_new_node(op) and isinstance(op["node"].get("node_id"), str) and op["node"]["node_id"] not in id_map:
+            id_map[op["node"]["node_id"]] = fresh("n", node_ids)
+
+    for op in raw_ops:
         if not isinstance(op, dict):
             continue
         kind = op.get("op")
         if kind == "add_node" and isinstance(op.get("node"), dict):
             n = op["node"]
-            label = n.get("label")
-            if not isinstance(label, str) or not label.strip() or n.get("node_type") not in _NODE_TYPES:
+            if not valid_new_node(op):
                 continue
-            new_id = fresh("n", node_ids)
-            if isinstance(n.get("node_id"), str):
-                id_map[n["node_id"]] = new_id
+            label = n["label"]
+            new_id = id_map.get(n.get("node_id")) if isinstance(n.get("node_id"), str) else None
+            if new_id is None or any(o["op"] == "add_node" and o["node"]["node_id"] == new_id for o in ops):
+                new_id = fresh("n", node_ids)
             quote = evidence.get(n.get("node_id")) if isinstance(evidence, dict) else None
             ok = isinstance(quote, str) and quote_found(quote, sources)
             if not ok and n["node_type"] not in ("start", "end"):
@@ -472,12 +545,15 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
             src, dst = ref(e.get("from")), ref(e.get("to"))
             if not src or not dst or src == dst or e.get("edge_type") not in _EDGE_TYPES:
                 continue
+            new_eid = fresh("e", edge_ids)
+            if isinstance(e.get("edge_id"), str):
+                edge_map[e["edge_id"]] = new_eid
             ops.append({"op": "add_edge", "edge": {
-                "edge_id": fresh("e", edge_ids), "from": src, "to": dst, "edge_type": e["edge_type"],
+                "edge_id": new_eid, "from": src, "to": dst, "edge_type": e["edge_type"],
                 "condition": e.get("condition") if isinstance(e.get("condition"), str) and e["condition"].strip() else None,
                 "confidence": 0.8, "expert_confirmed": False, "source_turn_ids": [turn_id],
             }})
-        elif kind == "update_edge" and op.get("edge_id") in edge_ids and isinstance(op.get("patch"), dict):
+        elif kind == "update_edge" and eref(op.get("edge_id")) and isinstance(op.get("patch"), dict):
             p, patch = op["patch"], {}
             for key in ("from", "to"):
                 if key in p and ref(p[key]):
@@ -487,9 +563,9 @@ def sanitize_ops(raw_ops: Any, graph: dict, evidence: dict, sources: list[str], 
             if "condition" in p and (p["condition"] is None or isinstance(p["condition"], str)):
                 patch["condition"] = p["condition"]
             if patch:
-                ops.append({"op": "update_edge", "edge_id": op["edge_id"], "patch": patch})
-        elif kind == "remove_edge" and op.get("edge_id") in edge_ids:
-            ops.append({"op": "remove_edge", "edge_id": op["edge_id"]})
+                ops.append({"op": "update_edge", "edge_id": eref(op["edge_id"]), "patch": patch})
+        elif kind == "remove_edge" and eref(op.get("edge_id")):
+            ops.append({"op": "remove_edge", "edge_id": eref(op["edge_id"])})
         elif kind == "set_retry_semantics" and ref(op.get("node_id")) and isinstance(op.get("retry_semantics"), dict):
             r = op["retry_semantics"]
             ops.append({"op": "set_retry_semantics", "node_id": ref(op["node_id"]), "retry_semantics": {
@@ -526,6 +602,7 @@ class TurnResult:
     state: dict | None = None
     finished: bool = False                     # person confirmed -> caller commits
     case_context: dict | None = None
+    readback: str | None = None                # editable copy of the read-back shown in `body`
 
     @property
     def text(self) -> str:
@@ -550,23 +627,27 @@ def opening(state: dict, graph: dict) -> TurnResult:
         return TurnResult(body=INTRO_TEXT, state=state)
     if mode == "edit":
         state["gaps"] = review_gaps.refresh([], graph, mode=mode)
-        return TurnResult(body="这是目前的流程：\n" + readback(graph), question="想改哪里直接告诉我；没问题的话说「没问题」。", state=state)
+        rb = _show_readback(state, graph)
+        return TurnResult(body="这是目前的流程：\n" + rb, question="想改哪里直接告诉我；没问题的话说「没问题」。",
+                          state=state, readback=rb)
     state["gaps"] = review_gaps.refresh([], graph, mode=mode)
     if mode == "annotate":
         state["phase"] = "final_confirm"
         state["proposal"] = {"verdict": "accepted", "reason_tags": []}
+        rb = _show_readback(state, graph)
         return TurnResult(
-            body="这是待审的流程：\n" + readback(graph),
+            body="这是待审的流程：\n" + rb, readback=rb,
             question="有不对、缺漏或多余的地方直接说，我来改；都对的话回复「确认」，结论就是「采纳」。说「这条不能用」则结论为「丢弃」。",
             state=state)
-    lines = ["两位标注人的结论不一致（或修改不同），需要您来仲裁。待审的原始流程：", readback(graph), ""]
+    rb = _show_readback(state, graph)
+    lines = ["两位标注人的结论不一致（或修改不同），需要您来仲裁。待审的原始流程：", rb, ""]
     for c in state.get("candidates", []):
         lines.append(f"· {c['annotator_name']}：{VERDICT_LABELS.get(c['verdict'], c['verdict'])}"
                      + (f"（原因：{'、'.join(REASON_LABELS.get(t, t) for t in c.get('reason_tags', []))}）" if c.get("reason_tags") else "")
                      + (f"；改动：{'；'.join(c.get('changes', [])[:8])}" if c.get("changes") else ""))
     return TurnResult(body="\n".join(lines),
                       question="您可以说「用某某的版本」、在某一份上继续改、采纳原图，或说「这条不能用」。",
-                      state=state)
+                      state=state, readback=rb)
 
 
 def _snapshot(state: dict, graph: dict, turn_id: str) -> None:
@@ -599,10 +680,12 @@ def _final_confirm(state: dict, graph: dict, result: TurnResult, *, rejected: bo
         if v["verdict"] == "rejected":
             result.body = f"我的标注结论：丢弃{why}。"
         else:
-            result.body = f"修改后的完整流程：\n{readback(graph)}\n\n我的标注结论：{VERDICT_LABELS[v['verdict']]}{why}。"
+            result.readback = _show_readback(state, graph)
+            result.body = f"修改后的完整流程：\n{result.readback}\n\n我的标注结论：{VERDICT_LABELS[v['verdict']]}{why}。"
         result.question = "没问题的话回复「确认」提交标注；要改结论或流程，直接告诉我。"
     else:
-        result.body = "我整理的完整流程是：\n" + readback(graph)
+        result.readback = _show_readback(state, graph)
+        result.body = "我整理的完整流程是：\n" + result.readback
         result.question = "这样对吗？没问题的话回复「确认」就提交；要改的话直接告诉我。"
     return result
 
@@ -622,9 +705,14 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
     return _final_confirm(state, graph, result, model_tags=model_tags)
 
 
-def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str) -> TurnResult:
+def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str,
+                *, from_readback: bool = False) -> TurnResult:
     """One person message -> agent reply. `turns` is the transcript *including* this message.
-    Never raises for model failures: they come back as an honest notice with nothing changed."""
+    Never raises for model failures: they come back as an honest notice with nothing changed.
+
+    `from_readback`: the message is the read-back text the person edited in place (the
+    「修改这段流程」 button) -- see readback_edit. It is aligned against the read-back it was
+    rendered from by number, in code; the model only interprets changed / added lines."""
     state = copy.deepcopy(state)
     mode, phase = state["mode"], state["phase"]
     person_texts = [t["text"] for t in turns if t["role"] == "expert"]
@@ -647,8 +735,28 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
                             graph=new_graph, state=state, case_context=extracted["case_context"])
         return _next_question(state, new_graph, result, None)
 
+    # 1b. An edited read-back: align by number first; refuse rather than guess.
+    pre_ops: list[dict] = []
+    model_text = text
+    needs_model = True
+    if from_readback:
+        snap = state.get("readback_snapshot")
+        if not snap or snap.get("sig") != readback_edit.graph_signature(graph):
+            return TurnResult(body="这份流程文字是之前那一版的，流程图在那之后已经改过，没法逐行对上，所以没有改图。"
+                                   "请点最新一段流程下面的「修改这段流程」重新改。", state=state)
+        diff = readback_edit.parse(text, snap)
+        if diff.errors:
+            return TurnResult(body="没有改图：" + "；".join(diff.errors[:5]) + "。\n" + READBACK_EDIT_RULES, state=state)
+        if diff.empty:
+            return TurnResult(body="这份流程文字和原来的一样，没看到改动。",
+                              question="要改的话直接在文字里改；没问题就回复「确认」。", state=state)
+        pre_ops = [{"op": "remove_node", "node_id": d["node_id"]} for d in diff.deleted]
+        model_text = readback_edit.describe_for_model(diff)
+        needs_model = bool(diff.changed or diff.added)
+
     # 2. Rule intents for short replies (no model needed).
-    intent = rule_intent(text, phase=phase, mode=mode, question_pending=bool(state.get("pending_gap_id")))
+    intent = None if from_readback else rule_intent(text, phase=phase, mode=mode,
+                                                   question_pending=bool(state.get("pending_gap_id")))
     if intent == "undo":
         snaps = state.get("snapshots") or []
         if not snaps:
@@ -656,11 +764,20 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         last = snaps.pop()
         state.update({"snapshots": snaps, "gaps": last["gaps"], "phase": last["phase"], "questions_asked": last["questions_asked"],
                       "pending_gap_id": last["pending_gap_id"], "proposal": last.get("proposal")})
-        return TurnResult(body="已撤销上一轮的修改，流程图恢复到之前的样子。", graph=last["graph"], state=state)
+        restored = graph_ops.carry_seq_counter(copy.deepcopy(last["graph"]), graph)
+        return TurnResult(body="已撤销上一轮的修改，流程图恢复到之前的样子。", graph=restored, state=state)
     if intent == "confirm":
-        if any(i["level"] == "error" for i in graph_validator.validate(graph)):
+        # A "丢弃" verdict says the record can't be used at all -- its graph is not what gets
+        # saved, so structural problems must not block submitting that verdict.
+        rejecting = (state.get("proposal") or {}).get("verdict") == "rejected"
+        errors = [i for i in graph_validator.validate(graph) if i["level"] == "error"]
+        if errors and not rejecting:
             state["gaps"] = review_gaps.refresh(state["gaps"], graph, mode=mode)
-            result = TurnResult(body="流程图还有结构上的问题，暂时不能提交。", state=state)
+            # Name the problems: once the clarification list is used up, the follow-up below is
+            # the generic read-back, and "there's a problem" alone gives nothing to act on.
+            listed = "；".join(dict.fromkeys(i["message"] for i in errors[:4]))
+            result = TurnResult(body=f"流程图还有结构上的问题，暂时不能提交：{listed}。请告诉我该怎么接，我来改。",
+                                state=state)
             return _next_question(state, graph, result, None)
         state["phase"] = "done"
         return TurnResult(body="好的，已确认。", state=state, finished=True)
@@ -670,7 +787,8 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
     # 3. Model turn.
     offered = review_gaps.open_gaps(state["gaps"])[:5]
     try:
-        out = _call_review_model(state, graph, turns, text, offered)
+        out = (_call_review_model(state, graph, turns, model_text, offered) if needs_model
+               else {"intent": "edit", "ops": []})
     except llm_client.LLMError as e:
         if e.kind == "not_configured":
             return TurnResult(body="当前没有配置可用的 AI 模型，只能处理「没问题 / 确认 / 撤销" +
@@ -679,6 +797,10 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
 
     intent = out.get("intent") if out.get("intent") in ("edit", "answer", "satisfied", "reject", "adopt", "other") else "other"
     understanding = out.get("understanding") if isinstance(out.get("understanding"), str) else None
+    if from_readback:
+        # The person rewrote the flow -- whatever the model calls it, this turn is an edit.
+        intent = "edit"
+        understanding = understanding or "按您改过的流程文字更新了流程图。"
     model_tags = [t for t in (out.get("reason_tags") or []) if isinstance(t, str)]
     result = TurnResult(ack=(understanding or "").strip()[:200] or None, state=state)
     _snapshot(state, graph, turn_id)
@@ -694,8 +816,14 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
             result.changes = [f"按 {cand['annotator_name']} 的结论，使用原始流程"]
     else:
         ops, unverified = sanitize_ops(out.get("ops"), graph, out.get("evidence") or {}, [text] + person_texts, turn_id)
+        # Deletions from an edited read-back are applied last, so a model op on a neighbour
+        # still resolves; rewire_after_edit then bridges the gap they leave.
+        ops += pre_ops
         if ops:
             candidate = graph_ops.apply_ops(copy.deepcopy(graph), ops)
+            # Finish the wiring the model left half-done (removed step not bridged, new step
+            # connected on one side only) before judging the edit -- see rewire_after_edit.
+            graph_ops.rewire_after_edit(graph, candidate, turn_id=turn_id)
             introduced = _error_keys(candidate) - _error_keys(graph)
             if introduced:
                 msgs = {i["message"] for i in graph_validator.validate(candidate) if (i["code"], i.get("node_id"), i.get("edge_id")) in introduced}
@@ -729,7 +857,13 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
         # Still confirming; the person asked something that didn't change the graph.
         return _final_confirm(state, new_graph, result, model_tags=model_tags)
     preferred = _valid_question(out.get("question"), {g["id"] for g in offered})
-    return _next_question(state, new_graph, result, preferred, model_tags=model_tags)
+    result = _next_question(state, new_graph, result, preferred, model_tags=model_tags)
+    if from_readback and result.graph is not None and result.readback is None:
+        # The person is editing the flow as text: hand back the updated version right away, so
+        # the next round of edits starts from a current copy instead of the now-outdated one.
+        result.readback = _show_readback(state, new_graph)
+        result.body = "改好之后的完整流程：\n" + result.readback
+    return result
 
 
 def progress(state: dict) -> float:

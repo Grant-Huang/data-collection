@@ -114,7 +114,7 @@ def test_readback_numbers_lines_by_seq_not_by_recomputed_position():
         "start_node_ids": ["n1"], "end_node_ids": ["n2"],
     }
     body = review_agent.readback(graph)
-    assert "1. 开始" in body and "3. 插入的步骤" in body and "2. 结束" in body
+    assert "[1]【开始】开始" in body and "[3]插入的步骤" in body and "[2]【结束】结束" in body
 
 
 def test_import_backfills_seq_for_uploaded_records(client, tmp_path):

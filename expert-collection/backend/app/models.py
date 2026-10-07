@@ -68,6 +68,9 @@ class Graph(BaseModel):
     graph_type: Literal["dag"] = "dag"
     start_node_ids: list[str] = Field(default_factory=list)
     end_node_ids: list[str] = Field(default_factory=list)
+    # Next step number to hand out (graph_ops.assign_missing_seqs) -- only ever increases, so a
+    # deleted step's number is never given to another one.
+    next_seq: Optional[int] = None
     nodes: list[Node] = Field(default_factory=list)
     edges: list[Edge] = Field(default_factory=list)
 
@@ -91,6 +94,9 @@ class ConversationTurn(BaseModel):
     changes: Optional[list[str]] = None
     body: Optional[str] = None
     sample: Optional[str] = None
+    # Review-loop read-back as editable text ([编号]【标签】lines): the 「修改这段流程」 button
+    # puts it into the input box, and it comes back with TurnRequest.from_readback.
+    readback: Optional[str] = None
     chips: Optional[list[str]] = None
     chip_mode: Optional[Literal["prefill", "multi_select"]] = None
 
@@ -297,6 +303,9 @@ class TurnRequest(BaseModel):
     # Raw speech-recognition output when the expert dictated this message (section 17.5);
     # `text` is what they actually sent after editing.
     raw_transcript: Optional[str] = None
+    # True when `text` is the read-back the person edited in place (「修改这段流程」): it is
+    # then aligned with that read-back by step number instead of read as a sentence.
+    from_readback: bool = False
 
 
 class SpeechPolishRequest(BaseModel):
@@ -568,6 +577,9 @@ class StartReviewSessionRequest(BaseModel):
 class ReviewSessionTurnRequest(BaseModel):
     text: str
     raw_transcript: Optional[str] = None
+    # True when `text` is the read-back the person edited in place (「修改这段流程」): it is
+    # then aligned with that read-back by step number instead of read as a sentence.
+    from_readback: bool = False
 
 
 class ReviewSession(BaseModel):

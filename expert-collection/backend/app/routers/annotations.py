@@ -260,7 +260,8 @@ def _session_model(s: dict) -> ReviewSession:
 
 def _assistant_turn(result: review_agent.TurnResult) -> dict:
     return {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": result.text, "ack": result.ack,
-            "question": result.question, "changes": result.changes or None, "body": result.body}
+            "question": result.question, "changes": result.changes or None, "body": result.body,
+            "readback": result.readback}
 
 
 def _candidates(state: dict) -> list[dict]:
@@ -353,7 +354,8 @@ def review_session_turn(version_id: str, session_id: str, req: ReviewSessionTurn
         person_turn["raw_transcript"] = req.raw_transcript
     session["turns"].append(person_turn)
 
-    result = review_agent.handle_turn(session["review"], session["graph"], session["turns"], req.text, turn_id)
+    result = review_agent.handle_turn(session["review"], session["graph"], session["turns"], req.text, turn_id,
+                                      from_readback=req.from_readback)
     if result.graph is not None:
         session["graph"] = result.graph
     session["review"] = result.state

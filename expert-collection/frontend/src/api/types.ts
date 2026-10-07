@@ -78,6 +78,10 @@ export interface ConversationTurn {
   changes?: string[] | null;
   body?: string | null;
   sample?: string | null;
+  // The read-back in `body` as editable text ([编号]【标签】 lines). 「修改这段流程」 puts it
+  // into the input box; sending it back sets `from_readback` so the backend aligns it by
+  // step number instead of reading it as a sentence.
+  readback?: string | null;
 }
 
 export interface NextQuestion {

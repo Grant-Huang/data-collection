@@ -116,6 +116,36 @@ def validate(graph: dict[str, Any]) -> list[dict[str, str]]:
             if n["node_id"] not in connected:
                 issues.append(_err("isolated_node", f"节点「{n['label']}」没有任何连线", node_id=n["node_id"]))
 
+    # A rework target that no longer exists: deleting a step that another step's
+    # retry_semantics points back to ("不合格就回到这一步重做") used to leave the reference
+    # dangling, the read-back quietly fell back to "可能需要返工", and where to go back to was
+    # lost without anyone being told.
+    for n in nodes:
+        retry = n.get("retry_semantics") or {}
+        ref = retry.get("rework_reference_node_id")
+        if retry.get("enabled") and ref and ref not in node_by_id:
+            issues.append(_err("retry_target_missing", f"「{n['label']}」不合格时要回到的那一步已经不在图里了",
+                               node_id=n["node_id"]))
+
+    # Head-to-tail connectivity ("没头没尾"). Checking only that a start and an end *exist*
+    # let a graph through where a run of steps hangs off the side -- nothing leads into it, or
+    # it leads nowhere -- and such graphs got confirmed. In a DAG, every node not reachable
+    # from a start has an ancestor with no incoming edge, and every node that can't reach an
+    # end has a descendant with no outgoing edge, so flagging exactly those two kinds of node
+    # covers full reachability while pointing at the one place to fix. Only reported once the
+    # corresponding start/end exists (missing_start / missing_end already say the rest), and
+    # nodes already reported as isolated are not repeated.
+    for n in nodes:
+        nid, ntype = n["node_id"], n["node_type"]
+        has_in, has_out = incoming_count.get(nid, 0) > 0, outgoing_count.get(nid, 0) > 0
+        if not (has_in or has_out):
+            continue
+        if starts and ntype != "start" and not has_in:
+            issues.append(_err("dangling_head", f"「{n['label']}」前面没有接上任何步骤，从开始走不到这里",
+                               node_id=nid))
+        if ends and ntype != "end" and not has_out:
+            issues.append(_err("dangling_tail", f"「{n['label']}」之后没有接下去，走不到结束", node_id=nid))
+
     return issues
 
 

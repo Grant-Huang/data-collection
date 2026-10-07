@@ -89,7 +89,12 @@ _CHIP_LABEL_MAX = 16
 
 REVIEW_TEXT = ("两张图都整理好了：「任务协作」看谁负责哪一段、怎么交接，「SOP 步骤」看每一步具体怎么做。"
                "请在右边切换着从头到尾看一遍：有不对的地方直接告诉我，没问题就点「确认并提交」。")
-REVIEW_REPEAT_TEXT = "已经在最终确认阶段了——有需要修改的地方，直接说，我来改图；没问题的话可以点「确认并提交」。"
+# Only reached when no model is configured: with one, routers/expert_workflows.py hands
+# review-stage messages to the review loop (review_agent, "edit" mode), which does edit the
+# graph. Without one there is nothing that can turn free text into graph edits, so don't
+# promise it.
+REVIEW_REPEAT_TEXT = ("已经在最终确认阶段了。目前没有配置 AI 模型，我没法按对话内容改图——没问题的话可以点「确认并提交」；"
+                      "需要修改的话，请先在「系统管理 → 模型配置」里配置模型，再告诉我要改哪里。")
 
 
 @dataclass
@@ -1295,6 +1300,24 @@ _VALID_EDGE_TYPES = {
     "timeout", "exception_forward",
 }
 
+# How node labels must read so the graph stands on its own -- shared by both model prompts that
+# draft a whole DAG (review_agent._EXTRACT_PROMPT for a narration, _REGENERATE_SYSTEM_PROMPT below
+# for 「刷新工作流图」). Each rule targets a loss seen in end-to-end runs where a second model
+# restated the process from the graph alone: trigger missing from the start node, several
+# outcomes sharing one "结束", two actions in one node, qualifying details (time limits,
+# standards) dropped, nested conditions flattened, an escalation drawn as an ending.
+DAG_LABEL_RULES = """label 怎么写（流程图要能脱离讲述单独读懂）：
+- start 节点的 label 写**这件事是怎么开始的**（触发事件，用专家原话，如"3号加工中心报警、尺寸超差"），不要只写"开始"。
+- end 节点的 label 写**结束时的状态**（如"恢复正常生产""转为可发货"）。签字、放行这类要等人确认的动作仍然单独建 approval 节点，不要直接当成 end。结局不同就建不同的 end 节点（如"转为可发货"和"整批扣下走不合格品流程"），不要几种结局共用一个"结束"；也不要再另建一个和 end 意思相同的步骤。
+- 一个节点只写一件事，写成"动作+对象"（如"复测尺寸""联系供应商安排退货"）；专家说了两个动作就拆成两个节点。
+- 专家说出的限定细节要留在 label 里：数量、时限、标准、检查项（如"等供应商来车拉走（约两三天）""按图纸量尺寸、看外观"）。
+- 汇合节点只表示"汇到一起"，汇合之后真正要做的事（如"碰结果"）另建一个步骤。同时进行的事汇合（parallel_join）写成"××都完成"；几种情况只会走其中一种再汇到一起（merge）时，不要写"都完成"，写成"××处理完后"并点明是哪几种（如"让步接收/挑选/退货处理完后"）。
+- 检验/审批有"不合格"的后果时：不合格要重做就在该节点写 retry_semantics；每次都要做的复查（如"处理完再点检一遍"）画成后面单独的一步，不要写成返工。
+- 条件有层次时（"能修的自己修，备件没库存就先采购"），下一层的情况挂在对应那条路后面新的判断节点上，不要和上一层的情况并列。
+- "超过多久没完成就找谁升级"这类规则不是一种结局：从被等待的那一步用 edge_type=timeout 连到升级步骤，升级后接回主流程，不要直接连到结束。
+"""
+
+
 _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程图整理模块。下面会给你一整段专家访谈的对话记录（助手的提问 + 专家的回答），请你根据专家实际说过的内容，重新整理出一张完整的流程图（DAG，有向无环图）。
 
 严格规则：
@@ -1302,6 +1325,8 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 - 每个节点的 label 用专家自己的措辞提炼，不要整句话不加处理地照抄，也不要过度概括丢掉关键信息。
 - 图必须是有向无环图：不允许出现环——返工/重试请通过 retry_semantics 表达语义，不要建一条指回之前节点的边。
 - 必须有且只应有你能从对话里确认的 start 和 end 节点。
+
+""" + DAG_LABEL_RULES + """
 
 只输出一个 JSON object，字段：
 - "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）, "retry_semantics": null 或 {"enabled":true,"rework_reference_node_id":"要重做的那个节点的 node_id","condition":"什么情况下需要重做","description":"字符串或 null"}——这是表达"返工/重试"的**唯一**方式，永远不要为此另外建一条指回之前节点的边}
@@ -1315,9 +1340,10 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 def _coerce_regenerated_graph(parsed: dict) -> dict | None:
     """Validates + normalizes the model's raw JSON into the same shape `graph_ops.new_graph()`
     produces (so it can replace `record["graph"]` directly and go through the usual
-    `graph_validator.validate` afterward). Returns None on any structural problem -- the
-    caller turns that into an `LLMError("bad_response", ...)`, same spirit as
-    `_llm_understand_step`'s None-on-bad-shape contract.
+    `graph_validator.validate` afterward). Returns None when the nodes themselves are unusable
+    (missing/duplicate id, unknown type, empty label) -- the caller turns that into an
+    `LLMError("bad_response", ...)`, same spirit as `_llm_understand_step`'s
+    None-on-bad-shape contract. A single bad *edge* is dropped instead (see below).
     """
     raw_nodes = parsed.get("nodes")
     raw_edges = parsed.get("edges")
@@ -1351,12 +1377,16 @@ def _coerce_regenerated_graph(parsed: dict) -> dict | None:
         if not isinstance(e, dict):
             return None
         edge_id, from_id, to_id, edge_type = e.get("edge_id"), e.get("from"), e.get("to"), e.get("edge_type")
-        if not isinstance(edge_id, str) or not edge_id or edge_id in edge_ids:
-            return None
-        if from_id not in node_ids or to_id not in node_ids:
-            return None
+        # One bad edge (a typo'd endpoint, a self-loop) used to throw away the whole draft --
+        # the expert got "格式不符合要求" for a single slip. Drop just that edge: whatever
+        # it leaves unconnected is reported by graph_validator (dangling_head / dangling_tail)
+        # and asked about, never guessed.
+        if from_id not in node_ids or to_id not in node_ids or from_id == to_id:
+            continue
         if edge_type not in _VALID_EDGE_TYPES:
-            return None
+            edge_type = "conditional" if isinstance(e.get("condition"), str) and e["condition"].strip() else "normal"
+        if not isinstance(edge_id, str) or not edge_id or edge_id in edge_ids:
+            edge_id = next(f"e_{i}" for i in range(len(raw_edges) + len(edge_ids) + 1) if f"e_{i}" not in edge_ids)
         edge_ids.add(edge_id)
         edges.append({
             "edge_id": edge_id, "from": from_id, "to": to_id, "edge_type": edge_type,
@@ -1429,4 +1459,8 @@ def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
     # reads it back the same way extract_from_narrative does for the narrative-based path.
     raw_nodes = {n.get("node_id"): n for n in parsed.get("nodes", []) if isinstance(n, dict)}
     _apply_retry_semantics(graph, raw_nodes)
+    # Same structural clean-up as the narrative draft (review_agent.extract_from_narrative):
+    # a back-edge becomes retry_semantics instead of failing validation, a missing start/end
+    # is added, start/end id lists follow node types.
+    graph_ops.normalize_draft(graph)
     return graph

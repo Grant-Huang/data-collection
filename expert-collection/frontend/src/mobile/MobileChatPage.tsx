@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
 import { mergeChipIntoDraft } from "../utils/chips";
+import { READBACK_EDIT_HINT } from "../utils/readbackEdit";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
 import { RealtimeVoiceIcon } from "../voice/icons";
@@ -11,7 +12,7 @@ import { RealtimeVoiceIcon } from "../voice/icons";
 interface Props {
   active: WorkflowRecord | null;
   sending: boolean;
-  onSend: (text: string, rawTranscript?: string) => void;
+  onSend: (text: string, rawTranscript?: string, fromReadback?: boolean) => void;
   onOpenDrawer: () => void;
   onToggleProgress: () => void;
   progressOpen: boolean;
@@ -26,7 +27,17 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   // overflowed a 390px-wide screen and pushed its stop/send buttons off-screen.
   const [recording, setRecording] = useState(false);
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  // 「修改这段流程」: the read-back is edited in its own multi-line box (the capsule input is a
+  // single line), sent back with fromReadback so the backend aligns it by step number.
+  const [readbackDraft, setReadbackDraft] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  function sendReadback() {
+    const value = (readbackDraft ?? "").trim();
+    if (!value || sending || confirmed) return;
+    setReadbackDraft(null);
+    onSend(value, undefined, true);
+  }
   const confirmed = active?.status === "expert_confirmed";
   const nextQuestion = active?.unresolved[0] ?? null;
 
@@ -89,6 +100,7 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
           activeQuestion={confirmed ? null : nextQuestion}
           onChipPick={handleChip}
           sending={sending}
+          onEditReadback={confirmed ? undefined : (rb) => setReadbackDraft(rb)}
         />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
@@ -96,7 +108,32 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderTop: "1px solid #e5e7eb" }}>
+      {readbackDraft !== null && (
+        <div style={{ borderTop: "1px solid #dbe7f7", background: "#f5f9ff", padding: "8px 14px" }}>
+          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5, marginBottom: 6 }}>{READBACK_EDIT_HINT}</div>
+          <textarea
+            value={readbackDraft}
+            onChange={(e) => setReadbackDraft(e.target.value)}
+            rows={8}
+            autoFocus
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 14, lineHeight: 1.5, border: "1px solid #c7d7ee", borderRadius: 8, padding: 8, fontFamily: "inherit", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button onClick={() => setReadbackDraft(null)} style={{ border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "8px 14px", minHeight: 40 }}>
+              取消修改
+            </button>
+            <button
+              onClick={sendReadback}
+              disabled={sending || !readbackDraft.trim()}
+              style={{ border: "none", background: sending || !readbackDraft.trim() ? "#a9c4e8" : "#2a78d6", color: "#fff", borderRadius: 8, padding: "8px 14px", minHeight: 40, fontWeight: 600 }}
+            >
+              发送修改
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: readbackDraft !== null ? "none" : "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderTop: "1px solid #e5e7eb" }}>
         <div style={{ flex: 1, display: recording ? "none" : "flex", alignItems: "center", background: "#f1f3f5", borderRadius: 999, padding: "4px 6px 4px 16px" }}>
           <input
             ref={inputRef}

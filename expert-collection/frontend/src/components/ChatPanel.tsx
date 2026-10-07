@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { mergeChipIntoDraft } from "../utils/chips";
+import { READBACK_EDIT_HINT } from "../utils/readbackEdit";
 import { MessageList } from "./MessageList";
 import { VoiceDictationButton } from "./VoiceDictationButton";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
@@ -18,7 +19,8 @@ interface Props {
   nextQuestion: NextQuestion | null;
   // rawTranscript: what speech recognition heard, when the message was dictated -- stored
   // next to the (possibly edited) text so recognition errors can be checked later.
-  onSend: (text: string, rawTranscript?: string) => void;
+  // fromReadback: the text is the read-back edited in place (「修改这段流程」).
+  onSend: (text: string, rawTranscript?: string, fromReadback?: boolean) => void;
   sending: boolean;
   confirmed: boolean;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
@@ -35,7 +37,29 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
   // Raw recognizer output for everything dictated into the current draft.
   const [rawPieces, setRawPieces] = useState<string[]>([]);
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  // True while the draft is the read-back put there by 「修改这段流程」; reset when the draft is
+  // cleared or sent.
+  const [editingReadback, setEditingReadback] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  function handleEditReadback(readback: string) {
+    setDraft(readback);
+    setRawPieces([]);
+    setEditingReadback(true);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(0, 0);
+        el.scrollTop = 0;
+      }
+    });
+  }
+
+  function cancelEditReadback() {
+    setDraft("");
+    setEditingReadback(false);
+  }
 
   function handleChipPick(pick: string) {
     setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
@@ -61,7 +85,9 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
     setDraft("");
     const raw = text ? undefined : rawPieces.join("") || undefined;
     setRawPieces([]);
-    onSend(value, raw);
+    const fromReadback = editingReadback && !text;
+    setEditingReadback(false);
+    onSend(value, raw, fromReadback);
   }
 
   // Icon ① -- VoiceDictationButton already ran the transcript through the LLM polish call
@@ -89,7 +115,15 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
         onChipPick={handleChipPick}
         sending={sending}
         onHighlightNodes={onHighlightNodes}
+        onEditReadback={confirmed ? undefined : handleEditReadback}
       />
+
+      {editingReadback && (
+        <div className="readback-edit-hint">
+          <span>{READBACK_EDIT_HINT}改好后按「发送」（或 Ctrl+Enter）。</span>
+          <button onClick={cancelEditReadback}>取消修改</button>
+        </div>
+      )}
 
       <div style={{ position: "relative", display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
         <VoiceDictationButton disabled={confirmed || sending} onFill={handleDictatedFill} onSend={handleDictatedSend} />
@@ -98,9 +132,21 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
-            if (!e.target.value.trim()) setRawPieces([]);
+            if (!e.target.value.trim()) {
+              setRawPieces([]);
+              setEditingReadback(false);
+            }
           }}
           onKeyDown={(e) => {
+            // Editing the multi-line read-back: plain Enter is a new line (adding a step is
+            // literally adding a line); Ctrl/⌘+Enter sends.
+            if (editingReadback) {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                handleSend();
+              }
+              return;
+            }
             // Don't send while an IME (Chinese input) composition is still open.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -121,7 +167,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
                     ? "点上面的选项快速填入（可修改），或直接输入你的回答"
                     : "按你记得的实际情况说就好，Enter 发送，Shift+Enter 换行")
           }
-          rows={2}
+          rows={editingReadback ? Math.min(14, Math.max(6, draft.split("\n").length + 1)) : 2}
           style={{
             flex: 1,
             resize: "none",

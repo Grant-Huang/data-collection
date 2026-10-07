@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent
+from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent, review_gaps
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -75,7 +75,8 @@ def _review_turn(result: review_agent.TurnResult, *, sample: str | None = None) 
     """Assistant transcript entry for a review-loop reply (section 17): understanding (ack),
     the concrete graph changes, a body (read-back / notices) and one question -- no chips."""
     turn = {"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": result.text,
-            "ack": result.ack, "question": result.question, "changes": result.changes or None, "body": result.body}
+            "ack": result.ack, "question": result.question, "changes": result.changes or None, "body": result.body,
+            "readback": result.readback}
     if sample:
         turn["sample"] = sample
     return turn
@@ -324,7 +325,7 @@ def _rollback_to_turn(record: dict, turn_id: str) -> dict:
         for e in record["graph"]["edges"] if cutoff_ids & set(e.get("source_turn_ids", []))
     ]
     if "graph_before" in log[idx]:
-        record["graph"] = copy.deepcopy(log[idx]["graph_before"])
+        record["graph"] = graph_ops.carry_seq_counter(copy.deepcopy(log[idx]["graph_before"]), record["graph"])
     else:
         record["graph"] = graph_ops.apply_ops(record["graph"], remove_ops)
 
@@ -359,6 +360,18 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         return _post_review_turn(record, req)
 
     state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
+    if state.get("stage") == "review" and review_agent.available():
+        # The step-by-step guide has nothing left to ask, and it can't turn "第3步其实是班长做的"
+        # into a graph edit. With a model configured, continue in the review loop's edit mode
+        # (the same one 「继续修改」 uses) so asking for a change in the chat actually changes
+        # the graph. Its own clarification items are dropped except structural ones: the
+        # sweeps already asked the coverage questions, and these steps came verbatim from the
+        # expert's answers, so "我没找到原话" would be a false alarm.
+        review = review_agent.new_state("edit")
+        review["gaps"] = [g if g["kind"] in ("validator", "decision_condition") else {**g, "status": "dismissed"}
+                          for g in review_gaps.refresh([], record["graph"], mode="edit")]
+        record["_review"] = review
+        return _post_review_turn(record, req)
     expert_turn_id = uuid.uuid4().hex[:8]
     history = list(record["turns"])
     graph_before = copy.deepcopy(record["graph"])
@@ -472,7 +485,8 @@ def _post_review_turn(record: dict, req: TurnRequest) -> TurnResponse:
         expert_turn["raw_transcript"] = req.raw_transcript
     record["turns"].append(expert_turn)
 
-    result = review_agent.handle_turn(record["_review"], record["graph"], record["turns"], req.text, expert_turn_id)
+    result = review_agent.handle_turn(record["_review"], record["graph"], record["turns"], req.text, expert_turn_id,
+                                      from_readback=req.from_readback)
     before = len(record["graph"]["nodes"]) + len(record["graph"]["edges"])
     if result.graph is not None:
         record["graph"] = result.graph

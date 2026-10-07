@@ -64,7 +64,7 @@ export function useWorkflowSession() {
   }, [refreshList]);
 
   const sendTurn = useCallback(
-    async (text: string, rawTranscript?: string) => {
+    async (text: string, rawTranscript?: string, fromReadback = false) => {
       if (!active) return;
       setSending(true);
       setError(null);
@@ -75,7 +75,7 @@ export function useWorkflowSession() {
           : prev,
       );
       try {
-        await api.postTurn(active.id, text, rawTranscript);
+        await api.postTurn(active.id, text, rawTranscript, fromReadback);
         const refreshed = await api.getWorkflow(active.id);
         setActive(refreshed);
         await refreshList();
