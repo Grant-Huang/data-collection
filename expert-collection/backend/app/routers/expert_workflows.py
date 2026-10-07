@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, review_agent
+from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, phase3a_integration, review_agent
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -87,7 +87,7 @@ def _apply_review_state(record: dict, state: dict) -> None:
     ready = state["phase"] == "final_confirm" and graph_validator.is_valid(record["graph"])
     record["completion"] = {"score": review_agent.progress(state), "ready_for_confirmation": ready}
     record["unresolved"] = []
-    record["validation"] = graph_validator.validate(record["graph"])
+    record["validation"] = _validate_with_phase3a(record["graph"])
     if record["status"] != "expert_confirmed":
         record["status"] = "needs_confirmation" if ready else "collecting"
 
@@ -142,7 +142,7 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "turns": [_assistant_turn(reply, next_question)],
         "unresolved": [next_question] if next_question else [],
         "completion": {"score": 0.0, "ready_for_confirmation": False},
-        "validation": graph_validator.validate(graph),
+        "validation": _validate_with_phase3a(graph),
         "case_context": None,
         "created_at": now,
         "updated_at": now,
@@ -158,6 +158,24 @@ def _strip_internal(record: dict, *, in_dataset: bool) -> dict:
     out = {k: v for k, v in record.items() if not k.startswith("_")}
     out["in_dataset"] = in_dataset
     return out
+
+
+def _validate_with_phase3a(graph: dict) -> list[dict[str, str]]:
+    """结合 Phase 1 和 Phase 3-A 的验证"""
+    import logging
+
+    issues = graph_validator.validate(graph)
+
+    try:
+        phase3a_result = phase3a_integration.validate_and_enrich_graph(graph)
+        phase3a_issues = phase3a_result['validation']['issues']
+        issues.extend(phase3a_issues)
+    except ImportError:
+        logging.debug("Phase 3-A 模块未安装")
+    except Exception as e:
+        logging.warning(f"Phase 3-A 验证失败：{e}")
+
+    return issues
 
 
 @router.get("", response_model=list[WorkflowSummary])
@@ -443,12 +461,17 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
 
     record["turns"].append(_assistant_turn(assistant_reply, next_question))
 
-    issues = graph_validator.validate(record["graph"])
+    issues = _validate_with_phase3a(record["graph"])
     score = _completion_score(record)
     ready = new_state["stage"] == "review" and graph_validator.is_valid(record["graph"])
     record["completion"] = {"score": score, "ready_for_confirmation": ready}
     record["unresolved"] = [next_question] if next_question else []
     record["validation"] = issues
+    try:
+        phase3a_result = phase3a_integration.validate_and_enrich_graph(record["graph"])
+        record["_phase3a_features"] = phase3a_result['features']
+    except Exception:
+        pass
     if ready and record["status"] != "expert_confirmed":
         record["status"] = "needs_confirmation"
     record["updated_at"] = _now()
@@ -523,8 +546,9 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
-    issues = graph_validator.validate(record["graph"])
-    if any(i["level"] == "error" for i in issues):
+    issues = _validate_with_phase3a(record["graph"])
+    phase1_errors = [i for i in issues if not i.get('code', '').startswith('phase3a_')]
+    if any(i["level"] == "error" for i in phase1_errors):
         raise HTTPException(
             status_code=422,
             detail={"message": "图结构未通过校验，无法确认", "issues": issues},
@@ -595,8 +619,9 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     except llm_client.LLMError as e:
         raise HTTPException(status_code=502, detail=f"重新生成流程图失败：{e}") from e
 
-    issues = graph_validator.validate(new_graph)
-    if any(i["level"] == "error" for i in issues):
+    issues = _validate_with_phase3a(new_graph)
+    phase1_errors = [i for i in issues if not i.get('code', '').startswith('phase3a_')]
+    if any(i["level"] == "error" for i in phase1_errors):
         raise HTTPException(
             status_code=422,
             detail={"message": "模型重新生成的流程图未通过结构校验，原有流程图未改动", "issues": issues},
