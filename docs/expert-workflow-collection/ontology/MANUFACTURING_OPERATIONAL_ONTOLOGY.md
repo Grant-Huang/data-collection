@@ -283,21 +283,27 @@ flowchart TB
 
 ### 9.1 追问放在哪
 
-为了不加重专家负担，只在**最需要**的地方追问，各问一次：
+专家录入的主流程是**先叙述、后澄清**（IMPLEMENTATION_PLAN 第 17 节，`app/review_agent.py`）：专家先完整讲一遍，系统据此生成 DAG 初稿，再由 LLM 从待澄清清单（`app/review_gaps.py`）里逐项挑问题问专家。本体追问就作为这份清单里的两类条目加入，不另起流程：
 
-| 追问 | 触发条件 | 问法 | 写入 |
+| 清单条目 | 触发条件 | 问法 | 写入 |
 |---|---|---|---|
-| 判断标准（阈值 + 预期值） | 图上有判断（decision）步骤 | 「X」之后要分「A」还是「B」，判断时有具体的标准吗？比如正常应该是多少、到多少就不行？ | 判断节点的 `evaluation_criteria[]`：`limits`、`expected`、`unit`、原话 `description` |
-| 时限 | 图上有审批（approval）步骤 | 等「谁」确认这一步，一般最晚多久要有结果？ | 审批节点的 `sla_config`：`duration`（ISO 8601）、原话 `description` |
-| 超时升级 | 上一问给了时限 | 如果过了这个时间还没确认，会找谁？ | `sla_config.violation_action` + `escalate_to_role` |
+| `criterion`：判断标准（阈值 + 预期值） | 初稿里有判断（decision）步骤，且该步骤还没有 `evaluation_criteria` | 「X」这里判断走哪条路时，有具体的标准吗？比如正常应该是多少、到多少就不行？ | 判断节点的 `evaluation_criteria[]`：`limits`、`expected`、`unit`、原话 `description` |
+| `timing`：时限 + 超时升级 | 初稿里有审批（approval）步骤，且该步骤还没有 `sla_config` | 「X」要等人确认，一般最晚多久要有结果？超时了会找谁？ | 审批节点的 `sla_config`：`duration`（ISO 8601）、原话 `description`；回答里说了「找/报给/通知某人」时再写 `violation_action=escalate` + `escalate_to_role` |
 
-顺序是：分情况 → 同时进行 → 等人确认 → 返工 → **判断标准 → 时限/升级** → 经验。没有判断步骤或审批步骤时，对应追问直接跳过。
+- **优先级**：排在结构问题（未核实步骤、校验错误、判断条件）之后，模型自己提出的疑问之前（`PRIORITY` 中 criterion=35、timing=36）。用真实模型试跑时，专家几乎每回答一句，模型都会再提一个新疑问（优先级 40），排在它后面的问题在 `max_questions` 用完前一直轮不到。同一次试跑里，模型挑下一个问题时也总是挑自己的新疑问，所以当清单里排第一的是这两类问题时，由代码直接选它，模型只负责措辞。
+- **数量**：每类最多问前 2 个步骤，整轮仍受 `max_questions` 上限约束，避免拖长访谈。
+- **谁来写字段**：LLM 只负责判断专家这句话是不是在回答刚才的问题（`intent=answer`，或把该条目列进 `resolved_gap_ids`）；写进节点的内容由代码用 `ontology_capture.criterion_from_answer` / `sla_from_answer` 从专家原话解析，LLM 的改图操作（`sanitize_ops` 白名单）不能直接写这些字段。专家反问或说别的事（`intent=other`）时什么也不写。
+- **只问一次**：专家答「没有具体数值，靠经验看」「没有明确的时间要求」时不写字段，但该条目已标记为已问/已解决，不会再问。
+- **最后的复述**：确认前的整图复述会带上记下的判断标准和时限原话，专家确认的就是将要保存的内容。
+- 只有在审阅别人的图（annotate / arbitrate）时不问这两类，与其他覆盖性问题一致。
+
+没有配置 LLM 时，系统退回逐步引导（`app/guide_service.py`），同样的两类追问以扫查（sweep）形式出现：分情况 → 同时进行 → 等人确认 → 返工 → **判断标准 → 时限/升级** → 经验，答案用同一套解析函数处理。
 
 ### 9.2 只记专家说过的数
 
 `app/ontology_capture.py` 用规则解析回答：只有回答里**字面出现**的数字才会变成结构化的区间、预期值或时长，例如「15 到 35 度，正常 25 度，超过 40 度就得停」解析成 normal 15–35、reject >40、预期 25。解析不出来的回答（「主要看铁屑颜色」「一个班之内」）只保留原话，不补数字；按班次说的时间不会换算成小时，因为各厂班次长度不同。「没超过 0.05mm 就行」虽然以「没」开头，但带了数字，算作回答而不是拒答。
 
-原话会在本体视图里变成 `kind=expert_quote` 的 Evidence，所以这些 Check / TimeConstraint 的 `confidence_basis` 是 `expert_stated`。审批节点在追问里记下的审批人，也会被提升为一条 `action=approve` 的 Permission。
+原话会在本体视图里变成 `kind=expert_quote` 的 Evidence，所以这些 Check / TimeConstraint 的 `confidence_basis` 是 `expert_stated`。审批节点上的执行人（`actor_roles`）也会被提升为一条 `action=approve` 的 Permission。
 
 ### 9.3 界面
 

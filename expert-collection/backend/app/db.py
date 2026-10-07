@@ -123,6 +123,15 @@ def _connect() -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_annotation_sessions_lookup ON annotation_sessions (version_id, record_id)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cache (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     # dataset_versions predates the `archived` column; add it for DBs created before this change.
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
@@ -451,5 +460,31 @@ def list_review_sessions(version_id: str, record_id: str) -> list[dict]:
             (version_id, record_id),
         ).fetchall()
         return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_cache(key: str) -> Optional[str]:
+    """Get a value from cache."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def set_cache(key: str, value: str) -> None:
+    """Set a value in cache."""
+    from datetime import datetime
+    conn = _connect()
+    try:
+        now = datetime.utcnow().isoformat() + "Z"
+        conn.execute(
+            "INSERT INTO cache (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, now),
+        )
+        conn.commit()
     finally:
         conn.close()

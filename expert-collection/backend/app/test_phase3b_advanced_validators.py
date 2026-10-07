@@ -39,7 +39,6 @@ class TestRuleSetValidator:
             content={"constraint_expression": "test1"},
             created_by="test_user",
             applicable_workflow_types=["process_mapping"],
-            status="active",
         )
 
         rule2 = RulesManager.create_system_rule(
@@ -49,7 +48,6 @@ class TestRuleSetValidator:
             content={"constraint_expression": "test2"},
             created_by="test_user",
             applicable_workflow_types=["standard_operation"],
-            status="active",
         )
 
         report = RuleSetValidator.validate([rule1.rule_id, rule2.rule_id])
@@ -70,7 +68,6 @@ class TestRuleSetValidator:
             description="Test",
             content={"constraint_expression": "test"},
             created_by="test_user",
-            status="active",
         )
 
         rule2 = RulesManager.create_system_rule(
@@ -79,7 +76,6 @@ class TestRuleSetValidator:
             description="Test",
             content={"required_roles": ["admin"]},
             created_by="test_user",
-            status="active",
         )
 
         report = RuleSetValidator.validate([rule1.rule_id, rule2.rule_id])
@@ -99,7 +95,6 @@ class TestRuleSetValidator:
             content={"constraint_expression": "test"},
             created_by="test_user",
             priority="critical",
-            status="active",
         )
 
         rule2 = RulesManager.create_system_rule(
@@ -109,7 +104,6 @@ class TestRuleSetValidator:
             content={"constraint_expression": "test2"},
             created_by="test_user",
             priority="low",
-            status="active",
         )
 
         report = RuleSetValidator.validate([rule1.rule_id, rule2.rule_id])
@@ -130,7 +124,6 @@ class TestRuleSetValidator:
             created_by="test_user",
             applicable_workflow_types=["process_mapping"],
             priority="high",
-            status="active",
         )
 
         rule2 = RulesManager.create_system_rule(
@@ -141,7 +134,6 @@ class TestRuleSetValidator:
             created_by="test_user",
             applicable_workflow_types=["process_mapping"],
             priority="high",
-            status="active",
         )
 
         report = RuleSetValidator.validate([rule1.rule_id, rule2.rule_id])
@@ -270,7 +262,6 @@ class TestPolicyApplicationValidator:
             decision_rules=[
                 {"rule_id": "r1", "condition": "test", "action": "allow"}
             ],
-            status="active",
         )
 
         report = PolicyApplicationValidator.validate([policy.policy_id])
@@ -290,7 +281,6 @@ class TestPolicyApplicationValidator:
             decision_rules=[
                 {"rule_id": "r1", "condition": "test", "action": "allow"}
             ],
-            status="active",
         )
 
         report = PolicyApplicationValidator.validate([policy.policy_id])
@@ -318,7 +308,6 @@ class TestPolicyApplicationValidator:
                     "action": "require_manager_approval"
                 }
             ],
-            status="active",
         )
 
         report = PolicyApplicationValidator.validate([policy.policy_id])
@@ -339,12 +328,11 @@ class TestPolicyApplicationValidator:
                 {"rule_id": "r1", "condition": "test", "action": "allow"}
             ],
             exception_handlers=[
-                ExceptionHandler(exception_type="timeout", handling_strategy="retry"),
-                ExceptionHandler(exception_type="invalid_data", handling_strategy="reject"),
-                ExceptionHandler(exception_type="resource_unavailable", handling_strategy="queue"),
-                ExceptionHandler(exception_type="authorization_error", handling_strategy="deny"),
+                ExceptionHandler(exception_type="timeout", handling_strategy="retry", escalation_level="manager"),
+                ExceptionHandler(exception_type="invalid_data", handling_strategy="reject", escalation_level="manager"),
+                ExceptionHandler(exception_type="resource_unavailable", handling_strategy="queue", escalation_level="manager"),
+                ExceptionHandler(exception_type="authorization_error", handling_strategy="deny", escalation_level="manager"),
             ],
-            status="active",
         )
 
         report = PolicyApplicationValidator.validate([policy.policy_id])
@@ -374,7 +362,6 @@ class TestValidationFunctions:
             description="Test",
             content={"constraint_expression": "test"},
             created_by="test_user",
-            status="active",
         )
 
         report = validate_rule_set([rule.rule_id])
@@ -404,7 +391,6 @@ class TestValidationFunctions:
             decision_rules=[
                 {"rule_id": "r1", "condition": "test", "action": "allow"}
             ],
-            status="active",
         )
 
         report = validate_policy_application([policy.policy_id])

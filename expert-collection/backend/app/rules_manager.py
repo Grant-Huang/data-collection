@@ -138,11 +138,10 @@ class RulesManager:
         update_dict["updated_by"] = updated_by
         update_dict["updated_at"] = now
 
-        # 版本升级（如果有内容变更）
-        if "content" in update_dict or "status" in update_dict:
-            parts = rule.version.split(".")
-            parts[-1] = str(int(parts[-1]) + 1)
-            update_dict["version"] = ".".join(parts)
+        # 版本升级（任何更新都应该促进版本升级）
+        parts = rule.version.split(".")
+        parts[-1] = str(int(parts[-1]) + 1)
+        update_dict["version"] = ".".join(parts)
 
         # 应用更新
         for key, value in update_dict.items():

@@ -89,6 +89,18 @@ export function SystemManagementPage() {
     }
   }
 
+  async function saveLlmTimeouts(patch: Record<string, unknown>) {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      setSettings(await api.updateSettings({ llm_timeouts: patch }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleTestConnection(level: string) {
     const res = await api.testConnection(level);
     setTestResults((prev) => ({ ...prev, [level]: res.message }));
@@ -182,9 +194,23 @@ export function SystemManagementPage() {
 
             {modelSubTab === "params" && (
               <section style={sectionCard}>
-                <h2 style={sectionTitle}>模型参数</h2>
-                <div style={{ fontSize: 12.5, color: "#94a3b8" }}>
-                  预留——目前没有跨级别/跨环节的全局模型参数需要配置（各环节自己的 temperature 在「模型引用」子 Tab 里）。
+                <h2 style={sectionTitle}>LLM 超时配置</h2>
+                <div style={{ fontSize: 11.5, color: "#94a3b8", marginBottom: 12 }}>
+                  调整各环节的 LLM 调用超时时间（单位：秒）。若 LLM 服务响应较慢，可增加超时时间；若服务通常很快，可降低以便更快失败转移。
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <NumberField
+                    label="流程图重新生成（秒）"
+                    value={settings.llm_timeouts.regenerate_graph_seconds}
+                    tip="根据会话内容重新生成工作流流程图的 LLM 调用超时。这是一个复杂的结构化生成任务，通常需要较长的处理时间。"
+                    onSave={(v) => saveLlmTimeouts({ regenerate_graph_seconds: v })}
+                  />
+                  <NumberField
+                    label="会话引导（秒）"
+                    value={settings.llm_timeouts.guide_service_seconds}
+                    tip="专家采集会话实时引导的 LLM 调用超时。这是高频、低延迟的任务，通常完成较快。"
+                    onSave={(v) => saveLlmTimeouts({ guide_service_seconds: v })}
+                  />
                 </div>
               </section>
             )}

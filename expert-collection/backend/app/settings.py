@@ -84,6 +84,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "audit_log_retention_days": 90,
         "mobile_session_timeout_minutes": None,
     },
+    "llm_timeouts": {
+        "regenerate_graph_seconds": 60,
+        "guide_service_seconds": 30,
+    },
 }
 
 

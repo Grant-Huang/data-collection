@@ -205,7 +205,11 @@ export function useWorkflowSession() {
       setActive(record);
       await refreshList();
     } catch (e) {
-      setError(String(e));
+      const errorMsg = String(e);
+      // Extract error type from API response for better UX
+      const isTimeout = errorMsg.includes("超时") || errorMsg.includes("timeout");
+      const errorType = isTimeout ? "timeout" : "other";
+      setError(JSON.stringify({ message: errorMsg, type: errorType }));
     } finally {
       setRegenerating(false);
     }

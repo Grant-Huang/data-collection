@@ -40,7 +40,19 @@ _VALIDATOR_QUESTIONS = {
     "merge_needs_two": "「{label}」之前是哪几条路汇到一起？",
 }
 
-PRIORITY = {"unverified_node": 10, "validator": 20, "decision_condition": 30, "model": 40, "coverage": 50, "missing_actor": 60}
+# Ontology follow-ups (docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md
+# section 9): asked once the structure is valid (after unverified steps, validator errors and
+# missing branch conditions) but before the model's own uncertainties -- in a trial run with a
+# real model, almost every answer produced a new uncertainty (priority 40), so anything ranked
+# below "model" was never reached within max_questions. The expert's answer is turned into node fields by review_agent (via
+# ontology_capture), never by the model.
+CRITERION_QUESTION = "「{label}」这里判断走哪条路时，有具体的标准吗？比如正常应该是多少、到多少就不行？没有具体数值、靠经验看也可以直接说。"
+TIMING_QUESTION = "「{label}」要等人确认，一般最晚多久要有结果？超时了会找谁？没有明确的时间要求也可以直接说。"
+ONTOLOGY_KINDS = ("criterion", "timing")
+MAX_ONTOLOGY_GAPS_PER_KIND = 2  # keep the interview short: only the first few decision / approval steps
+
+PRIORITY = {"unverified_node": 10, "validator": 20, "decision_condition": 30, "criterion": 35, "timing": 36,
+            "model": 40, "coverage": 50, "missing_actor": 60}
 
 
 def _gap(kind: str, text: str, node_ids: Iterable[str] = (), *, source: str = "rule", key: str = "") -> dict:
@@ -105,6 +117,19 @@ def rule_gaps(graph: dict, *, mode: str) -> list[dict]:
         for key, text in COVERAGE_QUESTIONS.items():
             if not present[key]:
                 out.append(_gap("coverage", text, key=key))
+
+        # Ontology follow-ups, one per step, for steps the expert hasn't covered yet. Once the
+        # gap was asked, its "asked"/"resolved" status carries over by id even when the expert
+        # declined (field still empty), so it is never asked twice.
+        # The cap counts steps, not open questions, so answering one never pulls in a third.
+        decisions = [n for n in nodes if n["node_type"] == "decision"][:MAX_ONTOLOGY_GAPS_PER_KIND]
+        for n in decisions:
+            if not n.get("evaluation_criteria"):
+                out.append(_gap("criterion", CRITERION_QUESTION.format(label=n["label"]), [n["node_id"]]))
+        approvals = [n for n in nodes if n["node_type"] == "approval"][:MAX_ONTOLOGY_GAPS_PER_KIND]
+        for n in approvals:
+            if not n.get("sla_config"):
+                out.append(_gap("timing", TIMING_QUESTION.format(label=n["label"]), [n["node_id"]]))
 
         no_actor = [n for n in nodes if n["node_type"] in ("activity", "approval", "handoff") and not n.get("actor_roles")]
         if no_actor:
