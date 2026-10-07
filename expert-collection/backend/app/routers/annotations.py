@@ -382,7 +382,8 @@ def review_session_turn(version_id: str, session_id: str, req: ReviewSessionTurn
 @router.get("/annotation-summary", response_model=AnnotationSummary)
 def annotation_summary(version_id: str) -> AnnotationSummary:
     version = _get_annotatable_version(version_id)
-    records = dataset_records.records_for_export(version)
+    # Counts only -- no record content is needed, so no graph is read (C5).
+    record_ids = dataset_records.record_ids(version)
     annotations = db.list_annotations_by_record(version_id)
     revisions = db.list_revisions_by_record(version_id)
 
@@ -392,8 +393,7 @@ def annotation_summary(version_id: str) -> AnnotationSummary:
     reason_tag_counts: dict[str, int] = {}
     pairs: list[tuple[str, str]] = []
     corrected = 0
-    for r in records:
-        rid = r["record_id"]
+    for rid in record_ids:
         history = annotations.get(rid, [])
         revs = revisions.get(rid, [])
         state = gold_annotation.compute_state(history, revs)
@@ -420,8 +420,8 @@ def annotation_summary(version_id: str) -> AnnotationSummary:
                     reason_tag_counts[t] = reason_tag_counts.get(t, 0) + 1
 
     return AnnotationSummary(
-        version_id=version_id, total_records=len(records),
-        annotated_records=sum(1 for r in records if annotations.get(r["record_id"])),
+        version_id=version_id, total_records=len(record_ids),
+        annotated_records=sum(1 for rid in record_ids if annotations.get(rid)),
         verdict_counts=verdict_counts, gold_counts=gold_counts, stage_counts=stage_counts,
         reason_tag_counts=reason_tag_counts, agreement_kappa=gold_annotation.cohens_kappa(pairs),
         corrected_count=corrected,

@@ -38,13 +38,27 @@ def versions_containing(workflow_id: str) -> list[dict]:
     ]
 
 
+_EXPORT_FIELDS = ("id", "name", "graph", "case_context", "manufacturing_context", "task_workflow")
+
+
+def record_ids(version: dict) -> list[str]:
+    """The ids `records_for_export(version)` would return, without reading any graph -- for
+    counts and per-record annotation lookups that never look at the records themselves."""
+    if version["source_type"] == "public_extracted":
+        return [r["record_id"] for r in version.get("records", [])]
+    return db.existing_ids(version["workflow_ids"])
+
+
 def records_for_export(version: dict) -> list[dict]:
     if version["source_type"] == "public_extracted":
         return version.get("records", [])
-    # expert_collected: reconstruct a record-shaped dict from each stored WorkflowRecord.
+    # expert_collected: reconstruct a record-shaped dict from each stored WorkflowRecord --
+    # only the fields used below, in one query (C5: parsing every full record, transcript and
+    # undo history included, made the Dashboard take seconds at a few hundred records).
+    fields = db.get_fields(version["workflow_ids"], _EXPORT_FIELDS)
     out = []
     for wid in version["workflow_ids"]:
-        w = db.get(wid)
+        w = fields.get(wid)
         if not w:
             continue
         out.append({

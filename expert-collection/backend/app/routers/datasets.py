@@ -37,33 +37,46 @@ def _published_workflow_ids(source_type: str) -> set[str]:
     return ids
 
 
-def _draft_pool(source_type: str) -> list[dict]:
+def _draft_pool_ids(source_type: str) -> list[str]:
     # Phase 3 sub-scope only wires up expert_collected -- every confirmed workflow record
     # *is* the expert_collected source, there's no separate ingestion step to distinguish.
     if source_type != "expert_collected":
         return []
     already_published = _published_workflow_ids(source_type)
-    # Archived sessions are the expert/admin saying "set this one aside" -- keep them out of
-    # the next publish until they're unarchived.
+    # Archived / deleted sessions are the expert/admin saying "set this one aside" -- keep them
+    # out of the next publish until they're restored. Decided from the small per-row summary
+    # (db.list_summaries), not the full records (C5).
     return [
-        w for w in db.list_all()
+        w["id"] for w in db.list_summaries()
         if w["status"] == "expert_confirmed" and w["id"] not in already_published
         and not w.get("archived", False) and not w.get("deleted", False)
     ]
+
+
+# What publishing reads from each pooled record (quality scores the graphs and case contexts,
+# the explanations quote names).
+_POOL_FIELDS = ("id", "name", "graph", "case_context")
+
+
+def _draft_pool(source_type: str) -> list[dict]:
+    ids = _draft_pool_ids(source_type)
+    fields = db.get_fields(ids, _POOL_FIELDS)
+    return [fields[i] for i in ids if i in fields]
 
 
 def _live_annotation_readiness(version: dict) -> dict:
     """§9 Phase C-2: annotation_readiness is the one dimension recomputed at read time
     instead of frozen at publish -- see quality.compute_annotation_readiness's docstring.
     """
-    records = dataset_records.records_for_export(version)
+    # Only the ids matter here -- no graph is read (C5).
+    record_ids = dataset_records.record_ids(version)
     annotations = db.list_annotations_by_record(version["id"])
     revisions = db.list_revisions_by_record(version["id"])
     gold_count = double_count = arbitrated_count = 0
     kappa_pairs: list[tuple[str, str]] = []
-    for r in records:
-        history = annotations.get(r["record_id"], [])
-        if gold_annotation.compute_gold_status(history, revisions.get(r["record_id"], [])) == "gold":
+    for record_id in record_ids:
+        history = annotations.get(record_id, [])
+        if gold_annotation.compute_gold_status(history, revisions.get(record_id, [])) == "gold":
             gold_count += 1
         # Rounds (IMPLEMENTATION_PLAN.md section 16): a record counts as double-annotated
         # once any of its rounds has two independent annotations; every such round
@@ -77,7 +90,7 @@ def _live_annotation_readiness(version: dict) -> dict:
 
     min_sample_size = settings_module.get_effective_settings()["quality_params"]["min_sample_size"]
     return quality.compute_annotation_readiness(
-        total_records=len(records), gold_count=gold_count, double_annotated_count=double_count,
+        total_records=len(record_ids), gold_count=gold_count, double_annotated_count=double_count,
         arbitrated_count=arbitrated_count, agreement_kappa=gold_annotation.cohens_kappa(kappa_pairs),
         min_sample_size=min_sample_size,
     )
@@ -117,8 +130,7 @@ def _to_summary(version: dict) -> DatasetVersionSummary:
 
 @router.get("/draft-pool")
 def get_draft_pool(source_type: str = "expert_collected") -> dict:
-    pool = _draft_pool(source_type)
-    return {"source_type": source_type, "count": len(pool)}
+    return {"source_type": source_type, "count": len(_draft_pool_ids(source_type))}
 
 
 @router.post("/publish", response_model=DatasetVersionSummary)

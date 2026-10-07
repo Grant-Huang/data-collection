@@ -16,9 +16,30 @@ from typing import Optional
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "expert_workflows.db"
 
 
+# DB files whose schema is already in place in this process (C5). Every function here opens its
+# own short-lived connection (FastAPI runs sync endpoints on a thread pool, and a connection
+# can't be shared across threads by default); re-running a dozen CREATE TABLE / PRAGMA
+# statements on each of them cost more than the queries themselves when a dataset endpoint
+# reads a few hundred records. Keyed by path because tests point DB_PATH at a fresh file each.
+_schema_ready: set[str] = set()
+
+
 def _connect() -> sqlite3.Connection:
+    path = str(DB_PATH)
+    if path in _schema_ready:
+        return sqlite3.connect(DB_PATH)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+    _create_schema(conn)
+    conn.commit()
+    _schema_ready.add(path)
+    return conn
+
+
+def _create_schema(conn: sqlite3.Connection) -> None:
+    # WAL: readers (the Dashboard, the session list) no longer wait for a writer (a turn being
+    # saved) and vice versa. Persistent -- stored in the DB file itself.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS workflows (
@@ -160,7 +181,6 @@ def _connect() -> sqlite3.Connection:
     cols = [row[1] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()]
     if "summary" not in cols:
         conn.execute("ALTER TABLE workflows ADD COLUMN summary TEXT")
-    return conn
 
 
 # Fields of a workflow record the session list needs (routers/expert_workflows.list_workflows).
@@ -214,6 +234,50 @@ def list_summaries() -> list[dict]:
         return out
     finally:
         conn.close()
+
+
+_IN_CHUNK = 500  # stay well under SQLite's bound-parameter limit
+
+
+def get_fields(workflow_ids: list[str], fields: tuple[str, ...]) -> dict[str, dict]:
+    """Only the given top-level fields of each workflow, keyed by id (missing ids left out).
+    Dataset code reads a record's graph and contexts; the rest of the blob -- the transcript and
+    up to 30 undo snapshots, most of its size -- was parsed in Python just to be thrown away,
+    which made publishing / the Dashboard take seconds at a few hundred records (C5). SQLite's
+    `->` operator cuts the fields out in C and hands back only their JSON text."""
+    if not workflow_ids:
+        return {}
+    # Field names go into the SQL text, so only plain identifiers are accepted (they are
+    # constants at every call site anyway).
+    assert all(f.isidentifier() for f in fields), fields
+    cols = ", ".join(f"data -> '$.{f}'" for f in fields)
+    out: dict[str, dict] = {}
+    conn = _connect()
+    try:
+        for i in range(0, len(workflow_ids), _IN_CHUNK):
+            chunk = workflow_ids[i:i + _IN_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            for row in conn.execute(f"SELECT id, {cols} FROM workflows WHERE id IN ({marks})", chunk):
+                out[row[0]] = {f: (json.loads(v) if v is not None else None) for f, v in zip(fields, row[1:])}
+        return out
+    finally:
+        conn.close()
+
+
+def existing_ids(workflow_ids: list[str]) -> list[str]:
+    """`workflow_ids` minus the ones with no row, order kept -- without reading any record."""
+    if not workflow_ids:
+        return []
+    found: set[str] = set()
+    conn = _connect()
+    try:
+        for i in range(0, len(workflow_ids), _IN_CHUNK):
+            chunk = workflow_ids[i:i + _IN_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            found.update(r[0] for r in conn.execute(f"SELECT id FROM workflows WHERE id IN ({marks})", chunk))
+    finally:
+        conn.close()
+    return [w for w in workflow_ids if w in found]
 
 
 def list_all() -> list[dict]:
