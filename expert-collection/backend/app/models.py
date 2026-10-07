@@ -108,10 +108,11 @@ class NextQuestion(BaseModel):
     question: str
     # None means no chips: this is a recall-type question (PRD section 18).
     chips: Optional[list[str]] = None
-    # "prefill" (default/omitted, existing behavior): clicking a chip fills the whole draft
-    # box, single choice. "multi_select": chips toggle on/off, expert confirms the combined
-    # selection before it goes into the draft box (IMPLEMENTATION_PLAN.md section 9.1,
-    # Case Context B-group). Never auto-sends either way -- PRD section 18 still applies.
+    # "prefill" (default/omitted): single choice -- the client sends the chip as the answer on
+    # click when the input box is empty, else appends it to the draft (PRD 18.4 revised, B8).
+    # "multi_select": chips toggle on/off into the draft, the expert sends by hand
+    # (IMPLEMENTATION_PLAN.md section 9.1, Case Context B-group). Either way every chip must be
+    # a complete answer on its own, never a template the expert is meant to type after.
     chip_mode: Optional[Literal["prefill", "multi_select"]] = None
     # Restatement of what was just recorded, and a one-line reason for asking (see
     # guide_phrasing.py). Both optional -- rendered as separate layers of the bubble.

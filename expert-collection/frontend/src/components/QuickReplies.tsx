@@ -2,8 +2,9 @@
 // its bubble (not detached above the input box). Shared by desktop and mobile so both support
 // multi-select the same way.
 //
-// PRD 18.4: a chip only ever fills the draft -- the expert still reviews/edits and presses
-// send themselves. multi_select: chips toggle, and every toggle immediately re-joins the picks
+// PRD 18.4 (revised, B8): a single-choice chip sends at once when the input box is empty, and
+// fills the draft otherwise -- the caller decides, see utils/chips.chipSendsImmediately.
+// multi_select: chips toggle, and every toggle immediately re-joins the picks
 // with "、" into the draft (no separate "confirm selection" step), so the expert sees the
 // selection building up as they go.
 import { useEffect, useState } from "react";

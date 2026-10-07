@@ -117,11 +117,10 @@ export interface NextQuestion {
   priority: string;
   question: string;
   chips: string[] | null;
-  // "prefill" (or omitted): clicking a chip fills the whole draft box, single choice --
-  // this is also how the Scenario A-group's "简单说/详细说" mode chips work (the chip text
-  // IS the answer template, the expert types after it -- no separate mode round trip).
-  // "multi_select": chips toggle on/off, expert confirms the combined selection before it
-  // goes into the draft box (Case Context B-group). Never auto-sends either way.
+  // "prefill" (or omitted): single choice -- one click sends the chip as the answer when the
+  // input box is empty, otherwise appends it to the draft (PRD 18.4 revised, B8; see
+  // utils/chips.chipSendsImmediately). "multi_select": chips toggle on/off into the draft and
+  // the expert sends by hand (Case Context B-group).
   chip_mode?: "prefill" | "multi_select" | null;
   ack?: string | null;
   why?: string | null;

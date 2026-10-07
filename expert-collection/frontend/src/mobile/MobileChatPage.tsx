@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
 import { thinkingLabel } from "../components/ThinkingIndicator";
-import { mergeChipIntoDraft } from "../utils/chips";
+import { chipSendsImmediately, mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
 import { RealtimeVoiceIcon } from "../voice/icons";
@@ -38,9 +38,14 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   const [lastSent, setLastSent] = useState<string | null>(null);
   const nextQuestion = active?.unresolved[0] ?? null;
 
-  // Same rule as desktop: chips prefill an editable draft (appending to anything the expert
-  // already typed), never auto-send. Multi-select is handled inside the shared QuickReplies.
+  // Same rule as desktop (utils/chips.chipSendsImmediately): a single-choice chip sends at once
+  // when the box is empty; otherwise it goes into the editable draft. Multi-select is handled
+  // inside the shared QuickReplies.
   function handleChip(pick: string) {
+    if (chipSendsImmediately(nextQuestion?.chip_mode, draft)) {
+      handleSend(pick);
+      return;
+    }
     setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
     requestAnimationFrame(() => inputRef.current?.focus());
   }

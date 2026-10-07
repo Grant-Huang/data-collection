@@ -1,12 +1,13 @@
 // Desktop conversation column: message list (with the current question's quick-reply chips
 // rendered under its bubble -- see MessageList/QuickReplies) plus the input box.
 //
-// PRD section 18: chips only ever prefill the input box as an editable draft -- they never
-// auto-send, so the expert always has the chance to correct/qualify before committing, and
-// open recall questions (chips === null) have no chips at all.
+// PRD section 18 (18.4 revised, B8): a single-choice chip sends at once when the input box is
+// empty, and otherwise goes into the draft so the expert's own typing is never sent or lost;
+// multi-select chips build a draft to send by hand; open recall questions (chips === null) have
+// no chips at all.
 import { useEffect, useRef, useState } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
-import { mergeChipIntoDraft } from "../utils/chips";
+import { chipSendsImmediately, mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
 import { thinkingLabel } from "./ThinkingIndicator";
 import { VoiceDictationButton } from "./VoiceDictationButton";
@@ -50,6 +51,10 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
   }
 
   function handleChipPick(pick: string) {
+    if (chipSendsImmediately(nextQuestion?.chip_mode, draft)) {
+      handleSend(pick);
+      return;
+    }
     setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
     // Put the cursor in the box so the expert can edit the prefilled draft right away.
     requestAnimationFrame(() => {
