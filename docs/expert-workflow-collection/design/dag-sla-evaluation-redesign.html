@@ -20,13 +20,13 @@
         .container {
             display: flex;
             height: 100vh;
+            position: relative;
         }
 
         .main-area {
             flex: 1;
             display: flex;
             flex-direction: column;
-            border-right: 1px solid #E5E7EB;
         }
 
         .header {
@@ -151,94 +151,137 @@
             padding: 2px 4px;
         }
 
+        /* 浮动详情框样式 */
         .detail-panel {
-            width: 380px;
+            position: fixed;
+            width: 320px;
+            max-height: 65vh;
             background: white;
-            border-left: 1px solid #E5E7EB;
+            border: 1px solid #E5E7EB;
+            border-radius: 6px;
             display: flex;
             flex-direction: column;
-            box-shadow: -2px 0 4px rgba(0,0,0,0.05);
-            overflow-y: auto;
-            transform: translateX(0);
-            transition: transform 0.3s;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.08);
+            overflow: hidden;
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.92) translateY(-8px);
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 1000;
         }
 
-        .detail-panel.closed {
-            display: none;
+        .detail-panel.open {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1) translateY(0);
+        }
+
+        .detail-panel::before {
+            content: '';
+            position: absolute;
+            top: -5px;
+            left: 24px;
+            width: 10px;
+            height: 10px;
+            background: white;
+            border: 1px solid #E5E7EB;
+            border-right: none;
+            border-bottom: none;
+            transform: rotate(45deg);
         }
 
         .panel-header {
-            padding: 16px;
+            padding: 11px 13px;
             border-bottom: 1px solid #E5E7EB;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-shrink: 0;
+            background: #FAFAFA;
         }
 
         .panel-header h2 {
-            font-size: 16px;
+            font-size: 13px;
             font-weight: 600;
+            margin: 0;
+            color: #1F2937;
         }
 
         .panel-close {
             background: none;
             border: none;
-            font-size: 18px;
+            font-size: 16px;
             cursor: pointer;
+            color: #9CA3AF;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s;
+        }
+
+        .panel-close:hover {
             color: #6B7280;
         }
 
         .panel-content {
-            padding: 16px;
+            padding: 11px 13px;
+            overflow-y: auto;
+            flex: 1;
+            font-size: 11px;
         }
 
         .section {
-            margin-bottom: 24px;
+            margin-bottom: 10px;
         }
 
         .section-title {
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 600;
             color: #1F2937;
-            margin-bottom: 12px;
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
         }
 
         .section-title .icon {
-            font-size: 16px;
+            font-size: 14px;
         }
 
         .basic-info {
             display: grid;
-            gap: 8px;
+            gap: 3px;
         }
 
         .info-row {
             display: flex;
             justify-content: space-between;
-            font-size: 12px;
+            font-size: 10px;
+            line-height: 1.3;
         }
 
         .info-label {
             color: #6B7280;
             font-weight: 500;
+            flex-shrink: 0;
         }
 
         .info-value {
             color: #1F2937;
+            text-align: right;
+            margin-left: 4px;
         }
 
         .sla-section {
             border-left: 3px solid;
-            padding-left: 12px;
-            padding-right: 12px;
-            padding-top: 8px;
-            padding-bottom: 8px;
-            margin-bottom: 12px;
+            padding: 6px 9px;
+            margin-bottom: 0;
             background: #FAFAFA;
-            border-radius: 4px;
+            border-radius: 3px;
+            font-size: 10px;
         }
 
         .sla-section.deadline {
@@ -252,16 +295,16 @@
         }
 
         .sla-type {
-            font-size: 12px;
+            font-size: 10px;
             font-weight: 500;
-            margin-bottom: 8px;
+            margin-bottom: 3px;
             color: #1F2937;
         }
 
         .sla-detail {
-            font-size: 12px;
+            font-size: 10px;
             color: #6B7280;
-            line-height: 1.6;
+            line-height: 1.3;
         }
 
         .sla-detail strong {
@@ -270,22 +313,22 @@
         }
 
         .evaluation-item {
-            margin-bottom: 12px;
+            margin-bottom: 5px;
             border: 1px solid #E5E7EB;
-            border-radius: 6px;
+            border-radius: 3px;
             overflow: hidden;
         }
 
         .evaluation-header {
-            padding: 10px 12px;
+            padding: 7px 9px;
             background: #F9FAFB;
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 12px;
+            font-size: 10px;
             font-weight: 500;
-            border-bottom: 1px solid #E5E7EB;
+            transition: all 0.15s;
         }
 
         .evaluation-header:hover {
@@ -294,21 +337,25 @@
 
         .evaluation-header.expanded {
             background: #EFF6FF;
-            border-bottom-color: #3B82F6;
+            border-bottom: 1px solid #3B82F6;
         }
 
         .evaluation-header-left {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             align-items: center;
+            overflow: hidden;
         }
 
         .evaluation-expand-icon {
             display: inline-block;
-            width: 16px;
-            height: 16px;
+            width: 12px;
+            height: 12px;
             text-align: center;
-            transition: transform 0.2s;
+            transition: transform 0.15s;
+            flex-shrink: 0;
+            font-size: 8px;
+            line-height: 12px;
         }
 
         .evaluation-header.expanded .evaluation-expand-icon {
@@ -316,37 +363,40 @@
         }
 
         .eval-checkbox {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #10B981;
-            border-radius: 3px;
+            width: 14px;
+            height: 14px;
+            border: 1.5px solid #10B981;
+            border-radius: 2px;
             background: white;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 10px;
+            font-size: 9px;
             color: #10B981;
+            flex-shrink: 0;
         }
 
         .evaluation-header-right {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             align-items: center;
-            font-size: 11px;
+            font-size: 9px;
             color: #6B7280;
         }
 
         .logic-tag {
             background: #F3F4F6;
-            padding: 2px 6px;
-            border-radius: 3px;
+            padding: 2px 5px;
+            border-radius: 2px;
             border: 1px solid #D1D5DB;
+            font-size: 9px;
         }
 
         .evaluation-content {
-            padding: 12px;
-            font-size: 12px;
+            padding: 7px 9px;
+            font-size: 10px;
             display: none;
+            border-top: 1px solid #E5E7EB;
         }
 
         .evaluation-header.expanded + .evaluation-content {
@@ -354,35 +404,38 @@
         }
 
         .eval-field {
-            margin-bottom: 8px;
-            line-height: 1.5;
+            margin-bottom: 3px;
+            line-height: 1.3;
         }
 
         .eval-label {
             color: #6B7280;
             font-weight: 500;
+            font-size: 9px;
         }
 
         .eval-value {
             color: #1F2937;
+            font-size: 10px;
         }
 
         .threshold-list {
-            margin-left: 12px;
-            font-size: 11px;
-            line-height: 1.6;
+            margin-left: 8px;
+            font-size: 9px;
+            line-height: 1.3;
         }
 
         .threshold-item {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
 
         .threshold-dot {
-            width: 6px;
-            height: 6px;
+            width: 5px;
+            height: 5px;
             border-radius: 50%;
+            flex-shrink: 0;
         }
 
         .threshold-dot.normal {
@@ -400,7 +453,7 @@
         .divider {
             height: 1px;
             background: #E5E7EB;
-            margin: 16px 0;
+            margin: 6px 0;
         }
 
         .legend {
@@ -512,7 +565,7 @@
             </div>
         </div>
 
-        <!-- 详情面板 -->
+        <!-- 浮动详情框 -->
         <div class="detail-panel" id="detailPanel">
             <div class="panel-header">
                 <h2 id="nodeName">初评</h2>
@@ -534,7 +587,7 @@
                         </div>
                         <div class="info-row">
                             <span class="info-label">描述</span>
-                            <span class="info-value" id="nodeDesc" style="text-align: right; max-width: 200px;">对分类产品进行质量初步评估</span>
+                            <span class="info-value" id="nodeDesc">对分类产品进行质量初步评估</span>
                         </div>
                     </div>
                 </div>
@@ -561,8 +614,8 @@
                 <div class="section" id="rulesSection" style="display: none;">
                     <div class="section-title"><span class="icon">📚</span>关联规则</div>
                     <div class="basic-info">
-                        <a href="#" style="font-size: 12px; color: #3B82F6;">SOP-QC-001: 初评流程标准</a>
-                        <a href="#" style="font-size: 12px; color: #3B82F6;">SOP-QC-002: 缺陷判定标准</a>
+                        <a href="#" style="font-size: 10px; color: #3B82F6; text-decoration: none;">SOP-QC-001: 初评流程标准</a>
+                        <a href="#" style="font-size: 10px; color: #3B82F6; text-decoration: none;">SOP-QC-002: 缺陷判定标准</a>
                     </div>
                 </div>
             </div>
@@ -766,7 +819,27 @@
             // 显示关联规则部分
             document.getElementById('rulesSection').style.display = nodeId === 'n2' ? 'block' : 'none';
 
-            document.getElementById('detailPanel').classList.remove('closed');
+            // 定位浮动框
+            const panel = document.getElementById('detailPanel');
+            const rect = element.getBoundingClientRect();
+            const canvas = document.getElementById('dagCanvas');
+            const canvasRect = canvas.getBoundingClientRect();
+
+            // 计算相对于视口的位置
+            let top = rect.bottom + 12;
+            let left = rect.left;
+
+            // 保证不超出视口边界
+            if (left + 320 > window.innerWidth - 20) {
+                left = window.innerWidth - 340;
+            }
+            if (top + 400 > window.innerHeight - 20) {
+                top = rect.top - 410;
+            }
+
+            panel.style.top = top + 'px';
+            panel.style.left = left + 'px';
+            panel.classList.add('open');
         }
 
         function toggleEval(header) {
@@ -774,7 +847,7 @@
         }
 
         function closeDetail() {
-            document.getElementById('detailPanel').classList.add('closed');
+            document.getElementById('detailPanel').classList.remove('open');
         }
 
         function switchMode(mode) {
@@ -782,9 +855,27 @@
             event.target.classList.add('active');
 
             if (mode === 'graph') {
-                document.getElementById('detailPanel').classList.add('closed');
+                closeDetail();
             }
         }
+
+        // 点击其他地方时关闭浮动框
+        document.addEventListener('click', function(e) {
+            const panel = document.getElementById('detailPanel');
+            if (panel.classList.contains('open') && 
+                !panel.contains(e.target) && 
+                !e.target.closest('.node') &&
+                !e.target.closest('.panel-close')) {
+                closeDetail();
+            }
+        });
+
+        // 按 ESC 键关闭
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeDetail();
+            }
+        });
     </script>
 </body>
 </html>
