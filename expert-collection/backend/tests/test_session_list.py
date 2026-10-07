@@ -124,3 +124,12 @@ def test_long_first_sentence_is_cut_and_chosen_names_are_kept(client):
     named = _make(client, "我起的名字")
     client.post(f"/api/expert-workflows/{named['id']}/turns", json={"text": "主轴温度报警后的处理。"})
     assert client.get(f"/api/expert-workflows/{named['id']}").json()["name"] == "我起的名字"
+
+
+def test_turn_response_carries_the_updated_record(client):
+    """C3: one request per turn -- the response already holds what GET /{id} would return."""
+    rec = client.post("/api/expert-workflows", json={}).json()
+    resp = client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": "设备报警了，操作员按急停。"}).json()
+    full = client.get(f"/api/expert-workflows/{rec['id']}").json()
+    assert resp["record"] == full
+    assert resp["record"]["turns"][-2]["text"] == "设备报警了，操作员按急停。"

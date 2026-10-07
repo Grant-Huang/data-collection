@@ -331,6 +331,9 @@ class TurnResponse(BaseModel):
     completion: Completion
     validation: list[ValidationIssue]
     next_question: Optional[NextQuestion] = None
+    # The full record after this turn (C3) -- lets the client update both the open session and its
+    # row in the session list without two more requests. Optional only for older clients/tests.
+    record: Optional["WorkflowRecord"] = None
 
 
 # --- Dataset / Dashboard (PRD 12/13, Phase 3 sub-scope -- see IMPLEMENTATION_PLAN.md section 6) ---

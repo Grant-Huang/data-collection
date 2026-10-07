@@ -234,6 +234,7 @@ export interface WorkflowRecord {
   updated_at: string;
   pinned: boolean;
   archived: boolean;
+  deleted?: boolean;
   in_dataset: boolean;
 }
 
@@ -266,6 +267,8 @@ export interface TurnResponse {
   completion: Completion;
   validation: ValidationIssue[];
   next_question: NextQuestion | null;
+  // The whole record after this turn (C3); absent only from an older backend.
+  record?: WorkflowRecord | null;
 }
 
 // --- Dataset / Dashboard (PRD 12/13) ---

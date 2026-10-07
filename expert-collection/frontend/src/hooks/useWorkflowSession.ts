@@ -22,6 +22,22 @@ export function useWorkflowSession() {
     return list;
   }, []);
 
+  // Put a record we already hold into the session list (C3) instead of re-fetching the whole
+  // list after every turn / confirm / rename. Same order as the server: pinned first, then the
+  // most recently updated.
+  const upsertRow = useCallback((record: WorkflowRecord) => {
+    const row: WorkflowSummary = {
+      id: record.id, name: record.name, status: record.status, completion_score: record.completion.score,
+      updated_at: record.updated_at, pinned: record.pinned, archived: record.archived,
+      deleted: !!record.deleted, in_dataset: record.in_dataset,
+    };
+    setWorkflows((prev) =>
+      [row, ...prev.filter((w) => w.id !== record.id)].sort(
+        (a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at),
+      ),
+    );
+  }, []);
+
   const selectWorkflow = useCallback(async (id: string) => {
     setError(null);
     const record = await api.getWorkflow(id);
@@ -45,13 +61,13 @@ export function useWorkflowSession() {
     try {
       const record = await api.createWorkflow();
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     } finally {
       setCreating(false);
     }
-  }, [refreshList]);
+  }, [upsertRow]);
 
   // Resolves to whether the turn went through. On failure the optimistic bubble is taken back
   // out and the caller puts the text back into the input box -- what the expert said is never
@@ -70,10 +86,11 @@ export function useWorkflowSession() {
           : prev,
       );
       try {
-        await api.postTurn(workflowId, text, rawTranscript);
-        const refreshed = await api.getWorkflow(workflowId);
+        // One request per turn (C3): the response carries the updated record.
+        const resp = await api.postTurn(workflowId, text, rawTranscript);
+        const refreshed = resp.record ?? (await api.getWorkflow(workflowId));
         setActive(refreshed);
-        await refreshList();
+        upsertRow(refreshed);
         return true;
       } catch (e) {
         setActive((prev) =>
@@ -85,7 +102,7 @@ export function useWorkflowSession() {
         setSending(false);
       }
     },
-    [active, refreshList],
+    [active, upsertRow],
   );
 
   const confirmWorkflow = useCallback(async () => {
@@ -94,11 +111,11 @@ export function useWorkflowSession() {
     try {
       const record = await api.confirmWorkflow(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   // 「继续修改」(section 17): a confirmed workflow that isn't in a dataset goes back into the
   // review conversation.
@@ -108,11 +125,11 @@ export function useWorkflowSession() {
     try {
       const record = await api.reopenWorkflow(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   const updateManufacturingContext = useCallback(
     async (patch: Partial<ManufacturingContext>) => {
@@ -174,12 +191,12 @@ export function useWorkflowSession() {
       try {
         const record = await api.updateWorkflowMeta(workflowId, patch);
         if (active?.id === workflowId) setActive(record);
-        await refreshList();
+        upsertRow(record);
       } catch (e) {
         setError(String(e));
       }
     },
-    [active, refreshList],
+    [active, upsertRow],
   );
 
   // 「用大模型根据会话内容重新生成流程图」-- always re-checks the server-side gate right
@@ -203,7 +220,7 @@ export function useWorkflowSession() {
     try {
       const record = await api.regenerateGraph(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       const errorMsg = String(e);
       // Extract error type from API response for better UX
@@ -213,7 +230,7 @@ export function useWorkflowSession() {
     } finally {
       setRegenerating(false);
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   return {
     workflows,

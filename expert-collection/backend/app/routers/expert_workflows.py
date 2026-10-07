@@ -411,9 +411,16 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
 
     _auto_name(record, req.text)
 
-    if record.get("_review"):
-        return _post_review_turn(record, req)
+    response = _post_review_turn(record, req) if record.get("_review") else _post_guide_turn(record, req)
+    # The whole updated record rides along (C3), so the client doesn't follow every turn with a
+    # GET of the record plus a GET of the session list. Turns are refused once confirmed, and only
+    # confirmed records can be in a dataset, so in_dataset is necessarily False here.
+    response.record = WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
+    return response
 
+
+def _post_guide_turn(record: dict, req: TurnRequest) -> TurnResponse:
+    """Step-by-step guide mode (no review agent configured): one expert answer, one next question."""
     state = record.get("_guide_state") or {"stage": record["stage"], "cursor": None, "pending": {}}
     expert_turn_id = uuid.uuid4().hex[:8]
     history = list(record["turns"])
