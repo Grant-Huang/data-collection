@@ -140,7 +140,6 @@ class TestAggregationValidation(unittest.TestCase):
                 {
                     'id': 'temp_trend',
                     'name': '温度趋势',
-                    'unit': '°C',
                     'aggregation': {
                         'method': 'trend',
                         'window_size': 7,
@@ -499,150 +498,25 @@ def _codes(errors):
     return [(e.code, e.severity) for e in errors]
 
 
-class TestThresholdUnitValidation(unittest.TestCase):
-    """本体维度：阈值 / 预期值 / 单位"""
+class TestRepeatEscalationValidation(unittest.TestCase):
+    """escalation_on_repeat 必须有动作；接收角色由 ontology_validator 负责，这里不重复检查"""
 
     def setUp(self):
         self.validator = Phase3AValidator()
-
-    def _node(self, criterion):
-        return {'node_id': 'n1', 'evaluation_criteria': [criterion]}
-
-    def test_bare_threshold_without_unit_warns(self):
-        """分级阈值是裸数字且没有 unit → WARNING threshold_missing_unit"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'temp', 'name': '温度', 'type': 'metric',
-            'thresholds': {'normal': '< 40', 'warning': '40-50', 'critical': '> 50'},
-        }))
-        self.assertIn(('threshold_missing_unit', ValidationSeverity.WARNING), _codes(errors))
-        err = next(e for e in errors if e.code == 'threshold_missing_unit')
-        self.assertEqual(err.field, 'evaluation_criteria[0].unit')
-        self.assertEqual(err.object_id, 'n1', '应使用主应用的 node_id')
-
-    def test_bare_aggregation_threshold_without_unit_warns(self):
-        """聚合阈值是裸数字且没有 unit → WARNING"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'trend', 'name': '趋势',
-            'aggregation': {'method': 'trend', 'window_size': 7, 'threshold': '3',
-                            'description': '连续上升'},
-        }))
-        self.assertIn(('threshold_missing_unit', ValidationSeverity.WARNING), _codes(errors))
-
-    def test_threshold_with_unit_field_passes(self):
-        """有 unit 字段 → 不报"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'temp', 'name': '温度', 'type': 'metric', 'unit': '°C',
-            'thresholds': {'normal': '< 40', 'critical': '> 50'},
-        }))
-        self.assertEqual(errors, [])
-
-    def test_threshold_with_inline_unit_passes(self):
-        """阈值值里已自带单位（如 '< 85%'、'3°C'）→ 视为自描述，不报"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'conf', 'name': '尺寸合格度', 'type': 'metric',
-            'thresholds': {'normal': '>= 95%', 'critical': '< 85%'},
-            'aggregation': {'method': 'trend', 'threshold': '3°C', 'description': 'x'},
-        }))
-        self.assertNotIn('threshold_missing_unit', [e.code for e in errors])
-
-    def test_blank_unit_counts_as_missing(self):
-        """unit 为空白字符串等同于缺失"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'temp', 'name': '温度', 'unit': '  ', 'thresholds': {'critical': '50'},
-        }))
-        self.assertIn('threshold_missing_unit', [e.code for e in errors])
-
-    def test_metric_without_threshold_warns(self):
-        """数值型标准既无阈值也无聚合 → WARNING metric_missing_threshold"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'temp', 'name': '温度', 'type': 'numeric_range', 'unit': '°C',
-            'thresholds': {'normal': '', 'critical': None},
-        }))
-        self.assertIn(('metric_missing_threshold', ValidationSeverity.WARNING), _codes(errors))
-
-    def test_non_numeric_criterion_without_threshold_passes(self):
-        """boolean / categorical 标准不要求阈值"""
-        errors = self.validator.validate_node(self._node({
-            'id': 'fa', 'name': '首件合格', 'type': 'boolean',
-        }))
-        self.assertEqual(errors, [])
-
-
-class TestEscalationReceiverValidation(unittest.TestCase):
-    """本体维度：escalation 的接收角色"""
-
-    def setUp(self):
-        self.validator = Phase3AValidator()
-
-    def test_sla_escalate_without_receiver_is_error(self):
-        """SLA 超期升级但没有接收角色 → ERROR escalation_missing_receiver"""
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'sla_config': {'type': 'deadline', 'duration': 'PT2H', 'violation_action': 'escalate'},
-        })
-        self.assertIn(('escalation_missing_receiver', ValidationSeverity.ERROR), _codes(errors))
-        err = next(e for e in errors if e.code == 'escalation_missing_receiver')
-        self.assertEqual(err.field, 'sla_config.escalate_to_roles')
-
-    def test_sla_escalate_with_receiver_passes(self):
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'sla_config': {'violation_action': 'escalate',
-                           'escalate_to_roles': ['production_manager']},
-        })
-        self.assertEqual(errors, [])
-
-    def test_sla_escalate_with_unknown_role_is_error(self):
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'sla_config': {'violation_action': 'escalate', 'escalate_to_roles': ['boss']},
-        })
-        self.assertIn(('invalid_role', ValidationSeverity.ERROR), _codes(errors))
-
-    def test_sla_escalate_roles_not_list_is_error(self):
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'sla_config': {'violation_action': 'escalate', 'escalate_to_roles': 'production_manager'},
-        })
-        self.assertIn(('type_error', ValidationSeverity.ERROR), _codes(errors))
-
-    def test_sla_notify_does_not_need_receiver(self):
-        """非 escalate 的 violation_action 不要求接收角色"""
-        errors = self.validator.validate_node({
-            'node_id': 'n1', 'sla_config': {'violation_action': 'notify'},
-        })
-        self.assertEqual(errors, [])
-
-    def test_repeat_escalation_without_receiver_warns(self):
-        """escalate_to_* 只给了级别、没给具体角色 → WARNING"""
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'retry_semantics': {'escalation_on_repeat': {
-                'enabled': True, 'trigger': 'same_condition', 'action': 'escalate_to_manager'}},
-        })
-        self.assertIn(('escalation_missing_receiver', ValidationSeverity.WARNING), _codes(errors))
 
     def test_repeat_escalation_without_action_is_error(self):
         errors = self.validator.validate_node({
             'node_id': 'n1',
             'retry_semantics': {'escalation_on_repeat': {'enabled': True}},
         })
-        self.assertIn(('required_field', ValidationSeverity.ERROR), _codes(errors))
+        self.assertEqual(_codes(errors), [('required_field', ValidationSeverity.ERROR)])
+        self.assertEqual(errors[0].field, 'retry_semantics.escalation_on_repeat.action')
 
-    def test_repeat_escalation_with_receiver_passes(self):
+    def test_repeat_escalation_with_action_passes(self):
+        """有动作即可；没写接收角色不在这一层报（避免与 ont_escalation_missing_role 重复）"""
         errors = self.validator.validate_node({
             'node_id': 'n1',
-            'retry_semantics': {'escalation_on_repeat': {
-                'enabled': True, 'action': 'escalate_to_executive',
-                'escalate_to_roles': ['production_director']}},
-        })
-        self.assertEqual(errors, [])
-
-    def test_repeat_create_capa_does_not_need_receiver(self):
-        """create_capa / stop_production 是动作，不是移交，不要求接收角色"""
-        errors = self.validator.validate_node({
-            'node_id': 'n1',
-            'retry_semantics': {'escalation_on_repeat': {'enabled': True, 'action': 'create_capa'}},
+            'retry_semantics': {'escalation_on_repeat': {'enabled': True, 'action': 'escalate_to_manager'}},
         })
         self.assertEqual(errors, [])
 
@@ -650,6 +524,16 @@ class TestEscalationReceiverValidation(unittest.TestCase):
         errors = self.validator.validate_node({
             'node_id': 'n1',
             'retry_semantics': {'escalation_on_repeat': {'enabled': False}},
+        })
+        self.assertEqual(errors, [])
+
+    def test_sla_and_threshold_gaps_left_to_ontology_validator(self):
+        """SLA 升级缺接收人、阈值缺单位不在 Phase 3-A 层报（ontology_validator 已覆盖）"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'violation_action': 'escalate'},
+            'evaluation_criteria': [{'id': 'c', 'name': '温度', 'type': 'metric',
+                                     'thresholds': {'critical': '50'}}],
         })
         self.assertEqual(errors, [])
 
@@ -712,19 +596,15 @@ class TestEvidenceValidation(unittest.TestCase):
 
 
 class TestOntologyDimensionsInGraph(unittest.TestCase):
-    """SchemaValidator 在图级把本体维度规则应用到节点和边"""
+    """SchemaValidator 在图级把证据规则应用到节点和边"""
 
     def test_graph_level_counts(self):
         graph = {
             'nodes': [
                 {'node_id': 'start', 'node_type': 'start', 'label': '开始'},
                 {'node_id': 'n1', 'node_type': 'activity', 'label': '初评',
-                 'source_turn_ids': ['t1'],
-                 'sla_config': {'violation_action': 'escalate'}},          # ERROR
-                {'node_id': 'n2', 'node_type': 'decision', 'label': '判断',
-                 'expert_confirmed': True,
-                 'evaluation_criteria': [{'id': 'c', 'name': '温度', 'type': 'metric',
-                                          'thresholds': {'critical': '50'}}]},  # WARNING
+                 'source_turn_ids': ['t1'], 'confidence': 1.2},                   # ERROR
+                {'node_id': 'n2', 'node_type': 'decision', 'label': '判断'},       # WARNING
             ],
             'edges': [
                 {'edge_id': 'e1', 'from': 'start', 'to': 'n1', 'edge_type': 'normal'},  # WARNING
@@ -736,11 +616,11 @@ class TestOntologyDimensionsInGraph(unittest.TestCase):
         self.assertFalse(result['valid'])
         self.assertEqual(result['error_count'], 1)
         self.assertEqual(result['warning_count'], 2)
-        by_code = {e['code']: e for e in result['errors']}
-        self.assertEqual(by_code['escalation_missing_receiver']['object_id'], 'n1')
-        self.assertEqual(by_code['threshold_missing_unit']['object_id'], 'n2')
-        self.assertEqual(by_code['evidence_missing_source']['object_id'], 'e1')
-        self.assertEqual(by_code['evidence_missing_source']['object_kind'], 'edge')
+        confidence = [e for e in result['errors'] if e['code'] == 'invalid_confidence']
+        self.assertEqual([e['object_id'] for e in confidence], ['n1'])
+        evidence = [(e['object_id'], e['object_kind']) for e in result['errors']
+                    if e['code'] == 'evidence_missing_source']
+        self.assertEqual(sorted(evidence), [('e1', 'edge'), ('n2', 'node')])
 
 
 if __name__ == '__main__':

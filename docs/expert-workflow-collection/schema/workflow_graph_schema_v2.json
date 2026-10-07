@@ -607,13 +607,6 @@
                   "type": "string",
                   "enum": ["escalate_to_manager", "escalate_to_executive", "create_capa", "stop_production"],
                   "description": "升级后的处理动作"
-                },
-                "escalate_to_roles": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "升级的接收角色（如 production_manager）。action 为 escalate_to_* 时应填写，否则 Validator 给出 WARNING"
                 }
               }
             }
@@ -954,12 +947,9 @@
           "enum": ["escalate", "notify", "auto_reassign", "none"],
           "description": "超期时的处理方式：升级、通知、自动转派、不处理"
         },
-        "escalate_to_roles": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "violation_action 为 escalate 时的接收角色（必填，否则 Validator 给出 ERROR）"
+        "escalate_to_role": {
+          "type": "string",
+          "description": "violation_action 为 escalate 时升级给谁（如'车间主任'）。采集追问写入此字段，提升为 v3 EscalationPolicy 第 1 级；缺失时由 ontology_validator 给出 ont_escalation_missing_role"
         },
         "description": {
           "type": "string",
