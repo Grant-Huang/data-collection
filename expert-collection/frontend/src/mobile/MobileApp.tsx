@@ -85,6 +85,8 @@ export function MobileApp() {
           onToggleProgress={() => setProgressOpen((v) => !v)}
           progressOpen={progressOpen}
           recordingChanged={setRecording}
+          onConfirm={confirmWorkflow}
+          error={error}
         />
       </div>
 
@@ -100,17 +102,6 @@ export function MobileApp() {
         <MobileDagPage active={active} onBack={() => setPage("chat")} />
       </div>
 
-      {active?.completion.ready_for_confirmation && active.status !== "expert_confirmed" && page === "chat" && (
-        <div style={{ position: "absolute", left: 14, right: 14, bottom: 78, zIndex: 5 }}>
-          <button
-            onClick={confirmWorkflow}
-            style={{ width: "100%", border: "none", borderRadius: 8, padding: "12px 0", background: "#0ca30c", color: "#fff", fontWeight: 600, minHeight: 44 }}
-          >
-            确认并提交
-          </button>
-        </div>
-      )}
-
       <HistorySheet
         open={drawerOpen}
         workflows={workflows}
@@ -120,12 +111,6 @@ export function MobileApp() {
         onClose={() => setDrawerOpen(false)}
         creating={creating}
       />
-
-      {error && (
-        <div style={{ position: "absolute", bottom: 12, left: 14, right: 14, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12, zIndex: 6 }}>
-          {error}
-        </div>
-      )}
     </div>
   );
 }

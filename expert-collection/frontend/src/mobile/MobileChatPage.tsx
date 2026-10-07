@@ -18,9 +18,13 @@ interface Props {
   onToggleProgress: () => void;
   progressOpen: boolean;
   recordingChanged: (recording: boolean) => void;
+  // 「确认并提交」 and the error line sit in the column right above the input row (B7): as
+  // absolutely-positioned overlays they covered the newest message and the chips under it.
+  onConfirm?: () => void;
+  error?: string | null;
 }
 
-export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged }: Props) {
+export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged, onConfirm, error }: Props) {
   const [draft, setDraft] = useState("");
   // Raw recognizer output dictated into the current draft (see ChatPanel).
   const [rawPieces, setRawPieces] = useState<string[]>([]);
@@ -108,6 +112,24 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
         <div className="narrative-done-bar" style={{ padding: "8px 14px 0" }}>
           <span>讲完了再点 →</span>
           <button disabled={sending} onClick={() => handleSend("讲完了")}>✓ 讲完了，开始整理</button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" style={{ margin: "8px 14px 0", background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {onConfirm && active?.completion.ready_for_confirmation && !confirmed && (
+        <div style={{ padding: "8px 14px 0" }}>
+          <button
+            onClick={onConfirm}
+            disabled={sending}
+            style={{ width: "100%", border: "none", borderRadius: 8, padding: "12px 0", background: "#0ca30c", color: "#fff", fontWeight: 600, minHeight: 44 }}
+          >
+            确认并提交
+          </button>
         </div>
       )}
 
