@@ -132,6 +132,21 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    # Accumulated vocabulary terms and ontology entries (app/vocabulary.py): append-only, one
+    # row per (layer, kind, key); never rewritten from or back into the records they came from.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS accumulated_entries (
+            layer TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL,
+            data TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (layer, kind, key)
+        )
+        """
+    )
     # dataset_versions predates the `archived` column; add it for DBs created before this change.
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
@@ -486,5 +501,52 @@ def set_cache(key: str, value: str) -> None:
             (key, value, now),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_accumulated(layer: str, kind: str, key: str) -> Optional[dict]:
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT data FROM accumulated_entries WHERE layer = ? AND kind = ? AND key = ?",
+                           (layer, kind, key)).fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_accumulated(entry: dict) -> None:
+    """Insert or replace one accumulated entry; first_seen_at is kept from the first insert."""
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO accumulated_entries (layer, kind, key, data, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(layer, kind, key) DO UPDATE SET data = excluded.data, last_seen_at = excluded.last_seen_at",
+            (entry["layer"], entry["kind"], entry["key"], json.dumps(entry, ensure_ascii=False),
+             entry["first_seen_at"], entry["last_seen_at"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_accumulated(layer: str, kind: Optional[str] = None) -> list[dict]:
+    conn = _connect()
+    try:
+        if kind:
+            rows = conn.execute("SELECT data FROM accumulated_entries WHERE layer = ? AND kind = ?", (layer, kind)).fetchall()
+        else:
+            rows = conn.execute("SELECT data FROM accumulated_entries WHERE layer = ?", (layer,)).fetchall()
+        return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_all_annotations() -> list[dict]:
+    """Every prior annotation across all versions, oldest first (for vocabulary backfill)."""
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT data FROM prior_annotations ORDER BY annotated_at ASC").fetchall()
+        return [json.loads(r[0]) for r in rows]
     finally:
         conn.close()
