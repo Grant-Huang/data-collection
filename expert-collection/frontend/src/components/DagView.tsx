@@ -1,7 +1,7 @@
 // DAG rendering: React Flow for interaction, elkjs for auto-layout, styled to match
 // docs/expert-workflow-collection/design/dag-view-redesign.html's palette (PRD section 11.3)
 // so the working app visually matches the approved prototype rather than diverging from it.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -60,7 +60,7 @@ interface WorkflowNodeData {
   seq?: number | null;
 }
 
-function WorkflowNode({ data }: { data: WorkflowNodeData }) {
+const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeData }) {
   const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   const deco = data.decoration;
@@ -89,6 +89,7 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
             : "none",
         transition: "box-shadow 0.15s",
         position: "relative",
+        willChange: "transform",
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -127,7 +128,7 @@ function WorkflowNode({ data }: { data: WorkflowNodeData }) {
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
-}
+});
 
 const nodeTypes = { workflow: WorkflowNode };
 
@@ -169,16 +170,21 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
     timeout: "#94a3b8", exception_forward: "#ef4444",
   };
 
-  const rfEdges: RFEdge[] = graph.edges.map((e) => ({
-    id: e.edge_id,
-    source: e.from,
-    target: e.to,
-    label: e.condition ?? undefined,
-    animated: !nodeById.get(e.to)?.expert_confirmed,
-    style: { stroke: EDGE_COLOR[e.edge_type] ?? "#94a3b8", strokeWidth: 1.6 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR[e.edge_type] ?? "#94a3b8" },
-    labelStyle: { fontSize: 11, fill: "#667085" },
-  }));
+  const rfEdges: RFEdge[] = graph.edges.map((e) => {
+    const targetNode = nodeById.get(e.to);
+    const isConfirmed = targetNode?.expert_confirmed;
+    return {
+      id: e.edge_id,
+      source: e.from,
+      target: e.to,
+      label: e.condition ?? undefined,
+      // Only animate conditional edges to target unconfirmed nodes, reduces animation overhead
+      animated: !isConfirmed && e.edge_type === "conditional",
+      style: { stroke: EDGE_COLOR[e.edge_type] ?? "#94a3b8", strokeWidth: 1.6 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR[e.edge_type] ?? "#94a3b8" },
+      labelStyle: { fontSize: 11, fill: "#667085" },
+    };
+  });
 
   return { nodes: rfNodes, edges: rfEdges, width: result.width ?? 800, height: result.height ?? 600 };
 }
@@ -217,6 +223,7 @@ export function DagView({
   const [size, setSize] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const flowInstance = useRef<ReactFlowInstance | null>(null);
+  const layoutCacheRef = useRef<{ key: string; result: Awaited<ReturnType<typeof layout>> } | null>(null);
   const nodeCount = graph.nodes.length;
 
   // Re-layout whenever the graph's content changes. Counts alone are not enough: the guide's
@@ -235,8 +242,19 @@ export function DagView({
 
   useEffect(() => {
     let cancelled = false;
+
+    // Check cache first to avoid redundant layout calculations
+    if (layoutCacheRef.current?.key === layoutKey) {
+      const res = layoutCacheRef.current.result;
+      setNodes(res.nodes);
+      setEdges(res.edges);
+      setSize({ width: res.width, height: res.height });
+      return;
+    }
+
     layout(graph).then((res) => {
       if (!cancelled) {
+        layoutCacheRef.current = { key: layoutKey, result: res };
         setNodes(res.nodes);
         setEdges(res.edges);
         setSize({ width: res.width, height: res.height });
@@ -330,6 +348,9 @@ export function DagView({
       zoomOnDoubleClick={!scrollable}
       minZoom={0.3}
       maxZoom={3}
+      // Performance optimizations: only pan on drag if not in read-only mode
+      // and prevent selection box from appearing during panning
+      selectNodesOnDrag={false}
       onNodeClick={(_, node) => {
         const original = graph.nodes.find((n) => n.node_id === node.id);
         if (original) onNodeTap?.(original);
