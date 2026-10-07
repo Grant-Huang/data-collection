@@ -35,7 +35,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, review_gaps
+from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, ontology_capture, review_gaps
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -245,6 +245,12 @@ def describe_changes(before: dict, after: dict) -> tuple[list[str], set[str]]:
         if (a.get("retry_semantics") or {}) != (b.get("retry_semantics") or {}):
             out.append(f"「{a['label']}」补充了返工说明")
             cats.add("wrong_order")
+        # Ontology details (threshold / time limit) are additions, not corrections, so they
+        # suggest no reason-tag category.
+        if (a.get("evaluation_criteria") or []) != (b.get("evaluation_criteria") or []):
+            out.append(f"记下了「{a['label']}」的判断标准")
+        if (a.get("sla_config") or {}) != (b.get("sla_config") or {}):
+            out.append(f"记下了「{a['label']}」的时限要求")
 
     # Connections are compared by node id (a renamed step keeps its id, so renaming must not
     # look like rewiring); labels are only used to describe them.
@@ -362,6 +368,8 @@ def _graph_for_prompt(graph: dict) -> str:
     return json.dumps({
         "nodes": [{k: n.get(k) for k in ("node_id", "seq", "node_type", "label", "actor_roles", "decision_question")} |
                   ({"retry_semantics": n["retry_semantics"]} if n.get("retry_semantics") else {})
+                  | ({"判断标准": [c.get("description") for c in n["evaluation_criteria"]]} if n.get("evaluation_criteria") else {})
+                  | ({"时限": (n["sla_config"] or {}).get("description")} if n.get("sla_config") else {})
                   for n in graph.get("nodes", [])],
         "edges": [{k: e.get(k) for k in ("edge_id", "from", "to", "edge_type", "condition")} for e in graph.get("edges", [])],
     }, ensure_ascii=False)
@@ -622,6 +630,28 @@ def _next_question(state: dict, graph: dict, result: TurnResult, preferred: tupl
     return _final_confirm(state, graph, result, model_tags=model_tags)
 
 
+def _ontology_answer_ops(gap: dict | None, graph: dict, text: str) -> list[dict]:
+    """The expert just answered a criterion / timing question (review_gaps): turn the answer
+    into node fields in code, with the same parser as the step-by-step guide
+    (ontology_capture), so only numbers the expert actually said become structured and the
+    answer itself is kept verbatim in `description`. A "没有 / 靠经验" answer gives no ops (the
+    gap is still resolved, so it isn't asked again)."""
+    if not gap or gap["kind"] not in ("criterion", "timing") or not gap.get("node_ids"):
+        return []
+    node = next((n for n in graph.get("nodes", []) if n["node_id"] == gap["node_ids"][0]), None)
+    if node is None:  # the step was removed in this same turn
+        return []
+    if gap["kind"] == "criterion":
+        if node.get("evaluation_criteria"):
+            return []
+        criterion = ontology_capture.criterion_from_answer(node, text)
+        return [{"op": "update_node", "node_id": node["node_id"], "patch": {"evaluation_criteria": [criterion]}}] if criterion else []
+    if node.get("sla_config"):
+        return []
+    sla = ontology_capture.sla_from_answer(text)
+    return [{"op": "update_node", "node_id": node["node_id"], "patch": {"sla_config": sla}}] if sla else []
+
+
 def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id: str) -> TurnResult:
     """One person message -> agent reply. `turns` is the transcript *including* this message.
     Never raises for model failures: they come back as an honest notice with nothing changed."""
@@ -708,10 +738,20 @@ def handle_turn(state: dict, graph: dict, turns: list[dict], text: str, turn_id:
                 label = next((n["label"] for n in new_graph["nodes"] if n["node_id"] == nid), nid)
                 state["gaps"].append(review_gaps.model_gap(f"我加的「{label}」这一步，您刚才的话里我没对上原话，是这个意思吗？", [nid]))
 
+    # The model only reports *that* the pending ontology question was answered; what gets
+    # written to the step is decided by ontology_capture from the expert's literal words.
+    resolved = [g for g in out.get("resolved_gap_ids") or [] if isinstance(g, str)]
+    pending = next((g for g in state.get("gaps", []) if g["id"] == state.get("pending_gap_id")), None)
+    if pending and intent in ("answer", "edit") and (intent == "answer" or pending["id"] in resolved):
+        extra = _ontology_answer_ops(pending, new_graph, text)
+        if extra:
+            before = new_graph
+            new_graph = graph_ops.apply_ops(copy.deepcopy(new_graph), extra)
+            result.changes += describe_changes(before, new_graph)[0]
+
     if new_graph is graph:
         state["snapshots"].pop()  # nothing to undo this turn
 
-    resolved = [g for g in out.get("resolved_gap_ids") or [] if isinstance(g, str)]
     if intent == "answer" and state.get("pending_gap_id"):
         resolved.append(state["pending_gap_id"])
     new_gaps = [review_gaps.model_gap(u["question"].strip()[:150], [i for i in (u.get("node_ids") or []) if isinstance(i, str)])

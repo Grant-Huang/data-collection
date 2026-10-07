@@ -744,23 +744,10 @@ def _build_criterion_sweep(ack: str, g: dict, pending: dict, ops: list[dict]) ->
 
 
 def _handle_criterion(text: str, cursor: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
-    parsed = ontology_capture.parse_criterion_answer(text)
-    # "没超过 40 度就行" opens like a "no" but carries a number -- that's an answer.
-    if text == NO_CRITERION_CHIP or (_is_negative(text) and not parsed["limits"] and not parsed["expected"]):
-        return _next_sweep("好，这个判断主要靠经验。", pending, ops, graph)
     node = _get_node(graph, cursor) or {}
-    criterion = {
-        "id": f"c{len(node.get('evaluation_criteria') or []) + 1}",
-        "name": (node.get("decision_question") or node.get("label") or "判断标准")[:40],
-        "type": "numeric_range" if parsed["limits"] or parsed["expected"] else "text",
-        "description": text,
-    }
-    if parsed["unit"]:
-        criterion["unit"] = parsed["unit"]
-    if parsed["limits"]:
-        criterion["limits"] = parsed["limits"]
-    if parsed["expected"]:
-        criterion["expected"] = parsed["expected"]
+    criterion = None if text == NO_CRITERION_CHIP else ontology_capture.criterion_from_answer(node, text)
+    if criterion is None:
+        return _next_sweep("好，这个判断主要靠经验。", pending, ops, graph)
     ops.append({"op": "update_node", "node_id": cursor, "patch": {
         "evaluation_criteria": [*(node.get("evaluation_criteria") or []), criterion],
     }})

@@ -119,3 +119,48 @@ def parse_duration(text: str) -> Optional[str]:
         else:
             return None
     return f"P{t}{int(n)}{unit}"
+
+
+# --- Answer -> node patch (shared by the step-by-step guide and the narrate-first review loop)
+
+_NEGATIVE_RE = re.compile(r"^(没有|没|无|不是|不用|不需要|不会|都不|否)")
+# "超时了就找车间主任" / "报给质量经理" -> the role named right after the verb, verbatim.
+_ESCALATE_TO_RE = re.compile(r"(?:找|报给|上报给?|通知|升级到|升级给|交给|叫)\s*([^\s，。,；;、！!？?]{2,12})")
+
+
+def criterion_from_answer(node: dict, text: str) -> Optional[dict[str, Any]]:
+    """The evaluation_criteria entry for an answer to "判断时有具体的标准吗", or None when the
+    expert declined ("没有，靠经验" -- a "no" that carries no number). "没超过 0.05mm 就行"
+    opens like a no but carries a number, so it is an answer."""
+    parsed = parse_criterion_answer(text)
+    if _NEGATIVE_RE.match(text.strip()) and not parsed["limits"] and not parsed["expected"]:
+        return None
+    criterion: dict[str, Any] = {
+        "id": f"c{len(node.get('evaluation_criteria') or []) + 1}",
+        "name": (node.get("decision_question") or node.get("label") or "判断标准")[:40],
+        "type": "numeric_range" if parsed["limits"] or parsed["expected"] else "text",
+        "description": text,
+    }
+    if parsed["unit"]:
+        criterion["unit"] = parsed["unit"]
+    if parsed["limits"]:
+        criterion["limits"] = parsed["limits"]
+    if parsed["expected"]:
+        criterion["expected"] = parsed["expected"]
+    return criterion
+
+
+def sla_from_answer(text: str) -> Optional[dict[str, Any]]:
+    """sla_config for an answer to "最晚多久要有结果（超时了会找谁）", or None when the expert
+    said there is no time requirement. The escalation target is only filled in when the answer
+    names someone after 找/报给/通知…; otherwise it stays unset rather than guessed."""
+    duration = parse_duration(text)
+    if _NEGATIVE_RE.match(text.strip()) and not duration:
+        return None
+    sla: dict[str, Any] = {"type": "deadline", "from_trigger": "previous_node_completed", "description": text}
+    if duration:
+        sla["duration"] = duration
+    m = _ESCALATE_TO_RE.search(text)
+    if m:
+        sla.update({"violation_action": "escalate", "escalate_to_role": m.group(1)})
+    return sla
