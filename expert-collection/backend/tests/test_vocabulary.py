@@ -3,7 +3,7 @@ confirmed expert workflows and annotations, never written back into records."""
 import copy
 
 from app import db, vocabulary
-from tests.test_review_ontology import EXTRACTED, NARRATIVE, _answer, _turn, model  # noqa: F401  (fixture)
+from tests.test_review_ontology import EXTRACTED, _answer, _narrate, _turn, model  # noqa: F401  (fixture)
 
 GRAPH = copy.deepcopy(EXTRACTED)
 for n in GRAPH["nodes"]:
@@ -63,7 +63,7 @@ def test_annotation_rules():
 
 def test_confirming_a_workflow_accumulates_without_touching_it(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = _turn(client, rec["id"], NARRATIVE)
+    rec = _narrate(client, rec["id"])  # narrate-first: the draft is built on 「讲完了」
     wid = rec["id"]
     assert vocabulary.list_entries("term") == []  # drafts don't count
     rec = _turn(client, wid, "没问题")
