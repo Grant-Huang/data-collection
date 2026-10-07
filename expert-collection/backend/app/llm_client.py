@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -22,6 +23,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
+# C6: a call that fails quickly (connection refused, a 5xx, a malformed reply) is retried once --
+# those are usually transient, and the expert would otherwise be told to resend. A call that
+# failed slowly (a timeout, or a reply that took a minute to come back broken) is not: the
+# expert is already watching the "正在整理…" timer, and a retry would double the wait.
+FAST_FAILURE_SECONDS = 15.0
 
 
 class LLMError(Exception):
@@ -139,8 +145,21 @@ def chat_completion_json(slot_config: dict, messages: list[dict[str, str]], *,
     """Same as `chat_completion`, but additionally requires the content itself to parse as a
     JSON object -- asks the server for `response_format: json_object` and then verifies it
     actually got a JSON object back. For slots like guide_service that need structured
-    output (graph ops), not free-form prose.
+    output (graph ops), not free-form prose. A fast failure is retried once (see
+    FAST_FAILURE_SECONDS); the second failure is raised as-is.
     """
+    started = time.monotonic()
+    try:
+        return _chat_completion_json_once(slot_config, messages, timeout=timeout)
+    except LLMError as e:
+        elapsed = time.monotonic() - started
+        if e.kind == "not_configured" or elapsed > FAST_FAILURE_SECONDS:
+            raise
+        logger.warning("chat_completion_json: failed after %.1fs (%s: %s); retrying once", elapsed, e.kind, e)
+        return _chat_completion_json_once(slot_config, messages, timeout=timeout)
+
+
+def _chat_completion_json_once(slot_config: dict, messages: list[dict[str, str]], *, timeout: float) -> dict[str, Any]:
     result = chat_completion(slot_config, messages, timeout=timeout, response_format_json=True)
     try:
         parsed_content = json.loads(result.content)
