@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import admin, annotations, datasets, expert_workflows, experiments, settings, voice
+from .routers import admin, annotations, datasets, expert_workflows, experiments, settings, voice, phase3b_rules
 
 app = FastAPI(title="Expert Workflow Collection API", version="0.1.0")
 
@@ -38,6 +38,7 @@ app.include_router(experiments.router)
 app.include_router(admin.router)
 app.include_router(settings.router)
 app.include_router(voice.router)
+app.include_router(phase3b_rules.router)
 
 
 @app.get("/api/health")
