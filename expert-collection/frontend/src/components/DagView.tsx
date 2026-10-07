@@ -1,7 +1,8 @@
 // DAG rendering: React Flow for interaction, elkjs for auto-layout, styled to match
 // docs/expert-workflow-collection/design/dag-view-redesign.html's palette (PRD section 11.3)
 // so the working app visually matches the approved prototype rather than diverging from it.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -31,38 +32,53 @@ const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill"
   handoff: { fill: "#fff7ed", stroke: "#f97316", shape: "rect" },
 };
 
-function WorkflowNode({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean } }) {
-  const style = NODE_STYLE[data.nodeType];
-  const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
-  return (
-    <div
-      style={{
-        background: style.fill,
-        border: `1.6px solid ${style.stroke}`,
-        borderRadius: radius,
-        padding: "10px 16px",
-        minWidth: 120,
-        maxWidth: 220,
-        fontSize: 12.5,
-        fontWeight: 700,
-        color: "#1f2937",
-        textAlign: "center",
-        boxShadow: data.confirmed ? "0 0 0 2px #0ca30c33" : "none",
-        position: "relative",
-      }}
-    >
-      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
-      {data.label}
-      {data.hasRetry && (
-        <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
-          ↺
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
-    </div>
-  );
-}
+// Memoized WorkflowNode to avoid unnecessary re-renders during dragging
+const WorkflowNode = React.memo(
+  ({ data }: { data: { label: string; nodeType: NodeType; confirmed: boolean; hasRetry: boolean } }) => {
+    const style = NODE_STYLE[data.nodeType];
+    const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
+    return (
+      <div
+        style={{
+          background: style.fill,
+          border: `1.6px solid ${style.stroke}`,
+          borderRadius: radius,
+          padding: "10px 16px",
+          minWidth: 120,
+          maxWidth: 220,
+          fontSize: 12.5,
+          fontWeight: 700,
+          color: "#1f2937",
+          textAlign: "center",
+          boxShadow: data.confirmed ? "0 0 0 2px #0ca30c33" : "none",
+          position: "relative",
+        }}
+      >
+        <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+        {data.label}
+        {data.hasRetry && (
+          <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
+            ↺
+          </div>
+        )}
+        <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+      </div>
+    );
+  },
+  (prevProps, nextProps) => {
+    // Custom comparison: only re-render if data actually changes
+    return (
+      prevProps.data.label === nextProps.data.label &&
+      prevProps.data.nodeType === nextProps.data.nodeType &&
+      prevProps.data.confirmed === nextProps.data.confirmed &&
+      prevProps.data.hasRetry === nextProps.data.hasRetry
+    );
+  }
+);
 
+WorkflowNode.displayName = "WorkflowNode";
+
+// Stable nodeTypes reference to prevent ReactFlow re-initialization
 const nodeTypes = { workflow: WorkflowNode };
 
 async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[]; width: number; height: number }> {
@@ -132,13 +148,17 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const flowInstance = useRef<ReactFlowInstance | null>(null);
+  // Store original edge animations to preserve confirmation state during drag
+  const originalEdgesRef = useRef<Map<string, boolean>>(new Map());
   const nodeCount = graph.nodes.length;
   const edgeCount = graph.edges.length;
 
   // Re-layout whenever the graph's shape changes; keying off node/edge counts (rather than
   // deep-equality) is enough here since the mock guide service only ever appends structure.
+  // This prevents unnecessary re-layouts during node dragging (which only updates manual_position).
   const layoutKey = useMemo(() => `${nodeCount}-${edgeCount}`, [nodeCount, edgeCount]);
 
   useEffect(() => {
@@ -147,6 +167,9 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
       if (!cancelled) {
         setNodes(res.nodes);
         setEdges(res.edges);
+        // Store original animation states based on confirmation status
+        const animationMap = new Map(res.edges.map((e) => [e.id, e.animated ?? false]));
+        originalEdgesRef.current = animationMap;
         setSize({ width: res.width, height: res.height });
       }
     });
@@ -155,6 +178,19 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey]);
+
+  // Update edge animations based on dragging state to improve performance during interactions
+  // When dragging, disable animations; otherwise restore original animation state from confirmation status
+  useEffect(() => {
+    if (edges.length === 0) return;
+    setEdges((prevEdges) =>
+      prevEdges.map((edge) => ({
+        ...edge,
+        animated: isDragging ? false : (originalEdgesRef.current.get(edge.id) ?? false),
+      }))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDragging]);
 
   const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {
@@ -177,6 +213,24 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
     flowInstance.current.setViewport({ x, y: 20, zoom: fitZoom });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollable, fitZoom, containerWidth, size.width, layoutKey]);
+
+  // Stable callback reference for node clicks
+  const handleNodeClick = useCallback(
+    (_, node: RFNode) => {
+      const original = graph.nodes.find((n) => n.node_id === node.id);
+      if (original) onNodeTap?.(original);
+    },
+    [graph.nodes, onNodeTap]
+  );
+
+  // Track dragging state to disable animations during drag for better performance
+  const handleNodeDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const handleNodeDragStop = useCallback(() => {
+    setIsDragging(false);
+  }, []);
 
   if (nodeCount === 0) {
     return (
@@ -206,10 +260,9 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
       zoomOnDoubleClick={!scrollable}
       minZoom={0.3}
       maxZoom={3}
-      onNodeClick={(_, node) => {
-        const original = graph.nodes.find((n) => n.node_id === node.id);
-        if (original) onNodeTap?.(original);
-      }}
+      onNodeClick={handleNodeClick}
+      onNodeDragStart={handleNodeDragStart}
+      onNodeDragStop={handleNodeDragStop}
     >
       <Background color="#e5e7eb" gap={20} />
       {!readOnly && !scrollable && <Controls showInteractive={false} />}
