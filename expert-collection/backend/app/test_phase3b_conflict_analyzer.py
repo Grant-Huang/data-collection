@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 
 from .phase3b_conflict_analyzer import (
@@ -26,10 +26,13 @@ class TestPermissionConflictAnalyzer:
 
     def test_analyze_single_permission_rule(self):
         """测试：单个权限规则无冲突"""
-        mock_rule = Mock(spec=SystemRule)
+        mock_rule = MagicMock(spec=SystemRule)
         mock_rule.rule_id = "perm_1"
+        mock_rule.rule_name = "mock_rule_name"
+        mock_rule.applicable_workflow_types = ["process_mapping"]
         mock_rule.rule_type = "permission_requirement"
-        mock_rule.parameters = {"required_permissions": ["read"], "scope": "org"}
+        mock_rule.rule_type = "permission_requirement"
+        mock_rule.content = {"required_roles": ["read"], "scope": "org"}
 
         with patch('app.phase3b_conflict_analyzer.RulesManager.list_system_rules', return_value=[mock_rule]):
             report = PermissionConflictAnalyzer.analyze()
@@ -38,19 +41,25 @@ class TestPermissionConflictAnalyzer:
     def test_detect_mutually_exclusive_permissions(self):
         """测试：检测相互排斥的权限"""
         # 创建两个相互排斥的权限规则
-        mock_rule1 = Mock(spec=SystemRule)
+        mock_rule1 = MagicMock(spec=SystemRule)
         mock_rule1.rule_id = "perm_1"
-        mock_rule1.parameters = {
-            "required_permissions": ["admin"],
-            "forbidden_permissions": ["user"],
+        mock_rule1.rule_name = "mock_rule1_name"
+        mock_rule1.applicable_workflow_types = ["process_mapping"]
+        mock_rule1.rule_type = "permission_requirement"
+        mock_rule1.content = {
+            "required_roles": ["admin"],
+            "forbidden_roles": ["user"],
             "scope": "org"
         }
 
-        mock_rule2 = Mock(spec=SystemRule)
+        mock_rule2 = MagicMock(spec=SystemRule)
         mock_rule2.rule_id = "perm_2"
-        mock_rule2.parameters = {
-            "required_permissions": ["user"],
-            "forbidden_permissions": ["admin"],
+        mock_rule2.rule_name = "mock_rule2_name"
+        mock_rule2.applicable_workflow_types = ["process_mapping"]
+        mock_rule2.rule_type = "permission_requirement"
+        mock_rule2.content = {
+            "required_roles": ["user"],
+            "forbidden_roles": ["admin"],
             "scope": "org"
         }
 
@@ -60,10 +69,13 @@ class TestPermissionConflictAnalyzer:
 
     def test_detect_privilege_escalation(self):
         """测试：检测权限提升冲突"""
-        mock_rule = Mock(spec=SystemRule)
+        mock_rule = MagicMock(spec=SystemRule)
         mock_rule.rule_id = "perm_escalation"
-        mock_rule.parameters = {
-            "required_permissions": ["basic"],
+        mock_rule.rule_name = "mock_rule_name"
+        mock_rule.applicable_workflow_types = ["process_mapping"]
+        mock_rule.rule_type = "permission_requirement"
+        mock_rule.content = {
+            "required_roles": ["basic"],
             "privilege_level": 5,  # 较高的权限等级
             "scope": "org"
         }
@@ -85,9 +97,10 @@ class TestResourceConflictAnalyzer:
 
     def test_analyze_single_workflow(self):
         """测试：单个工作流无冲突"""
-        mock_workflow = Mock(spec=WorkflowRelationship)
+        mock_workflow = MagicMock(spec=WorkflowRelationship)
         mock_workflow.workflow_id = "wf_1"
-        mock_workflow.resource_constraints = [{"resource_id": "res_1", "quantity": 1}]
+        mock_workflow.relationship_id = "mock_workflow_rel"
+        mock_workflow.constraints = [{"resource_id": "res_1", "quantity": 1}]
 
         with patch('app.phase3b_conflict_analyzer.RulesManager.list_workflow_relationships', return_value=[mock_workflow]):
             report = ResourceConflictAnalyzer.analyze()
@@ -95,13 +108,15 @@ class TestResourceConflictAnalyzer:
 
     def test_detect_resource_contention(self):
         """测试：检测资源竞争"""
-        mock_workflow1 = Mock(spec=WorkflowRelationship)
+        mock_workflow1 = MagicMock(spec=WorkflowRelationship)
         mock_workflow1.workflow_id = "wf_1"
-        mock_workflow1.resource_constraints = [{"resource_id": "res_1", "quantity": 10}]
+        mock_workflow1.relationship_id = "mock_workflow1_rel"
+        mock_workflow1.constraints = [{"resource_id": "res_1", "quantity": 10}]
 
-        mock_workflow2 = Mock(spec=WorkflowRelationship)
+        mock_workflow2 = MagicMock(spec=WorkflowRelationship)
         mock_workflow2.workflow_id = "wf_2"
-        mock_workflow2.resource_constraints = [{"resource_id": "res_1", "quantity": 8}]
+        mock_workflow2.relationship_id = "mock_workflow2_rel"
+        mock_workflow2.constraints = [{"resource_id": "res_1", "quantity": 8}]
 
         with patch('app.phase3b_conflict_analyzer.RulesManager.list_workflow_relationships', return_value=[mock_workflow1, mock_workflow2]):
             report = ResourceConflictAnalyzer.analyze()
@@ -110,15 +125,17 @@ class TestResourceConflictAnalyzer:
     def test_detect_deadlock_risk(self):
         """测试：检测死锁风险"""
         # 创建循环依赖关系
-        mock_workflow1 = Mock(spec=WorkflowRelationship)
+        mock_workflow1 = MagicMock(spec=WorkflowRelationship)
         mock_workflow1.workflow_id = "wf_1"
+        mock_workflow1.relationship_id = "mock_workflow1_rel"
         mock_workflow1.depends_on = ["wf_2"]
-        mock_workflow1.resource_constraints = [{"resource_id": "res_1", "quantity": 5}]
+        mock_workflow1.constraints = [{"resource_id": "res_1", "quantity": 5}]
 
-        mock_workflow2 = Mock(spec=WorkflowRelationship)
+        mock_workflow2 = MagicMock(spec=WorkflowRelationship)
         mock_workflow2.workflow_id = "wf_2"
+        mock_workflow2.relationship_id = "mock_workflow2_rel"
         mock_workflow2.depends_on = ["wf_1"]
-        mock_workflow2.resource_constraints = [{"resource_id": "res_2", "quantity": 5}]
+        mock_workflow2.constraints = [{"resource_id": "res_2", "quantity": 5}]
 
         with patch('app.phase3b_conflict_analyzer.RulesManager.list_workflow_relationships', return_value=[mock_workflow1, mock_workflow2]):
             report = ResourceConflictAnalyzer.analyze()
@@ -137,9 +154,12 @@ class TestTimeConflictAnalyzer:
 
     def test_analyze_valid_time_constraints(self):
         """测试：有效的时间约束无冲突"""
-        mock_rule = Mock(spec=SystemRule)
+        mock_rule = MagicMock(spec=SystemRule)
         mock_rule.rule_id = "time_1"
-        mock_rule.parameters = {
+        mock_rule.rule_name = "mock_rule_name"
+        mock_rule.applicable_workflow_types = ["process_mapping"]
+        mock_rule.rule_type = "permission_requirement"
+        mock_rule.content = {
             "min_delay": 60,
             "max_delay": 3600
         }
@@ -150,17 +170,23 @@ class TestTimeConflictAnalyzer:
 
     def test_detect_time_constraint_conflicts(self):
         """测试：检测时间约束冲突"""
-        mock_rule1 = Mock(spec=SystemRule)
+        mock_rule1 = MagicMock(spec=SystemRule)
         mock_rule1.rule_id = "time_1"
-        mock_rule1.parameters = {
+        mock_rule1.rule_name = "mock_rule1_name"
+        mock_rule1.applicable_workflow_types = ["process_mapping"]
+        mock_rule1.rule_type = "permission_requirement"
+        mock_rule1.content = {
             "min_delay": 100,
             "max_delay": 500,
             "workflow_type": "process_mapping"
         }
 
-        mock_rule2 = Mock(spec=SystemRule)
+        mock_rule2 = MagicMock(spec=SystemRule)
         mock_rule2.rule_id = "time_2"
-        mock_rule2.parameters = {
+        mock_rule2.rule_name = "mock_rule2_name"
+        mock_rule2.applicable_workflow_types = ["process_mapping"]
+        mock_rule2.rule_type = "permission_requirement"
+        mock_rule2.content = {
             "min_delay": 600,
             "max_delay": 1000,
             "workflow_type": "process_mapping"
@@ -173,9 +199,12 @@ class TestTimeConflictAnalyzer:
     def test_detect_deadline_conflicts(self):
         """测试：检测截止时间冲突"""
         now = datetime.utcnow()
-        mock_rule = Mock(spec=SystemRule)
+        mock_rule = MagicMock(spec=SystemRule)
         mock_rule.rule_id = "deadline_1"
-        mock_rule.parameters = {
+        mock_rule.rule_name = "mock_rule_name"
+        mock_rule.applicable_workflow_types = ["process_mapping"]
+        mock_rule.rule_type = "permission_requirement"
+        mock_rule.content = {
             "required_completion_time": (now + timedelta(hours=1)).isoformat(),
             "expected_duration": 2  # 预期耗时2小时
         }
@@ -196,7 +225,7 @@ class TestPolicyConflictAnalyzer:
 
     def test_analyze_single_policy(self):
         """测试：单个政策无冲突"""
-        mock_policy = Mock(spec=GlobalPolicy)
+        mock_policy = MagicMock(spec=GlobalPolicy)
         mock_policy.policy_id = "policy_1"
         mock_policy.decision_rules = [{"condition": "status==active", "action": "approve"}]
 
@@ -206,13 +235,13 @@ class TestPolicyConflictAnalyzer:
 
     def test_detect_decision_rule_conflicts(self):
         """测试：检测决策规则冲突"""
-        mock_policy1 = Mock(spec=GlobalPolicy)
+        mock_policy1 = MagicMock(spec=GlobalPolicy)
         mock_policy1.policy_id = "policy_1"
         mock_policy1.decision_rules = [
             {"condition": "status==active and priority==high", "action": "approve"}
         ]
 
-        mock_policy2 = Mock(spec=GlobalPolicy)
+        mock_policy2 = MagicMock(spec=GlobalPolicy)
         mock_policy2.policy_id = "policy_2"
         mock_policy2.decision_rules = [
             {"condition": "status==active and priority==high", "action": "reject"}
@@ -224,7 +253,7 @@ class TestPolicyConflictAnalyzer:
 
     def test_detect_coverage_conflicts(self):
         """测试：检测覆盖冲突"""
-        mock_policy = Mock(spec=GlobalPolicy)
+        mock_policy = MagicMock(spec=GlobalPolicy)
         mock_policy.policy_id = "policy_1"
         mock_policy.scope = "organization"
         mock_policy.coverage_areas = ["data_access", "resource_allocation"]
