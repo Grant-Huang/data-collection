@@ -1,0 +1,21 @@
+{
+  "process_id": "LONG_001",
+  "process_name": "半导体制造完整流程",
+  "total_steps": 42,
+  "total_transitions": 41,
+  "conversation_length": 210,
+  "quality_control_points": 7,
+  "critical_transitions": [
+    "硅片检验 → 湿法氧化",
+    "光刻曝光 → 显影",
+    "等离子刻蚀 → 刻蚀后清洗",
+    "化学机械抛光 → 孔洞刻蚀",
+    "钝化层沉积 → 焦盘打开",
+    "最终标记 → 最终检测"
+  ],
+  "sequential_dependencies": {
+    "high": 35,
+    "medium": 4,
+    "low": 2
+  }
+}

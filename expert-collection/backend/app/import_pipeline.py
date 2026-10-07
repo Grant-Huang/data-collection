@@ -154,6 +154,11 @@ def _compare_within_batch(records: list[dict], text_threshold: float, structure_
     return matches
 
 
+# Public name for callers outside this module (annotation_signals.py recomputes within-version
+# matches for the annotation panel with exactly the same classification import used).
+compare_within_batch = _compare_within_batch
+
+
 def compare_cross_version(
     records: list[dict], existing_records: list[dict], text_threshold: float, structure_threshold: float,
 ) -> list[dict]:
