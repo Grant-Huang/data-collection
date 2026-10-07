@@ -174,3 +174,21 @@ body {
 .chat-expert-meta { display: flex; gap: 10px; margin-top: 4px; font-size: 11.5px; opacity: 0.85; }
 .chat-expert-meta button { border: none; background: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font-size: 11.5px; }
 .chat-raw { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.25); font-size: 12px; }
+
+/* React Flow DAG: ensure dragging nodes are always visible */
+.react-flow__node.dragging {
+  z-index: 1000 !important;
+  pointer-events: auto;
+}
+
+.react-flow__node {
+  transition: none !important;
+}
+
+.react-flow__nodes {
+  pointer-events: none;
+}
+
+.react-flow__node {
+  pointer-events: auto;
+}
