@@ -638,3 +638,34 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     record["updated_at"] = _now()
     db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
+
+
+@router.get("/{workflow_id}/schema/export")
+def export_workflow_schema(workflow_id: str) -> dict:
+    """导出单个workflow的DAG schema为JSON格式。包含完整的graph结构及workflow元数据。"""
+    from fastapi import Response
+    import json
+
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+
+    export_payload = {
+        "workflow_meta": {
+            "id": record["id"],
+            "name": record["name"],
+            "status": record["status"],
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+        },
+        "graph": record["graph"],
+        "task_workflow": record.get("task_workflow"),
+        "schema_version": "2.0",
+    }
+
+    body = json.dumps(export_payload, ensure_ascii=False, indent=2)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{workflow_id}_schema.json"'},
+    )

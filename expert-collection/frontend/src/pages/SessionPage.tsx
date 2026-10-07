@@ -10,6 +10,8 @@ import { HistoryDrawer } from "../components/HistoryDrawer";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types";
 
+const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+
 export function SessionPage() {
   const {
     workflows, active, sending, creating, error, showArchived, regenerating,
@@ -36,6 +38,27 @@ export function SessionPage() {
     await regenerateGraph();
   };
 
+  const handleExport = async (workflowId: string) => {
+    try {
+      const res = await fetch(`${BASE}/api/expert-workflows/${workflowId}/schema/export`);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`导出失败: ${res.status} ${text}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${workflowId}_schema.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      window.alert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   // Node ids to highlight on the DAG while the expert hovers a message's "图上 +N" tag.
   const [highlightNodeIds, setHighlightNodeIds] = useState<string[] | null>(null);
 
@@ -58,6 +81,7 @@ export function SessionPage() {
             showArchived={showArchived}
             onToggleShowArchived={toggleShowArchived}
             onUpdateMeta={updateWorkflowMeta}
+            onExport={handleExport}
           />
         </div>
       </div>
