@@ -10,7 +10,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, phase3a_integration, review_agent
+from .. import (
+    dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, ontology,
+    ontology_validator, phase3a_integration, review_agent,
+)
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -663,6 +666,21 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     record["updated_at"] = _now()
     db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=False))
+
+
+@router.get("/{workflow_id}/ontology", response_model=dict)
+def get_ontology_view(workflow_id: str) -> dict:
+    """Manufacturing Operational Ontology view of a workflow (docs/expert-workflow-collection/
+    ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md): the stored graph lifted into the v3 registry
+    + per-node/edge links, plus ontology-level issues. Read-only and derived on every call --
+    nothing is persisted, and these issues don't gate confirmation."""
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    view = ontology.lift_v2_record(record)
+    out = view.model_dump(exclude_none=True)
+    out["issues"] = ontology_validator.validate(view, record["graph"])
+    return out
 
 
 @router.get("/{workflow_id}/schema", response_model=dict)
