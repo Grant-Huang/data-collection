@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import db, graph_ops, graph_validator, guide_service
+from .. import db, graph_ops, graph_validator, guide_service, phase3a_integration
 from ..models import (
     Completion,
     CreateWorkflowRequest,
@@ -85,7 +85,7 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
         "turns": [{"turn_id": uuid.uuid4().hex[:8], "role": "assistant", "text": reply}],
         "unresolved": [next_question] if next_question else [],
         "completion": {"score": 0.0, "ready_for_confirmation": False},
-        "validation": graph_validator.validate(graph),
+        "validation": _validate_with_phase3a(graph),
         "case_context": None,
         "created_at": now,
         "updated_at": now,
@@ -97,6 +97,24 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
 
 def _strip_internal(record: dict) -> dict:
     return {k: v for k, v in record.items() if not k.startswith("_")}
+
+
+def _validate_with_phase3a(graph: dict) -> list[dict[str, str]]:
+    """结合 Phase 1 和 Phase 3-A 的验证"""
+    import logging
+
+    issues = graph_validator.validate(graph)
+
+    try:
+        phase3a_result = phase3a_integration.validate_and_enrich_graph(graph)
+        phase3a_issues = phase3a_result['validation']['issues']
+        issues.extend(phase3a_issues)
+    except ImportError:
+        logging.debug("Phase 3-A 模块未安装")
+    except Exception as e:
+        logging.warning(f"Phase 3-A 验证失败：{e}")
+
+    return issues
 
 
 @router.get("", response_model=list[WorkflowSummary])
@@ -282,12 +300,17 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     assistant_turn_id = uuid.uuid4().hex[:8]
     record["turns"].append({"turn_id": assistant_turn_id, "role": "assistant", "text": assistant_reply})
 
-    issues = graph_validator.validate(record["graph"])
+    issues = _validate_with_phase3a(record["graph"])
     score = _completion_score(record)
     ready = new_state["stage"] == "review" and graph_validator.is_valid(record["graph"])
     record["completion"] = {"score": score, "ready_for_confirmation": ready}
     record["unresolved"] = [next_question] if next_question else []
     record["validation"] = issues
+    try:
+        phase3a_result = phase3a_integration.validate_and_enrich_graph(record["graph"])
+        record["_phase3a_features"] = phase3a_result['features']
+    except Exception:
+        pass
     if ready and record["status"] != "expert_confirmed":
         record["status"] = "needs_confirmation"
     record["updated_at"] = _now()
@@ -309,8 +332,9 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
     record = db.get(workflow_id)
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
-    issues = graph_validator.validate(record["graph"])
-    if any(i["level"] == "error" for i in issues):
+    issues = _validate_with_phase3a(record["graph"])
+    phase1_errors = [i for i in issues if not i.get('code', '').startswith('phase3a_')]
+    if any(i["level"] == "error" for i in phase1_errors):
         raise HTTPException(
             status_code=422,
             detail={"message": "图结构未通过校验，无法确认", "issues": issues},
