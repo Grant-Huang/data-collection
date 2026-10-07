@@ -164,7 +164,7 @@ def _connect() -> sqlite3.Connection:
 
 
 # Fields of a workflow record the session list needs (routers/expert_workflows.list_workflows).
-_SUMMARY_FIELDS = ("id", "name", "status", "updated_at", "pinned", "archived")
+_SUMMARY_FIELDS = ("id", "name", "status", "updated_at", "pinned", "archived", "deleted")
 
 
 def _summary(record: dict) -> str:

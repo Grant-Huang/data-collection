@@ -14,9 +14,9 @@ const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
 export function SessionPage() {
   const {
-    workflows, active, sending, creating, error, showArchived, regenerating,
+    workflows, active, sending, creating, error, regenerating,
     selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
-    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
+    updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
   } = useWorkflowSession();
 
   // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
@@ -78,8 +78,6 @@ export function SessionPage() {
             onSelect={selectWorkflow}
             onCreate={createWorkflow}
             creating={creating}
-            showArchived={showArchived}
-            onToggleShowArchived={toggleShowArchived}
             onUpdateMeta={updateWorkflowMeta}
             onExport={handleExport}
           />

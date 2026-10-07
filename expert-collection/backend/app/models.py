@@ -146,6 +146,9 @@ class WorkflowSummary(BaseModel):
     # version.
     pinned: bool = False
     archived: bool = False
+    # Soft delete (the session list's 「已删除」 tab): hidden from every other tab and from the
+    # dataset draft pool, restorable. Never a hard delete -- see the note above.
+    deleted: bool = False
     # True once any dataset_version (archived versions included) references this workflow --
     # computed at read time from dataset_versions, never stored on the workflow itself.
     in_dataset: bool = False
@@ -254,6 +257,7 @@ class WorkflowRecord(BaseModel):
     updated_at: str
     pinned: bool = False
     archived: bool = False
+    deleted: bool = False
     in_dataset: bool = False
 
 
@@ -264,6 +268,7 @@ class WorkflowMetaUpdateRequest(BaseModel):
     name: Optional[str] = None
     pinned: Optional[bool] = None
     archived: Optional[bool] = None
+    deleted: Optional[bool] = None
 
 
 class NodePositionUpdateRequest(BaseModel):

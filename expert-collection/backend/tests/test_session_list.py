@@ -68,3 +68,59 @@ def test_rows_written_before_the_summary_column_are_backfilled(client):
     stored = conn.execute("SELECT summary FROM workflows WHERE id = ?", (rec["id"],)).fetchone()[0]
     conn.close()
     assert json.loads(stored)["name"] == "老记录"
+
+
+# --- B2: soft delete, the four tabs, auto-naming ---------------------------------------------
+
+def test_soft_delete_hides_from_default_list_and_can_be_restored(client):
+    keep = _make(client, "留下")
+    gone = _make(client, "删掉")
+    client.patch(f"/api/expert-workflows/{gone['id']}", json={"pinned": True})
+    rec = client.patch(f"/api/expert-workflows/{gone['id']}", json={"deleted": True}).json()
+    # Deleting drops the pin so a deleted session never floats to the top.
+    assert rec["deleted"] is True and rec["pinned"] is False
+
+    assert [r["id"] for r in client.get("/api/expert-workflows").json()] == [keep["id"]]
+    # Archived alone does not bring deleted ones back; only include_deleted does.
+    assert gone["id"] not in {r["id"] for r in client.get("/api/expert-workflows", params={"include_archived": True}).json()}
+    rows = client.get("/api/expert-workflows", params={"include_archived": True, "include_deleted": True}).json()
+    assert {r["id"]: r["deleted"] for r in rows} == {keep["id"]: False, gone["id"]: True}
+
+    # Soft delete only: the record is still readable, and restoring brings it back.
+    assert client.get(f"/api/expert-workflows/{gone['id']}").status_code == 200
+    client.patch(f"/api/expert-workflows/{gone['id']}", json={"deleted": False})
+    assert {r["id"] for r in client.get("/api/expert-workflows").json()} == {keep["id"], gone["id"]}
+
+
+def test_deleted_confirmed_session_stays_out_of_the_draft_pool(client):
+    rec = _make(client, "已确认")
+    stored = db.get(rec["id"])
+    stored["status"] = "expert_confirmed"
+    db.save(stored)
+    assert client.get("/api/datasets/draft-pool").json()["count"] == 1
+
+    client.patch(f"/api/expert-workflows/{rec['id']}", json={"deleted": True})
+    assert client.get("/api/datasets/draft-pool").json()["count"] == 0
+
+
+def test_default_name_becomes_the_first_sentence(client):
+    rec = client.post("/api/expert-workflows", json={}).json()
+    assert rec["name"].startswith("专家会话 ")
+    client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": "主轴温度报警后的处理，一般先停机。"})
+    assert client.get(f"/api/expert-workflows/{rec['id']}").json()["name"] == "主轴温度报警后的处理"
+
+    # Only the first expert message names it; later ones don't rename.
+    client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": "另外一件事。"})
+    assert client.get(f"/api/expert-workflows/{rec['id']}").json()["name"] == "主轴温度报警后的处理"
+
+
+def test_long_first_sentence_is_cut_and_chosen_names_are_kept(client):
+    rec = client.post("/api/expert-workflows", json={}).json()
+    long = "设备报警以后操作员先按急停然后隔离零件再叫质量工程师复测"
+    client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": long})
+    name = client.get(f"/api/expert-workflows/{rec['id']}").json()["name"]
+    assert name == long[:18] + "…"
+
+    named = _make(client, "我起的名字")
+    client.post(f"/api/expert-workflows/{named['id']}/turns", json={"text": "主轴温度报警后的处理。"})
+    assert client.get(f"/api/expert-workflows/{named['id']}").json()["name"] == "我起的名字"

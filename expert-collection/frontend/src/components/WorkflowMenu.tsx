@@ -8,10 +8,12 @@ interface Props {
   onRename: (name: string) => void;
   onTogglePin: () => void;
   onToggleArchive: () => void;
+  // Soft delete / restore (「已删除」 tab) -- nothing is ever hard-deleted.
+  onToggleDelete: () => void;
   onExport?: (workflowId: string) => void;
 }
 
-export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive, onExport }: Props) {
+export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive, onToggleDelete, onExport }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -60,13 +62,23 @@ export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive,
             boxShadow: "0 4px 16px rgba(0,0,0,0.12)", overflow: "hidden", marginTop: 4,
           }}
         >
-          {item(workflow.pinned ? "取消置顶" : "置顶", onTogglePin)}
-          {item("重命名", () => {
-            const next = window.prompt("重命名会话", workflow.name);
-            if (next !== null && next.trim()) onRename(next.trim());
-          })}
-          {onExport && item("导出Schema", () => onExport(workflow.id))}
-          {item(workflow.archived ? "取消归档" : "归档", onToggleArchive, !workflow.archived)}
+          {workflow.deleted ? (
+            item("恢复", onToggleDelete)
+          ) : (
+            <>
+              {item(workflow.pinned ? "取消置顶" : "置顶", onTogglePin)}
+              {item("重命名", () => {
+                const next = window.prompt("重命名会话", workflow.name);
+                if (next !== null && next.trim()) onRename(next.trim());
+              })}
+              {onExport && item("导出Schema", () => onExport(workflow.id))}
+              {item(workflow.archived ? "取消归档" : "归档", onToggleArchive)}
+              {item("删除", () => {
+                const inDataset = workflow.in_dataset ? "（它已录入数据集，数据集里的记录不受影响）" : "";
+                if (window.confirm(`删除「${workflow.name}」？${inDataset}\n删除后可以在「已删除」标签里恢复。`)) onToggleDelete();
+              }, true)}
+            </>
+          )}
         </div>
       )}
     </div>

@@ -193,6 +193,8 @@ export interface WorkflowSummary {
   updated_at: string;
   pinned: boolean;
   archived: boolean;
+  // Soft delete -- the 「已删除」 tab; restorable.
+  deleted: boolean;
   // True once any dataset_version (including archived ones) references this workflow --
   // drives the "重新生成流程图" menu item's disabled state without a round trip.
   in_dataset: boolean;
@@ -239,6 +241,7 @@ export interface WorkflowMetaUpdate {
   name?: string;
   pinned?: boolean;
   archived?: boolean;
+  deleted?: boolean;
 }
 
 export interface DatasetVersionRef {

@@ -48,7 +48,7 @@ def _draft_pool(source_type: str) -> list[dict]:
     return [
         w for w in db.list_all()
         if w["status"] == "expert_confirmed" and w["id"] not in already_published
-        and not w.get("archived", False)
+        and not w.get("archived", False) and not w.get("deleted", False)
     ]
 
 

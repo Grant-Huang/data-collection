@@ -5,6 +5,7 @@ endpoints here -- those are Phase 3/4).
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -182,20 +183,25 @@ def _validate_with_phase3a(graph: dict) -> list[dict[str, str]]:
 
 
 @router.get("", response_model=list[WorkflowSummary])
-def list_workflows(include_archived: bool = False) -> list[WorkflowSummary]:
-    """左栏会话清单。默认隐藏已归档会话（`include_archived=true` 时显示，配合前端「显示/
-    隐藏已归档」的切换）；置顶的会话排在最前面，组内仍按 `updated_at` 倒序（db.list_all
-    已经这样排好，Python 的 sort 是稳定排序，不会打乱这个次序）。
+def list_workflows(include_archived: bool = False, include_deleted: bool = False) -> list[WorkflowSummary]:
+    """左栏会话清单。默认只返回进行中的（未归档、未删除）；`include_archived=true` 再带上已归档，
+    `include_deleted=true` 再带上已删除（软删除，可恢复）。前端的四个标签（进行中 / 待确认 /
+    已完成 / 已删除）两个都开着取一次全量，在本地分标签，这样各标签上的数量才是准的。置顶的
+    排最前，组内仍按 `updated_at` 倒序（`db.list_summaries` 已经这样排好，Python 的 sort 是
+    稳定排序，不会打乱）。
     """
     records = db.list_summaries()  # list fields only -- full records are large (C4)
     published = dataset_records.published_workflow_ids()
-    visible = [r for r in records if include_archived or not r.get("archived")]
+    visible = [
+        r for r in records
+        if (include_archived or not r.get("archived")) and (include_deleted or not r.get("deleted"))
+    ]
     visible.sort(key=lambda r: not r.get("pinned"))
     return [
         WorkflowSummary(
             id=r["id"], name=r["name"], status=r["status"],
             completion_score=r.get("completion_score") or 0.0, updated_at=r["updated_at"],
-            pinned=bool(r.get("pinned")), archived=bool(r.get("archived")),
+            pinned=bool(r.get("pinned")), archived=bool(r.get("archived")), deleted=bool(r.get("deleted")),
             in_dataset=r["id"] in published,
         )
         for r in visible
@@ -218,7 +224,8 @@ def get_workflow(workflow_id: str) -> WorkflowRecord:
 
 @router.patch("/{workflow_id}", response_model=WorkflowRecord)
 def update_workflow_meta(workflow_id: str, req: WorkflowMetaUpdateRequest) -> WorkflowRecord:
-    """左栏「...」下拉菜单：重命名 / 置顶 / 归档。用归档而不是删除 -- 归档只是把会话从默认
+    """左栏「...」下拉菜单：重命名 / 置顶 / 归档 / 删除（软删除，可在「已删除」标签里恢复）。
+    用归档/软删除而不是真删 -- 归档只是把会话从默认
     清单里隐藏、并从数据集草稿池里排除（见 datasets.py::_draft_pool），记录本身还在，因为已
     发布的 expert_collected 数据集版本只存 workflow_ids、导出时才回读 graph（见
     dataset_records.records_for_export），真删掉会让已发布的版本悄悄丢记录。
@@ -236,6 +243,13 @@ def update_workflow_meta(workflow_id: str, req: WorkflowMetaUpdateRequest) -> Wo
         record["pinned"] = bool(patch["pinned"])
     if "archived" in patch:
         record["archived"] = bool(patch["archived"])
+    if "deleted" in patch:
+        # Soft delete only: a published dataset version keeps pointing at this record by id,
+        # so the record itself must stay. Deleting also drops the pin -- a deleted session
+        # shouldn't float to the top of anything.
+        record["deleted"] = bool(patch["deleted"])
+        if record["deleted"]:
+            record["pinned"] = False
     record["updated_at"] = _now()
     db.save(record)
     in_dataset = bool(dataset_records.versions_containing(workflow_id))
@@ -368,6 +382,25 @@ def _rollback_to_turn(record: dict, turn_id: str) -> dict:
     return original_turn
 
 
+_DEFAULT_NAME_PREFIX = "专家会话 "
+_AUTO_NAME_MAX = 18
+
+
+def _auto_name(record: dict, text: str) -> None:
+    """Name a still-default session after what the expert first said ("专家会话 02ab6c7a7f99"
+    tells nobody anything once the list has a few dozen of them). Only when the name is still the
+    generated default and this is the expert's first message; a name they chose is never touched.
+    The first sentence, cut at the first sentence punctuation or at _AUTO_NAME_MAX characters."""
+    if not str(record.get("name", "")).startswith(_DEFAULT_NAME_PREFIX):
+        return
+    if any(t.get("role") == "expert" for t in record.get("turns", [])):
+        return
+    first = re.split(r"[，。；！？,.;!?\n]", text.strip(), maxsplit=1)[0].strip()
+    if len(first) < 2:
+        return
+    record["name"] = first[:_AUTO_NAME_MAX] + ("…" if len(first) > _AUTO_NAME_MAX else "")
+
+
 @router.post("/{workflow_id}/turns", response_model=TurnResponse)
 def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
     record = db.get(workflow_id)
@@ -375,6 +408,8 @@ def post_turn(workflow_id: str, req: TurnRequest) -> TurnResponse:
         raise HTTPException(status_code=404, detail="workflow not found")
     if record["status"] == "expert_confirmed":
         raise HTTPException(status_code=409, detail="workflow already confirmed, no further turns accepted")
+
+    _auto_name(record, req.text)
 
     if record.get("_review"):
         return _post_review_turn(record, req)
