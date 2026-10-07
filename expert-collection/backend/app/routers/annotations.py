@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from .. import annotation_signals, dataset_records, db, gold_annotation, review_agent
+from .. import annotation_signals, dataset_records, db, gold_annotation, review_agent, vocabulary
 from ..models import (
     AnnotationSummary,
     CreateAnnotationRequest,
@@ -242,8 +242,10 @@ def create_annotation(version_id: str, record_id: str, req: CreateAnnotationRequ
         if "other" in tags and not note:
             raise HTTPException(status_code=400, detail="勾选了「其他」原因时，请在备注里写明具体原因")
 
-    _save_annotation(version_id, record_id, history, verdict=req.verdict, reason_tags=tags, note=note, name=name,
-                     role=role, round_=state["round"], actor_role=req.actor_role)
+    entry = _save_annotation(version_id, record_id, history, verdict=req.verdict, reason_tags=tags, note=note, name=name,
+                             role=role, round_=state["round"], actor_role=req.actor_role)
+    # Append-only vocabulary (app/vocabulary.py); nothing is written back into the record.
+    vocabulary.accumulate_from_annotation(entry, _current_graph(record, revisions), _record_name(record))
     return _detail(version, record, db.list_annotations(version_id, record_id), revisions)
 
 
@@ -371,6 +373,7 @@ def review_session_turn(version_id: str, session_id: str, req: ReviewSessionTurn
         )
         session["status"] = "submitted"
         session["annotation_id"] = entry["annotation_id"]
+        vocabulary.accumulate_from_annotation(entry, session["graph"], _record_name(record))
     session["updated_at"] = _now()
     db.save_review_session(session)
     return _session_model(session)

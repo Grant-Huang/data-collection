@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import (
     dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, ontology,
-    ontology_validator, phase3a_integration, review_agent,
+    ontology_validator, phase3a_integration, review_agent, vocabulary,
 )
 from ..models import (
     Completion,
@@ -510,6 +510,8 @@ def _post_review_turn(record: dict, req: TurnRequest) -> TurnResponse:
         _mark_confirmed(record)
     record["updated_at"] = _now()
     db.save(record)
+    if result.finished:
+        vocabulary.accumulate_from_workflow(record)  # append-only; never changes the record
     return TurnResponse(
         assistant_reply=result.text,
         graph_ops_applied=abs(len(record["graph"]["nodes"]) + len(record["graph"]["edges"]) - before),
@@ -560,6 +562,7 @@ def confirm_workflow(workflow_id: str) -> WorkflowRecord:
     record["validation"] = issues
     record["updated_at"] = _now()
     db.save(record)
+    vocabulary.accumulate_from_workflow(record)  # append-only; never changes the record
     in_dataset = bool(dataset_records.versions_containing(workflow_id))
     return WorkflowRecord.model_validate(_strip_internal(record, in_dataset=in_dataset))
 
