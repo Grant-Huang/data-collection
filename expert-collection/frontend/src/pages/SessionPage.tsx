@@ -227,7 +227,11 @@ export function SessionPage() {
                     `}</style>
                   </div>
                 )}
-                <div style={{ opacity: regenerating ? 0.4 : 1, pointerEvents: regenerating ? "none" : "auto" }}>
+                {/* Must fill the panel: DualDagPanel sizes itself to 100% of this box, and with no
+                    height here the React Flow pane collapsed to 0px -- nodes still painted (overflow)
+                    but every mouse event fell through to the panel behind, so nodes couldn't be
+                    dragged or clicked. */}
+                <div style={{ height: "100%", opacity: regenerating ? 0.4 : 1, pointerEvents: regenerating ? "none" : "auto" }}>
                   <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />
                 </div>
               </>

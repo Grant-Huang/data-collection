@@ -12,6 +12,8 @@ import ReactFlow, {
   type ReactFlowInstance,
   MarkerType,
   type NodeProps,
+  type NodeChange,
+  applyNodeChanges,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -442,11 +444,12 @@ export function DagView({
         const original = graph.nodes.find((n) => n.node_id === node.id);
         if (original) onNodeTap?.(original);
       }}
+      // React Flow v11 in controlled mode only moves a node if its changes are applied back
+      // into `nodes`; without this the dragged node never moved on screen at all (verified in
+      // a browser run: same coordinates before and after a drag). Only position/dimension/
+      // selection changes reach here -- nodes are never added or removed by React Flow itself.
+      onNodesChange={(changes: NodeChange[]) => setNodes((prev) => applyNodeChanges(changes, prev))}
       onNodeDragStop={(_, node) => {
-        // Update our own layout state immediately so the node stays put on the next
-        // unrelated re-render (we don't pass onNodesChange, so React Flow's internal drag
-        // position never reaches the `nodes` state on its own -- see layout()/setNodes above).
-        setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, position: node.position } : n)));
         onNodeMove?.(node.id, node.position);
       }}
     >
