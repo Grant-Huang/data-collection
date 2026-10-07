@@ -187,15 +187,15 @@ def list_workflows(include_archived: bool = False) -> list[WorkflowSummary]:
     隐藏已归档」的切换）；置顶的会话排在最前面，组内仍按 `updated_at` 倒序（db.list_all
     已经这样排好，Python 的 sort 是稳定排序，不会打乱这个次序）。
     """
-    records = db.list_all()
+    records = db.list_summaries()  # list fields only -- full records are large (C4)
     published = dataset_records.published_workflow_ids()
-    visible = [r for r in records if include_archived or not r.get("archived", False)]
-    visible.sort(key=lambda r: not r.get("pinned", False))
+    visible = [r for r in records if include_archived or not r.get("archived")]
+    visible.sort(key=lambda r: not r.get("pinned"))
     return [
         WorkflowSummary(
             id=r["id"], name=r["name"], status=r["status"],
-            completion_score=r["completion"]["score"], updated_at=r["updated_at"],
-            pinned=r.get("pinned", False), archived=r.get("archived", False),
+            completion_score=r.get("completion_score") or 0.0, updated_at=r["updated_at"],
+            pinned=bool(r.get("pinned")), archived=bool(r.get("archived")),
             in_dataset=r["id"] in published,
         )
         for r in visible

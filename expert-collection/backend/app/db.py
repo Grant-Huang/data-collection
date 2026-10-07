@@ -151,16 +151,36 @@ def _connect() -> sqlite3.Connection:
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
         conn.execute("ALTER TABLE dataset_versions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    # C4: the session list only needs a handful of fields, but each record also carries the
+    # whole transcript and up to 30 graph snapshots (review_agent's undo history) -- a few
+    # hundred KB per session. Parsing every full record just to list them took ~4.5s at 500
+    # sessions, on every turn (the list is refreshed after each message). `summary` keeps the
+    # list fields as a small JSON next to the blob; NULL for rows saved before this column
+    # existed, which list_summaries() fills in on first read.
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()]
+    if "summary" not in cols:
+        conn.execute("ALTER TABLE workflows ADD COLUMN summary TEXT")
     return conn
+
+
+# Fields of a workflow record the session list needs (routers/expert_workflows.list_workflows).
+_SUMMARY_FIELDS = ("id", "name", "status", "updated_at", "pinned", "archived")
+
+
+def _summary(record: dict) -> str:
+    summary = {k: record.get(k) for k in _SUMMARY_FIELDS}
+    summary["completion_score"] = (record.get("completion") or {}).get("score", 0.0)
+    return json.dumps(summary, ensure_ascii=False)
 
 
 def save(record: dict) -> None:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO workflows (id, data, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-            (record["id"], json.dumps(record, ensure_ascii=False), record["updated_at"]),
+            "INSERT INTO workflows (id, data, updated_at, summary) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at, "
+            "summary = excluded.summary",
+            (record["id"], json.dumps(record, ensure_ascii=False), record["updated_at"], _summary(record)),
         )
         conn.commit()
     finally:
@@ -172,6 +192,26 @@ def get(workflow_id: str) -> Optional[dict]:
     try:
         row = conn.execute("SELECT data FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def list_summaries() -> list[dict]:
+    """Session-list fields for every workflow, newest first, without parsing the full records
+    (see `_summary`). Rows saved before the `summary` column existed are summarized from their
+    full record once and written back, so later reads stay cheap."""
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT id, summary FROM workflows ORDER BY updated_at DESC").fetchall()
+        out: list[dict] = []
+        for workflow_id, summary in rows:
+            if summary is None:
+                data = conn.execute("SELECT data FROM workflows WHERE id = ?", (workflow_id,)).fetchone()[0]
+                summary = _summary(json.loads(data))
+                conn.execute("UPDATE workflows SET summary = ? WHERE id = ?", (summary, workflow_id))
+            out.append(json.loads(summary))
+        conn.commit()
+        return out
     finally:
         conn.close()
 
