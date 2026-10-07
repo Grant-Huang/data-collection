@@ -16,6 +16,9 @@ import type {
   Settings,
   SourceType,
   TurnResponse,
+  VocabularyEntry,
+  VocabularyLayer,
+  VocabularySummary,
   WorkflowMetaUpdate,
   WorkflowRecord,
   WorkflowSummary,
@@ -122,6 +125,11 @@ export const api = {
     req<{ ok: boolean; message: string }>("POST", `/api/settings/llm-levels/${level}/test-connection`),
 
   getAuditLog: () => req<AuditLogEntry[]>("GET", "/api/admin/audit-log"),
+  getVocabularySummary: () => req<VocabularySummary>("GET", "/api/vocabulary/summary"),
+  listVocabulary: (layer: VocabularyLayer, kind?: string) =>
+    req<VocabularyEntry[]>("GET", `/api/vocabulary/${layer}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+  backfillVocabulary: (actorRole: string) =>
+    req<{ workflows: number; annotations: number }>("POST", `/api/vocabulary/backfill?actor_role=${encodeURIComponent(actorRole)}`),
 
   importPrecheck: (payload: unknown) => req<ImportPrecheckReport>("POST", "/api/datasets/import/precheck", payload),
   importConfirm: (payload: unknown, actorRole: string, importRecordsWithoutErrors: boolean) =>

@@ -664,3 +664,35 @@ export interface AuditLogEntry {
   detail: Record<string, unknown>;
   created_at: string;
 }
+
+
+// Accumulated vocabulary / ontology entries (backend app/vocabulary.py): append-only, built
+// from confirmed expert workflows and annotations; never written back into records.
+export type VocabularyLayer = "term" | "ontology";
+
+export interface VocabularySource {
+  type: "expert_workflow" | "annotation";
+  id: string;
+  name?: string;
+  version_id?: string;
+  record_id?: string;
+  seen_at: string;
+}
+
+export interface VocabularyEntry {
+  layer: VocabularyLayer;
+  kind: string;
+  key: string;
+  label: string;
+  content?: Record<string, unknown> | null;
+  sources: VocabularySource[];
+  source_count: number;
+  steps: string[];
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface VocabularySummary {
+  kinds: Record<VocabularyLayer, Record<string, string>>;
+  counts: Record<VocabularyLayer, Record<string, { label: string; count: number }>>;
+}
