@@ -3,16 +3,20 @@
 // 词汇表/数据与实验管理/系统管理) -- plus the role switcher itself, which has to stay visible to
 // everyone so you can switch identity (IMPLEMENTATION_PLAN.md assumption 1's simplest
 // current-identity selector, finally wired up this phase).
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useRole } from "../hooks/useRole";
 import { ROLE_LABELS } from "../api/types";
 import type { Role } from "../api/types";
 import { DataEntryPage } from "./DataEntryPage";
-import { DashboardPage } from "./DashboardPage";
-import { ExperimentCenterPage } from "./ExperimentCenterPage";
-import { VocabularyPage } from "./VocabularyPage";
-import { DataExperimentManagementPage } from "./DataExperimentManagementPage";
-import { SystemManagementPage } from "./SystemManagementPage";
+
+// Researcher/admin pages load on first visit (C2): an expert never sees them, so they no longer
+// download them with the collection page.
+const DashboardPage = lazy(() => import("./DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const ExperimentCenterPage = lazy(() => import("./ExperimentCenterPage").then((m) => ({ default: m.ExperimentCenterPage })));
+const VocabularyPage = lazy(() => import("./VocabularyPage").then((m) => ({ default: m.VocabularyPage })));
+const DataExperimentManagementPage = lazy(() =>
+  import("./DataExperimentManagementPage").then((m) => ({ default: m.DataExperimentManagementPage })));
+const SystemManagementPage = lazy(() => import("./SystemManagementPage").then((m) => ({ default: m.SystemManagementPage })));
 
 type View = "data_entry" | "dashboard" | "experiments" | "vocabulary" | "data-experiment-admin" | "system-admin";
 
@@ -66,11 +70,13 @@ export function DesktopApp() {
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         {activeView === "data_entry" && <DataEntryPage role={role} />}
-        {activeView === "dashboard" && <DashboardPage role={role} />}
-        {activeView === "experiments" && <ExperimentCenterPage role={role} />}
-        {activeView === "vocabulary" && <VocabularyPage role={role} />}
-        {activeView === "data-experiment-admin" && <DataExperimentManagementPage />}
-        {activeView === "system-admin" && <SystemManagementPage />}
+        <Suspense fallback={<div style={{ padding: 16, fontSize: 13, color: "#667085" }}>加载中…</div>}>
+          {activeView === "dashboard" && <DashboardPage role={role} />}
+          {activeView === "experiments" && <ExperimentCenterPage role={role} />}
+          {activeView === "vocabulary" && <VocabularyPage role={role} />}
+          {activeView === "data-experiment-admin" && <DataExperimentManagementPage />}
+          {activeView === "system-admin" && <SystemManagementPage />}
+        </Suspense>
       </div>
     </div>
   );

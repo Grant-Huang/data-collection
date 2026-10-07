@@ -1,6 +1,7 @@
 // DAG rendering: React Flow for interaction, elkjs for auto-layout, styled to match
 // docs/expert-workflow-collection/design/dag-view-redesign.html's palette (PRD section 11.3)
 // so the working app visually matches the approved prototype rather than diverging from it.
+import type ELK from "elkjs/lib/elk.bundled.js";
 import { useEffect, useMemo, useRef, useState, memo } from "react";
 import ReactFlow, {
   Background,
@@ -16,11 +17,19 @@ import ReactFlow, {
   applyNodeChanges,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import ELK from "elkjs/lib/elk.bundled.js";
 import type { Graph, GraphNode, NodeType } from "../api/types";
 import { ontologyFacets, ontologyTooltip } from "../utils/ontologyFacets";
 
-const elk = new ELK();
+// elkjs is by far the biggest dependency (~1.4 MB unminified) and only needed once there is a
+// graph to lay out, so it is fetched on first use instead of with the page (C2) -- the chat
+// column renders and accepts input while it loads. One shared instance.
+// (The type-only import below is erased at build time; it doesn't pull the library in.)
+type ElkInstance = InstanceType<typeof ELK>;
+let elkPromise: Promise<ElkInstance> | null = null;
+function getElk(): Promise<ElkInstance> {
+  elkPromise ??= import("elkjs/lib/elk.bundled.js").then((m) => new m.default());
+  return elkPromise;
+}
 
 const NODE_STYLE: Record<NodeType, { fill: string; stroke: string; shape: "pill" | "rect" | "diamond" | "hex" }> = {
   start: { fill: "#f8fafc", stroke: "#94a3b8", shape: "pill" },
@@ -225,7 +234,7 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
     })),
     edges: graph.edges.map((e) => ({ id: e.edge_id, sources: [e.from], targets: [e.to] })),
   };
-  const result = await elk.layout(elkGraph);
+  const result = await (await getElk()).layout(elkGraph);
   const posById = new Map((result.children ?? []).map((c) => [c.id, { x: c.x ?? 0, y: c.y ?? 0 }]));
 
   const nodeById = new Map<string, GraphNode>(graph.nodes.map((n) => [n.node_id, n]));
