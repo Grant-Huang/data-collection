@@ -1400,7 +1400,7 @@ def _apply_retry_semantics(graph: dict, raw_nodes: dict[str, dict]) -> None:
             }
 
 
-def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
+def regenerate_graph_from_transcript(turns: list[dict[str, str]], timeout: float | None = None) -> dict:
     """Full transcript -> full replacement Graph, via the `graph_regenerate` LLM slot. Raises
     `llm_client.LLMError` on any failure (not configured/disabled, network/timeout, malformed
     or structurally invalid output) -- see the module comment above for why there's no
@@ -1410,13 +1410,17 @@ def regenerate_graph_from_transcript(turns: list[dict[str, str]]) -> dict:
     if not (slot_config.get("enabled") and slot_config.get("endpoint") and slot_config.get("model_name")):
         raise llm_client.LLMError("not_configured", "「重新生成流程图」环节未配置可达的推理服务（请到系统设置里配置）")
 
+    if timeout is None:
+        settings = app_settings.get_effective_settings()
+        timeout = settings.get("llm_timeouts", {}).get("regenerate_graph_seconds", 60)
+
     transcript = "\n".join(
         f"{'专家' if t['role'] == 'expert' else '助手'}：{t['text']}" for t in turns
     )
     parsed = llm_client.chat_completion_json(slot_config, [
         {"role": "system", "content": _REGENERATE_SYSTEM_PROMPT},
         {"role": "user", "content": transcript},
-    ])
+    ], timeout=timeout)
     graph = _coerce_regenerated_graph(parsed)
     if graph is None:
         raise llm_client.LLMError("bad_response", f"模型输出的流程图结构不符合预期格式：{parsed!r}"[:500])
