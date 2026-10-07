@@ -11,6 +11,7 @@ import ReactFlow, {
   type Node as RFNode,
   type ReactFlowInstance,
   MarkerType,
+  useNodeId,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -83,11 +84,11 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
         textAlign: "center",
         // Highlight (hovering a chat message's "图上 +N" tag) wins over the confirmed ring.
         boxShadow: data.highlighted
-          ? "0 0 0 3px #f59e0b88"
+          ? "0 0 0 3px #f59e0b88, 0 4px 12px rgba(0,0,0,0.15)"
           : data.confirmed
-            ? "0 0 0 2px #0ca30c33"
-            : "none",
-        transition: "box-shadow 0.15s",
+            ? "0 0 0 2px #0ca30c33, 0 2px 8px rgba(0,0,0,0.08)"
+            : "0 1px 3px rgba(0,0,0,0.05)",
+        transition: "box-shadow 0.15s, opacity 0.15s",
         position: "relative",
         willChange: "transform",
       }}
