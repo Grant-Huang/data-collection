@@ -11,7 +11,7 @@ import ReactFlow, {
   type Node as RFNode,
   type ReactFlowInstance,
   MarkerType,
-  useNodeId,
+  useNode,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -59,15 +59,59 @@ interface WorkflowNodeData {
   // Stable step number (Node.seq) -- shown so a person can say "第3步" and mean exactly this
   // node, and the review-loop model is told the same number (review_agent._graph_for_prompt).
   seq?: number | null;
+  // Schema attributes for tooltip display
+  actorRoles?: string[];
+  decisionQuestion?: string | null;
+  confidence?: number;
+  retrySemantics?: { condition: string | null; description: string | null } | null;
 }
 
 const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeData }) {
+  const node = useNode();
   const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   const deco = data.decoration;
+  const isDragging = node?.dragging ?? false;
+
+  const buildTooltip = () => {
+    const parts: string[] = [];
+
+    if (data.evidence?.length) {
+      parts.push(`依据原话：「${data.evidence.join("」「")}」`);
+    } else if (data.unverified) {
+      parts.push("没有在讲述中找到这一步的原话，待确认");
+    }
+
+    if (data.actorRoles?.length) {
+      parts.push(`角色：${data.actorRoles.join("、")}`);
+    }
+
+    if (data.decisionQuestion) {
+      parts.push(`决策问题：${data.decisionQuestion}`);
+    }
+
+    if (data.confidence !== undefined) {
+      const confStr = (data.confidence * 100).toFixed(0);
+      parts.push(`信心度：${confStr}%`);
+    }
+
+    if (data.retrySemantics?.condition || data.retrySemantics?.description) {
+      const retryParts = [];
+      if (data.retrySemantics.condition) {
+        retryParts.push(`返工条件：${data.retrySemantics.condition}`);
+      }
+      if (data.retrySemantics.description) {
+        retryParts.push(`说明：${data.retrySemantics.description}`);
+      }
+      parts.push(retryParts.join("\n"));
+    }
+
+    return parts.length > 0 ? parts.join("\n") : undefined;
+  };
+
   return (
     <div
-      title={data.evidence?.length ? `依据原话：「${data.evidence.join("」「")}」` : data.unverified ? "没有在讲述中找到这一步的原话，待确认" : undefined}
+      title={buildTooltip()}
       style={{
         background: style.fill,
         border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px ${data.unverified && !deco?.border ? "dashed" : "solid"} ${deco?.selected ? "#2a78d6" : deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
@@ -83,14 +127,17 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
         color: "#1f2937",
         textAlign: "center",
         // Highlight (hovering a chat message's "图上 +N" tag) wins over the confirmed ring.
-        boxShadow: data.highlighted
-          ? "0 0 0 3px #f59e0b88, 0 4px 12px rgba(0,0,0,0.15)"
-          : data.confirmed
-            ? "0 0 0 2px #0ca30c33, 0 2px 8px rgba(0,0,0,0.08)"
-            : "0 1px 3px rgba(0,0,0,0.05)",
+        boxShadow: isDragging
+          ? "0 0 0 3px #2a78d688, 0 8px 16px rgba(42, 120, 214, 0.3)"
+          : data.highlighted
+            ? "0 0 0 3px #f59e0b88, 0 4px 12px rgba(0,0,0,0.15)"
+            : data.confirmed
+              ? "0 0 0 2px #0ca30c33, 0 2px 8px rgba(0,0,0,0.08)"
+              : "0 1px 3px rgba(0,0,0,0.05)",
         transition: "box-shadow 0.15s, opacity 0.15s",
         position: "relative",
         willChange: "transform",
+        zIndex: isDragging ? 1000 : undefined,
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -162,6 +209,10 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       confirmed: n.expert_confirmed,
       hasRetry: !!n.retry_semantics?.enabled,
       seq: n.seq,
+      actorRoles: n.actor_roles,
+      decisionQuestion: n.decision_question,
+      confidence: n.confidence,
+      retrySemantics: n.retry_semantics ? { condition: n.retry_semantics.condition, description: n.retry_semantics.description } : null,
     },
   }));
 
@@ -316,6 +367,10 @@ export function DagView({
         clickable: !!onNodeTap,
         subtitle: subtitles?.[n.id],
         seq: src?.seq,
+        actorRoles: src?.actor_roles,
+        decisionQuestion: src?.decision_question,
+        confidence: src?.confidence,
+        retrySemantics: src?.retry_semantics ? { condition: src.retry_semantics.condition, description: src.retry_semantics.description } : null,
       },
       };
     });
