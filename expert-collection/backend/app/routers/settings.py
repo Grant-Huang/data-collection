@@ -28,14 +28,22 @@ def get_settings() -> dict:
 def update_settings(patch: dict) -> dict:
     current = settings_module.get_effective_settings()
 
-    # API key fields: an empty string in the patch means "leave unchanged" (never overwrite
-    # a real key with a blank just because the form round-tripped a masked value).
+    # Secret fields: an empty string in the patch means "leave unchanged" (never overwrite a
+    # real key/path with a blank just because the form round-tripped a masked value). This
+    # covers api_key on every level, plus "L"'s endpoint (a local file path/internal address,
+    # masked the same way -- see settings_module.mask_for_display's docstring).
     level_patch = patch.get("llm_levels", {})
     for level, cfg in level_patch.items():
         if level not in current["llm_levels"]:
             raise HTTPException(status_code=400, detail=f"未知的模型级别: {level}")
         if isinstance(cfg, dict) and cfg.get("api_key") == "":
             cfg.pop("api_key")
+        if level == "L" and isinstance(cfg, dict) and cfg.get("endpoint") == "":
+            cfg.pop("endpoint")
+
+    voice_patch = patch.get("voice")
+    if isinstance(voice_patch, dict) and voice_patch.get("api_key") == "":
+        voice_patch.pop("api_key")
 
     slot_patch = patch.get("llm_slots", {})
     for slot, cfg in slot_patch.items():
