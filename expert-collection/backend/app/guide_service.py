@@ -49,7 +49,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import graph_ops, guide_phrasing, llm_client, task_layer
+from . import graph_ops, guide_phrasing, llm_client, ontology_capture, task_layer
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -81,9 +81,16 @@ NO_RETRY_CHIP = "没有返工的情况"
 REJOIN_END_CHIP = "到这里整件事就结束了"
 EXPERIENCE_NONE_CHIP = "没有特别靠经验的地方"
 EXPERIENCE_MIXED_CHIP = "规定和经验都有，说不清"
+# Ontology follow-ups (docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md).
+NO_CRITERION_CHIP = "没有具体数值，靠经验看"
+NO_TIME_LIMIT_CHIP = "没有明确的时间要求"
+NO_ESCALATION_CHIP = "没人跟进，就一直等"
 PARALLEL_CLARIFY_CHIPS = ["先后做", "同时做", "不确定，再想想"]
 
-SWEEP_ORDER = ["branch", "parallel", "approval", "retry", "experience"]
+# "criterion" / "timing" are the ontology follow-ups: thresholds + expected value where the
+# process forks (decision steps), time limit + escalation where it waits on a person
+# (approval steps). Both are skipped when there is no such step.
+SWEEP_ORDER = ["branch", "parallel", "approval", "retry", "criterion", "timing", "experience"]
 MAX_STEP_CHIPS = 8
 _CHIP_LABEL_MAX = 16
 
@@ -153,6 +160,7 @@ _SWEEP_KIND_BY_STAGE = {
     "sweep_parallel_pick": "parallel",
     "sweep_approval_pick": "approval", "approval_who": "approval",
     "sweep_retry_pick": "retry", "retry_target": "retry",
+    "criterion_detail": "criterion", "timing_limit": "timing", "timing_escalation": "timing",
     "experience": "experience", "experience_detail": "experience",
 }
 
@@ -308,6 +316,12 @@ def _dispatch_turn(state: dict[str, Any], text: str, graph: dict, skip_correctio
         return _handle_retry_pick(text, pending, ops, graph)
     if stage == "retry_target":
         return _handle_retry_target(text, cursor, pending, ops, graph)
+    if stage == "criterion_detail":
+        return _handle_criterion(text, cursor, pending, ops, graph)
+    if stage == "timing_limit":
+        return _handle_timing_limit(text, cursor, pending, ops, graph)
+    if stage == "timing_escalation":
+        return _handle_timing_escalation(text, cursor, pending, ops, graph)
     if stage == "experience":
         return _handle_experience(text, pending, ops, graph)
     if stage == "experience_detail":
@@ -407,6 +421,7 @@ def _next_sweep(ack: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
     done = list(pending.get("sweeps_done", []))
     builders = {"branch": _build_branch_sweep, "parallel": _build_parallel_sweep,
                 "approval": _build_approval_sweep, "retry": _build_retry_sweep,
+                "criterion": _build_criterion_sweep, "timing": _build_timing_sweep,
                 "experience": _build_experience_sweep}
     pending = {k: v for k, v in pending.items() if k not in ("_options", "_reasked", "_branch")}
     for kind in SWEEP_ORDER:
@@ -704,6 +719,87 @@ def _handle_retry_target(text: str, cursor: str, pending: dict, ops: list[dict],
         ack = "返工的说明记下了，提交前可以在图上再确认一下是哪一步。"
     if not graph.get("end_node_ids"):  # legacy (pre-sweep) session
         return _ask_end_condition(ack, cursor, {k: v for k, v in pending.items() if k != "_options"}, ops)
+    return _next_sweep(ack, pending, ops, graph)
+
+
+# --- Ontology follow-ups (design doc section 3: threshold / expected value / time / escalation)
+# One question per eligible step type, not per step -- the first decision / approval step only.
+# The expert's answer is always kept verbatim in `description` (the ontology lift turns it into an
+# expert_quote Evidence; node `evidence` is left alone because DagView reads a node with
+# evidence as "this graph tracks evidence" and would flag every other step); numbers become
+# structured only when they literally appear in it (ontology_capture never fills gaps).
+
+def _build_criterion_sweep(ack: str, g: dict, pending: dict, ops: list[dict]) -> _Out | None:
+    decision = next((n for n in g["nodes"] if n["node_type"] == "decision" and not n.get("evaluation_criteria")), None)
+    if decision is None:
+        return None
+    before = next((e["from"] for e in _in_edges(g, decision["node_id"])), None)
+    conds = [e.get("condition") for e in _out_edges(g, decision["node_id"]) if e.get("condition")]
+    where = f"「{_get_node(g, before)['label']}」之后" if before and _get_node(g, before) else "这里"
+    if len(conds) >= 2:
+        where += f"要分「{conds[0]}」还是「{conds[1]}」"
+    question = f"{where}，判断时有具体的标准吗？比如正常应该是多少、到多少就不行？"
+    nq = _q("criterion_discovery", "P5", question, chips=[NO_CRITERION_CHIP])
+    return _Out(ack, ops, nq, _st("criterion_detail", decision["node_id"], pending))
+
+
+def _handle_criterion(text: str, cursor: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
+    parsed = ontology_capture.parse_criterion_answer(text)
+    # "没超过 40 度就行" opens like a "no" but carries a number -- that's an answer.
+    if text == NO_CRITERION_CHIP or (_is_negative(text) and not parsed["limits"] and not parsed["expected"]):
+        return _next_sweep("好，这个判断主要靠经验。", pending, ops, graph)
+    node = _get_node(graph, cursor) or {}
+    criterion = {
+        "id": f"c{len(node.get('evaluation_criteria') or []) + 1}",
+        "name": (node.get("decision_question") or node.get("label") or "判断标准")[:40],
+        "type": "numeric_range" if parsed["limits"] or parsed["expected"] else "text",
+        "description": text,
+    }
+    if parsed["unit"]:
+        criterion["unit"] = parsed["unit"]
+    if parsed["limits"]:
+        criterion["limits"] = parsed["limits"]
+    if parsed["expected"]:
+        criterion["expected"] = parsed["expected"]
+    ops.append({"op": "update_node", "node_id": cursor, "patch": {
+        "evaluation_criteria": [*(node.get("evaluation_criteria") or []), criterion],
+    }})
+    return _next_sweep("判断标准记下了。", pending, ops, graph)
+
+
+def _build_timing_sweep(ack: str, g: dict, pending: dict, ops: list[dict]) -> _Out | None:
+    approval = next((n for n in g["nodes"] if n["node_type"] == "approval" and not n.get("sla_config")), None)
+    if approval is None:
+        return None
+    who = "、".join(approval.get("actor_roles") or []) or "对方"
+    question = f"等「{who}」确认这一步，一般最晚多久要有结果？"
+    nq = _q("timing_discovery", "P5", question, chips=[NO_TIME_LIMIT_CHIP])
+    return _Out(ack, ops, nq, _st("timing_limit", approval["node_id"], pending))
+
+
+def _handle_timing_limit(text: str, cursor: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
+    duration = ontology_capture.parse_duration(text)
+    if text == NO_TIME_LIMIT_CHIP or (_is_negative(text) and not duration):
+        return _next_sweep("好，没有明确的时间要求。", pending, ops, graph)
+    sla = {"type": "deadline", "from_trigger": "previous_node_completed", "description": text}
+    if duration:
+        sla["duration"] = duration
+    ops.append({"op": "update_node", "node_id": cursor, "patch": {"sla_config": sla}})
+    nq = _q("escalation_discovery", "P5", "如果过了这个时间还没确认，会找谁？", chips=[NO_ESCALATION_CHIP])
+    return _Out("时间要求记下了。", ops, nq, _st("timing_escalation", cursor, pending))
+
+
+def _handle_timing_escalation(text: str, cursor: str, pending: dict, ops: list[dict], graph: dict) -> _Out:
+    # The node's sla_config was set by the previous turn's op, so it is in `graph` already.
+    sla = dict((_get_node(graph, cursor) or {}).get("sla_config") or {})
+    if text == NO_ESCALATION_CHIP or _is_negative(text):
+        sla["violation_action"] = "none"
+        ack = "好，超时也没人跟进。"
+    else:
+        who = _strip_filler(text)[:20]
+        sla.update({"violation_action": "escalate", "escalate_to_role": who})
+        ack = f"记下了，超时会找「{who}」。"
+    ops.append({"op": "update_node", "node_id": cursor, "patch": {"sla_config": sla}})
     return _next_sweep(ack, pending, ops, graph)
 
 

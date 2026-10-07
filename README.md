@@ -21,5 +21,6 @@
 
 - [`docs/expert-workflow-collection/PRD.md`](docs/expert-workflow-collection/PRD.md) — 产品需求设计文档，覆盖桌面端三栏会话式采集设计 + 移动浏览器端新增需求（会话主页、历史抽屉、右滑查看可缩放 DAG 只读页、语音口述转文字输入）
 - [`docs/expert-workflow-collection/design/`](docs/expert-workflow-collection/design/) — 原始设计文档与高保真 HTML 原型（会话式采集 v2.1、平台级说明书、数据集设计规范）
+- [`docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md`](docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md) — 制造运营本体 v1：在 DAG 之上统一时间、阈值、预期值、证据、角色、权限、confidence、scope、异常与升级（对应 Schema v3）
 - [`docs/expert-workflow-collection/schema/`](docs/expert-workflow-collection/schema/) — Graph-based Workflow Dataset Schema v2 的 JSON Schema 定义与样例数据
 - [`docs/expert-workflow-collection/legacy-prototype/`](docs/expert-workflow-collection/legacy-prototype/) — 更早的 Streamlit 研究原型（Collaborative Workflow Distillation 实验平台），保留作为研究方法论参考

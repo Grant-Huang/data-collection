@@ -869,3 +869,18 @@ PermissionConflictAnalyzer._count_conflicts = staticmethod(_count_conflicts)
 ResourceConflictAnalyzer._count_conflicts = staticmethod(_count_conflicts)
 TimeConflictAnalyzer._count_conflicts = staticmethod(_count_conflicts)
 PolicyConflictAnalyzer._count_conflicts = staticmethod(_count_conflicts)
+
+
+# ============================================================================
+# 模块级便捷函数（routers/phase3b_conflict.py 与测试按这两个名字导入；此前缺失导致整个
+# FastAPI 应用导入失败）
+# ============================================================================
+
+def analyze_all_conflicts() -> ConflictReport:
+    """执行全面的冲突分析（委托给 ConflictResolutionEngine）"""
+    return ConflictResolutionEngine.analyze_all_conflicts()
+
+
+def generate_conflict_resolution_plan(report: ConflictReport) -> Dict[str, Any]:
+    """根据冲突报告生成解决计划（委托给 ConflictResolutionEngine）"""
+    return ConflictResolutionEngine.generate_resolution_plan(report.conflicts)

@@ -66,8 +66,6 @@ export const api = {
     req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
   regenerateGraphCheck: (id: string) =>
     req<RegenerateGraphCheck>("GET", `/api/expert-workflows/${id}/regenerate-check`),
-  regenerateGraph: (id: string) =>
-    req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/regenerate-graph`),
 
   getDraftPool: (sourceType: SourceType) =>
     req<{ source_type: SourceType; count: number }>("GET", `/api/datasets/draft-pool?source_type=${sourceType}`),

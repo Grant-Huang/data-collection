@@ -11,11 +11,12 @@ import ReactFlow, {
   type Node as RFNode,
   type ReactFlowInstance,
   MarkerType,
-  useNode,
+  type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { Graph, GraphNode, NodeType } from "../api/types";
+import { ontologyFacets, ontologyTooltip } from "../utils/ontologyFacets";
 
 const elk = new ELK();
 
@@ -59,6 +60,10 @@ interface WorkflowNodeData {
   // Stable step number (Node.seq) -- shown so a person can say "第3步" and mean exactly this
   // node, and the review-loop model is told the same number (review_agent._graph_for_prompt).
   seq?: number | null;
+  // Ontology dimensions captured on this step (threshold / time limit / escalation), as short
+  // tags under the label; `ontologyNotes` are the expert's verbatim answers for the tooltip.
+  facets?: string[];
+  ontologyNotes?: string[];
   // Schema attributes for tooltip display
   actorRoles?: string[];
   decisionQuestion?: string | null;
@@ -66,12 +71,15 @@ interface WorkflowNodeData {
   retrySemantics?: { condition: string | null; description: string | null } | null;
 }
 
-const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeData }) {
-  const node = useNode();
+// Extra ELK height for a node that shows a row of ontology tags, so tags never overlap the
+// next layer.
+const FACET_ROW_HEIGHT = 20;
+
+const WorkflowNode = memo(function WorkflowNode({ data, dragging }: NodeProps<WorkflowNodeData>) {
   const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   const deco = data.decoration;
-  const isDragging = node?.dragging ?? false;
+  const isDragging = dragging ?? false;
 
   const buildTooltip = () => {
     const parts: string[] = [];
@@ -105,6 +113,9 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
       }
       parts.push(retryParts.join("\n"));
     }
+
+    // Ontology follow-up answers (threshold / time limit / escalation), expert's own words.
+    parts.push(...(data.ontologyNotes ?? []));
 
     return parts.length > 0 ? parts.join("\n") : undefined;
   };
@@ -168,6 +179,22 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
       {data.subtitle && (
         <div style={{ fontSize: 11, fontWeight: 500, color: "#667085", marginTop: 3 }}>{data.subtitle}</div>
       )}
+      {!!data.facets?.length && (
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 4, marginTop: 5 }}>
+          {data.facets.map((f) => (
+            <span
+              key={f}
+              style={{
+                fontSize: 10.5, fontWeight: 600, color: "#475569", background: "#f1f5f9",
+                border: "1px solid #e2e8f0", borderRadius: 999, padding: "0 6px", lineHeight: "16px",
+                whiteSpace: "nowrap", textDecoration: "none",
+              }}
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
           ↺
@@ -191,7 +218,9 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       "elk.spacing.nodeNode": "50",
       "elk.layered.spacing.nodeNodeBetweenLayers": "90",
     },
-    children: graph.nodes.map((n) => ({ id: n.node_id, width: 230, height: 70 })),
+    children: graph.nodes.map((n) => ({
+      id: n.node_id, width: 230, height: 70 + (ontologyFacets(n).length ? FACET_ROW_HEIGHT : 0),
+    })),
     edges: graph.edges.map((e) => ({ id: e.edge_id, sources: [e.from], targets: [e.to] })),
   };
   const result = await elk.layout(elkGraph);
@@ -286,7 +315,7 @@ export function DagView({
   const layoutKey = useMemo(
     () =>
       [
-        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}`),
+        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}:${ontologyFacets(n).length ? 1 : 0}`),
         ...graph.edges.map((e) => `${e.edge_id}:${e.from}>${e.to}:${e.edge_type}:${e.condition ?? ""}`),
       ].join("|"),
     [graph],
@@ -367,6 +396,8 @@ export function DagView({
         clickable: !!onNodeTap,
         subtitle: subtitles?.[n.id],
         seq: src?.seq,
+        facets: src ? ontologyFacets(src) : [],
+        ontologyNotes: src ? ontologyTooltip(src) : [],
         actorRoles: src?.actor_roles,
         decisionQuestion: src?.decision_question,
         confidence: src?.confidence,
