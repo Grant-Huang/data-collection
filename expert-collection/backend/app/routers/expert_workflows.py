@@ -87,7 +87,7 @@ def _apply_review_state(record: dict, state: dict) -> None:
     ready = state["phase"] == "final_confirm" and graph_validator.is_valid(record["graph"])
     record["completion"] = {"score": review_agent.progress(state), "ready_for_confirmation": ready}
     record["unresolved"] = []
-    record["validation"] = graph_validator.validate(record["graph"])
+    record["validation"] = _validate_with_phase3a(record["graph"])
     if record["status"] != "expert_confirmed":
         record["status"] = "needs_confirmation" if ready else "collecting"
 
@@ -619,8 +619,9 @@ def regenerate_graph(workflow_id: str) -> WorkflowRecord:
     except llm_client.LLMError as e:
         raise HTTPException(status_code=502, detail=f"重新生成流程图失败：{e}") from e
 
-    issues = graph_validator.validate(new_graph)
-    if any(i["level"] == "error" for i in issues):
+    issues = _validate_with_phase3a(new_graph)
+    phase1_errors = [i for i in issues if not i.get('code', '').startswith('phase3a_')]
+    if any(i["level"] == "error" for i in phase1_errors):
         raise HTTPException(
             status_code=422,
             detail={"message": "模型重新生成的流程图未通过结构校验，原有流程图未改动", "issues": issues},
