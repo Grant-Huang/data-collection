@@ -481,7 +481,15 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "（已弃用，保留向后兼容）简单文本形式的决策标准。建议迁移到 evaluation_criteria（结构化形式）。"
+        },
+        "evaluation_criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluation_criterion"
+          },
+          "description": "结构化的评估标准，取代 decision_criteria。包含指标定义、阈值、逻辑关系等。"
         },
         "rule_ids": {
           "type": "array",
@@ -496,7 +504,12 @@
           }
         },
         "expected_duration": {
-          "type": "string"
+          "type": "string",
+          "description": "预期工作时长（自然语言，如'2h'）。建议迁移到 sla_config（结构化形式）。"
+        },
+        "sla_config": {
+          "$ref": "#/$defs/sla_config",
+          "description": "服务级别协议配置：时间约束、deadline、SLA 类型等。"
         },
         "is_optional": {
           "type": "boolean"
@@ -531,6 +544,126 @@
             },
             "description": {
               "type": "string"
+            },
+            "is_temporary": {
+              "type": "boolean",
+              "description": "是否为临时措施（如临时 bypass、临时工艺变更）"
+            },
+            "max_retries_per_phase": {
+              "type": "integer",
+              "description": "单阶段最多允许重试次数"
+            },
+            "expiration": {
+              "type": "object",
+              "description": "临时措施的有效期限制",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "description": "有效期时长（ISO 8601，如 'PT72H' 表示 72 小时）"
+                },
+                "lot_count": {
+                  "type": "integer",
+                  "description": "有效期内的最多 lot 数（如 3 lot）"
+                },
+                "expiration_trigger": {
+                  "type": "string",
+                  "enum": ["duration_or_count", "duration_and_count"],
+                  "description": "有效期触发方式：duration_or_count(先达到任一条件)或 duration_and_count(两个条件都达到)"
+                }
+              }
+            },
+            "revocation_trigger": {
+              "type": "object",
+              "description": "临时措施失效的条件",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["time_passed", "reoccurrence", "condition_met"],
+                  "description": "失效类型：time_passed(时间过期)、reoccurrence(问题重现)、condition_met(条件成立)"
+                },
+                "days": {
+                  "type": "integer",
+                  "description": "失效天数（如 90 表示 90 天后自动失效）"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "失效条件的详细说明"
+                }
+              }
+            },
+            "escalation_on_repeat": {
+              "type": "object",
+              "description": "重复出现时的升级处理",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "trigger": {
+                  "type": "string",
+                  "enum": ["same_condition", "pattern_detected"],
+                  "description": "升级触发条件：same_condition(相同问题)或 pattern_detected(模式识别)"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": ["escalate_to_manager", "escalate_to_executive", "create_capa", "stop_production"],
+                  "description": "升级后的处理动作"
+                }
+              }
+            }
+          }
+        },
+        "approval_matrix": {
+          "type": "array",
+          "description": "权限分级和多层签字流程（用于 release、approval 等节点）",
+          "items": {
+            "type": "object",
+            "properties": {
+              "approval_type": {
+                "type": "string",
+                "description": "批准类型（如 equipment_release、process_release、quality_release）"
+              },
+              "required_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "需要批准的角色列表（如 equipment_engineer、process_engineer、quality_engineer）"
+              },
+              "sequence": {
+                "type": "string",
+                "enum": ["parallel", "sequential"],
+                "description": "多个角色的批准顺序：parallel(并行)或 sequential(顺序)"
+              },
+              "criteria": {
+                "type": "string",
+                "description": "批准的评估标准或条件（如'设备状态正常且无报警'）"
+              },
+              "escalation_level": {
+                "type": "integer",
+                "description": "如果某角色拒绝，升级到哪一级（如 1=manager, 2=director）"
+              }
+            }
+          }
+        },
+        "containment_scope": {
+          "type": "object",
+          "description": "追溯和隔离范围（Phase 3-A 简化版）：针对异常情况的追溯和产品隔离维度",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "enum": ["equipment_id", "lot_id", "material_id", "line_id", "mold_id", "shift_id"],
+              "description": "追溯和隔离的维度"
+            },
+            "rule": {
+              "type": "string",
+              "description": "具体的隔离规则（如'all_products_on_same_equipment'）"
+            },
+            "applicable_conditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "此隔离规则适用的条件列表"
             }
           }
         }
@@ -592,6 +725,21 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "containment_scope": {
+          "type": "object",
+          "description": "追溯和隔离范围（仅在边代表异常处理或隔离行动时使用）",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "enum": ["equipment_id", "lot_id", "material_id", "line_id", "mold_id", "shift_id"],
+              "description": "追溯和隔离的维度"
+            },
+            "rule": {
+              "type": "string",
+              "description": "具体的隔离规则"
+            }
           }
         }
       }
@@ -769,6 +917,134 @@
         },
         "uri_or_reference": {
           "type": "string"
+        }
+      }
+    },
+    "sla_config": {
+      "type": "object",
+      "description": "服务级别协议（SLA）配置：定义节点的时间约束、deadline 类型及其含义",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["deadline", "target", "warn_threshold"],
+          "description": "deadline=硬性截止时间；target=目标时长；warn_threshold=预警阈值"
+        },
+        "duration": {
+          "type": "string",
+          "description": "时长表示（ISO 8601 格式或自然语言，如'PT2H'或'2h'）"
+        },
+        "from_trigger": {
+          "type": "string",
+          "enum": ["previous_node_completed", "workflow_start", "manual_start"],
+          "description": "时间计算的起点：从前序节点完成开始、从工作流开始、还是手动开始"
+        },
+        "enforced": {
+          "type": "boolean",
+          "description": "是否为硬性约束（违反会导致流程异常），还是仅作为参考"
+        },
+        "violation_action": {
+          "type": "string",
+          "enum": ["escalate", "notify", "auto_reassign", "none"],
+          "description": "超期时的处理方式：升级、通知、自动转派、不处理"
+        },
+        "description": {
+          "type": "string",
+          "description": "人类可读的 SLA 说明，如'必须在前序节点完成后2小时内完成初评'"
+        }
+      }
+    },
+    "evaluation_criterion": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "description": "单个评估标准或决策条件",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "标准的唯一标识符（如'defect_density'）"
+        },
+        "name": {
+          "type": "string",
+          "description": "人类可读的标准名称（如'缺陷密度'）"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["metric", "categorical", "boolean", "text", "numeric_range"],
+          "description": "标准的数据类型：metric(指标)、categorical(分类)、boolean(是否)、text(文本)、numeric_range(数值区间)"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "是否为必填项"
+        },
+        "unit": {
+          "type": "string",
+          "description": "单位（如'defects/mm²'、'%'）"
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "数值型标准的阈值定义（如normal/warning/critical等级）",
+          "properties": {
+            "normal": {
+              "type": "string"
+            },
+            "warning": {
+              "type": "string"
+            },
+            "critical": {
+              "type": "string"
+            }
+          }
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "分类型标准的允许值列表"
+        },
+        "logic": {
+          "type": "string",
+          "enum": ["AND", "OR"],
+          "description": "该标准与下一个标准的逻辑关系（默认 AND）"
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "依赖的前置标准 id（如果有条件依赖）"
+        },
+        "description": {
+          "type": "string",
+          "description": "标准的详细说明或评估方法"
+        },
+        "aggregation": {
+          "type": "object",
+          "description": "聚合和趋势条件（Phase 3-A）：支持时间序列判断而不仅仅是单点阈值",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["trend", "pattern", "continuous", "statistical"],
+              "description": "聚合方法：trend(趋势)、pattern(模式)、continuous(连续)、statistical(统计)"
+            },
+            "window_size": {
+              "type": "integer",
+              "description": "时间窗口大小（如 7 表示过去 7 个数据点）"
+            },
+            "operator": {
+              "type": "string",
+              "enum": ["all_increasing", "all_decreasing", "two_exceeding", "variance_above", "mean_shift", "cycle_detected"],
+              "description": "聚合判断操作符：all_increasing(全部上升)、all_decreasing(全部下降)、two_exceeding(连续两个超过)、variance_above(方差超过)、mean_shift(均值偏移)、cycle_detected(周期检测)"
+            },
+            "threshold": {
+              "type": "string",
+              "description": "聚合条件的阈值（如 '5%'表示方差超过 5%）"
+            },
+            "min_samples": {
+              "type": "integer",
+              "description": "进行判断前需要的最少数据点数"
+            },
+            "description": {
+              "type": "string",
+              "description": "聚合条件的自然语言说明（如'连续两点接近上限'）"
+            }
+          }
         }
       }
     }

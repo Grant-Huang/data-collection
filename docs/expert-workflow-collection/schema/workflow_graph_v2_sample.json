@@ -94,6 +94,55 @@
             "node_id": "n9",
             "node_type": "activity",
             "label": "试产并首件检验",
+            "actor_roles": ["操作员"],
+            "expected_duration": "4h",
+            "sla_config": {
+              "type": "deadline",
+              "duration": "PT4H",
+              "from_trigger": "previous_node_completed",
+              "enforced": true,
+              "violation_action": "escalate",
+              "description": "必须在汇总分析完成后4小时内完成首件检验"
+            },
+            "evaluation_criteria": [
+              {
+                "id": "first_piece_quality",
+                "name": "首件合格性",
+                "type": "boolean",
+                "required": true,
+                "unit": "pass/fail",
+                "logic": "AND",
+                "description": "首件产品是否符合质量标准"
+              },
+              {
+                "id": "dimension_conformance",
+                "name": "尺寸合格度",
+                "type": "metric",
+                "required": true,
+                "unit": "%",
+                "thresholds": {
+                  "normal": ">= 95%",
+                  "warning": "85-95%",
+                  "critical": "< 85%"
+                },
+                "logic": "AND",
+                "description": "首件检验中尺寸合格的特征点比例"
+              },
+              {
+                "id": "surface_defects",
+                "name": "表面缺陷密度",
+                "type": "metric",
+                "required": true,
+                "unit": "defects/mm²",
+                "thresholds": {
+                  "normal": "< 5 defects/mm²",
+                  "warning": "5-10 defects/mm²",
+                  "critical": "> 10 defects/mm²"
+                },
+                "logic": "AND",
+                "description": "检查表面缺陷（划伤、污渍等）的密度"
+              }
+            ],
             "retry_semantics": {
               "enabled": true,
               "rework_reference_node_id": "n5",
