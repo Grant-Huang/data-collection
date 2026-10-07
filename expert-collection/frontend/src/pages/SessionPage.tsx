@@ -170,18 +170,106 @@ export function SessionPage() {
               </button>
             </div>
           )}
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
             {/* Two tabs: 任务协作 (task layer) / SOP 步骤 (step layer) -- IMPLEMENTATION_PLAN.md section 18. */}
-            {active && <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />}
+            {active && (
+              <>
+                {regenerating && (
+                  <div style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "rgba(255, 255, 255, 0.9)",
+                    zIndex: 10,
+                    flexDirection: "column",
+                    gap: 12
+                  }}>
+                    <div style={{ fontSize: 14, color: "#667085", fontWeight: 600 }}>正在重新生成流程图</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      <span style={{ display: "inline-block", width: 20 }}>
+                        <span style={{ animation: "dotAnimation 1.5s infinite" }}>.</span>
+                        <span style={{ animation: "dotAnimation 1.5s infinite", animationDelay: "0.3s" }}>.</span>
+                        <span style={{ animation: "dotAnimation 1.5s infinite", animationDelay: "0.6s" }}>.</span>
+                      </span>
+                    </div>
+                    <style>{`
+                      @keyframes dotAnimation {
+                        0%, 20% { opacity: 0.4; }
+                        50% { opacity: 1; }
+                        100% { opacity: 0.4; }
+                      }
+                    `}</style>
+                  </div>
+                )}
+                <div style={{ opacity: regenerating ? 0.4 : 1, pointerEvents: regenerating ? "none" : "auto" }}>
+                  <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
 
-      {error && (
-        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12, zIndex: 10 }}>
-          {error}
-        </div>
-      )}
+      {error && (() => {
+        let errorMsg = error;
+        let errorType = "other";
+        try {
+          const parsed = JSON.parse(error);
+          errorMsg = parsed.message;
+          errorType = parsed.type;
+        } catch {
+          // error is plain text
+        }
+
+        const isTimeout = errorType === "timeout";
+        return (
+          <div style={{
+            position: "absolute",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#991b1b",
+            borderRadius: 8,
+            padding: "12px 16px",
+            fontSize: 12,
+            zIndex: 10,
+            maxWidth: 400,
+            wordBreak: "break-word"
+          }}>
+            <div style={{ marginBottom: isTimeout ? 8 : 0, fontWeight: 600 }}>
+              {isTimeout ? "流程图重新生成超时" : "流程图重新生成失败"}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#7f1d1d", marginBottom: 8 }}>
+              {errorMsg}
+            </div>
+            {isTimeout && (
+              <div style={{ fontSize: 11, color: "#7f1d1d", marginBottom: 8 }}>
+                可以在「系统管理」→「模型设置」→「模型参数」中增加「流程图重新生成」超时时间
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                onClick={handleRegenerateGraph}
+                style={{
+                  background: "#991b1b",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "4px 10px",
+                  fontSize: 11.5,
+                  cursor: "pointer"
+                }}
+              >
+                重新生成
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
