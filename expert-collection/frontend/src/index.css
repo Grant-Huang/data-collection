@@ -175,20 +175,29 @@ body {
 .chat-expert-meta button { border: none; background: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font-size: 11.5px; }
 .chat-raw { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.25); font-size: 12px; }
 
-/* React Flow DAG: ensure dragging nodes are always visible */
-.react-flow__node.dragging {
-  z-index: 1000 !important;
-  pointer-events: auto;
-}
-
+/* React Flow DAG: ensure nodes are always visible during interaction */
 .react-flow__node {
-  transition: none !important;
+  pointer-events: auto !important;
+  z-index: auto;
 }
 
+/* Dragging and selected nodes stay on top */
+.react-flow__node.selected,
+.react-flow__node[data-id]:active {
+  z-index: 1000 !important;
+}
+
+/* Ensure nodes layer is above edges */
 .react-flow__nodes {
   pointer-events: none;
+  z-index: 10;
 }
 
+.react-flow__edges {
+  z-index: 1;
+}
+
+/* Smooth transitions for node movements */
 .react-flow__node {
-  pointer-events: auto;
+  transition: box-shadow 0.15s, opacity 0.15s;
 }

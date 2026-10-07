@@ -11,7 +11,7 @@ import ReactFlow, {
   type Node as RFNode,
   type ReactFlowInstance,
   MarkerType,
-  useNodeId,
+  useNode,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -62,9 +62,11 @@ interface WorkflowNodeData {
 }
 
 const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeData }) {
+  const node = useNode();
   const style = NODE_STYLE[data.nodeType] ?? NODE_STYLE.activity;
   const radius = style.shape === "pill" ? 999 : style.shape === "diamond" ? 10 : 8;
   const deco = data.decoration;
+  const isDragging = node?.dragging ?? false;
   return (
     <div
       title={data.evidence?.length ? `依据原话：「${data.evidence.join("」「")}」` : data.unverified ? "没有在讲述中找到这一步的原话，待确认" : undefined}
@@ -83,14 +85,17 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
         color: "#1f2937",
         textAlign: "center",
         // Highlight (hovering a chat message's "图上 +N" tag) wins over the confirmed ring.
-        boxShadow: data.highlighted
-          ? "0 0 0 3px #f59e0b88, 0 4px 12px rgba(0,0,0,0.15)"
-          : data.confirmed
-            ? "0 0 0 2px #0ca30c33, 0 2px 8px rgba(0,0,0,0.08)"
-            : "0 1px 3px rgba(0,0,0,0.05)",
+        boxShadow: isDragging
+          ? "0 0 0 3px #2a78d688, 0 8px 16px rgba(42, 120, 214, 0.3)"
+          : data.highlighted
+            ? "0 0 0 3px #f59e0b88, 0 4px 12px rgba(0,0,0,0.15)"
+            : data.confirmed
+              ? "0 0 0 2px #0ca30c33, 0 2px 8px rgba(0,0,0,0.08)"
+              : "0 1px 3px rgba(0,0,0,0.05)",
         transition: "box-shadow 0.15s, opacity 0.15s",
         position: "relative",
         willChange: "transform",
+        zIndex: isDragging ? 1000 : undefined,
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
