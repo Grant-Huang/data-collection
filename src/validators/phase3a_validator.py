@@ -23,11 +23,13 @@ class ValidationError:
     message: str  # 用户可读的错误信息
     suggestion: Optional[str] = None  # 如何修复的建议
     severity: ValidationSeverity = ValidationSeverity.ERROR  # 严重级别
+    object_kind: str = 'node'  # object_id 指向的对象类型：'node' 或 'edge'
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典用于 JSON 序列化"""
         return {
             'object_id': self.object_id,
+            'object_kind': self.object_kind,
             'field': self.field,
             'code': self.code,
             'message': self.message,
@@ -58,6 +60,19 @@ class Phase3AValidator:
         'equipment_id', 'lot_id', 'material_id', 'line_id', 'mold_id', 'shift_id'
     }
 
+    # —— 本体维度（阈值 / escalation / 证据）——
+    # 需要数值阈值与单位的评估标准类型（schema: evaluation_criterion.type）
+    NUMERIC_CRITERION_TYPES = {'metric', 'numeric_range'}
+
+    # 隐含"升级给某人"的 escalation_on_repeat.action；create_capa / stop_production 是动作而非移交
+    ESCALATE_ACTIONS = {'escalate_to_manager', 'escalate_to_executive'}
+
+    # 结构性节点：不承载专家陈述的内容，不要求证据来源
+    STRUCTURAL_NODE_TYPES = {'start', 'end'}
+
+    # "裸数字"阈值：只由数字、比较符、区间符号构成（如 "3"、"< 40"、"40-50"、"≥0.5"），不含任何单位
+    _BARE_NUMBER_RE = re.compile(r'^[\s<>=≤≥±~+\-–—.,\d]+$')
+
     def __init__(self):
         """初始化验证器"""
         self.errors: List[ValidationError] = []
@@ -73,7 +88,8 @@ class Phase3AValidator:
             验证错误列表
         """
         self.errors = []
-        node_id = node.get('id', 'unknown')
+        # 主应用的图节点使用 node_id；早期 Phase 3-A 示例使用 id，两者都兼容
+        node_id = node.get('node_id') or node.get('id', 'unknown')
 
         # 验证权限矩阵
         if node.get('approval_matrix'):
@@ -91,7 +107,196 @@ class Phase3AValidator:
         if node.get('containment_scope'):
             self._validate_containment_scope(node_id, node['containment_scope'])
 
+        # —— 本体维度 ——
+        # 阈值缺单位 / 数值型标准缺阈值
+        if isinstance(node.get('evaluation_criteria'), list):
+            self._validate_threshold_units(node_id, node['evaluation_criteria'])
+
+        # escalation 缺接收角色（SLA 超期升级 / 重复出现升级）
+        self._validate_escalation_receivers(node_id, node)
+
         return self.errors
+
+    def validate_evidence(self, obj: Dict[str, Any], kind: str = 'node') -> List[ValidationError]:
+        """
+        验证节点或边的证据维度：证据来源（source_turn_ids）与 confidence。
+
+        PRD：每个节点/边必须保留 source_turn_ids（证据可追溯）、confidence、expert_confirmed，
+        模型抽取结果不等于已确认事实。该检查放在图级（SchemaValidator）调用，
+        因为它针对的是图中每个对象，而不是某个 Phase 3-A 字段。
+
+        Args:
+            obj: 节点或边对象
+            kind: 'node' 或 'edge'
+
+        Returns:
+            验证错误列表
+        """
+        errors: List[ValidationError] = []
+        if not isinstance(obj, dict):
+            return errors
+
+        if kind == 'edge':
+            object_id = obj.get('edge_id') or obj.get('id', 'unknown')
+        else:
+            object_id = obj.get('node_id') or obj.get('id', 'unknown')
+            # start/end 是结构性节点，不需要证据来源
+            if obj.get('node_type') in self.STRUCTURAL_NODE_TYPES:
+                return errors
+
+        # 证据缺来源：既没有对话证据，也没有专家确认 → 无法追溯这条事实从哪里来
+        source_turn_ids = obj.get('source_turn_ids')
+        if not source_turn_ids and not obj.get('expert_confirmed'):
+            errors.append(ValidationError(
+                object_id,
+                'source_turn_ids',
+                'evidence_missing_source',
+                f'{"边" if kind == "edge" else "节点"}缺少证据来源：既没有 source_turn_ids，也未经专家确认',
+                suggestion='关联提出该内容的对话轮次（source_turn_ids），或请专家确认（expert_confirmed）',
+                severity=ValidationSeverity.WARNING,
+                object_kind=kind,
+            ))
+        elif source_turn_ids is not None and not isinstance(source_turn_ids, list):
+            errors.append(ValidationError(
+                object_id,
+                'source_turn_ids',
+                'type_error',
+                'source_turn_ids 必须是数组',
+                severity=ValidationSeverity.ERROR,
+                object_kind=kind,
+            ))
+
+        # confidence 必须是 [0, 1] 区间内的数（schema: minimum 0, maximum 1）
+        confidence = obj.get('confidence')
+        if confidence is not None:
+            # bool 是 int 的子类，需要单独排除
+            is_number = isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+            if not is_number or not 0 <= confidence <= 1:
+                errors.append(ValidationError(
+                    object_id,
+                    'confidence',
+                    'invalid_confidence',
+                    f'confidence 必须是 0 到 1 之间的数，当前为：{confidence!r}',
+                    severity=ValidationSeverity.ERROR,
+                    object_kind=kind,
+                ))
+
+        return errors
+
+    def _validate_threshold_units(self, node_id: str, criteria_list: List[Any]) -> None:
+        """
+        验证评估标准的阈值维度：
+        - 阈值（thresholds 或 aggregation.threshold）是裸数字且没有 unit → WARNING threshold_missing_unit
+        - 数值型标准（metric / numeric_range）既没有阈值也没有聚合条件 → WARNING metric_missing_threshold
+        """
+        for i, criterion in enumerate(criteria_list):
+            if not isinstance(criterion, dict):
+                continue
+            path = f'evaluation_criteria[{i}]'
+            label = criterion.get('name') or criterion.get('id') or f'第 {i+1} 项'
+
+            # 收集本条标准里所有非空阈值（分级阈值 + 聚合阈值）
+            thresholds = criterion.get('thresholds')
+            level_values = [
+                str(v).strip() for v in thresholds.values()
+                if v is not None and str(v).strip()
+            ] if isinstance(thresholds, dict) else []
+            agg = criterion.get('aggregation')
+            agg_value = str(agg.get('threshold') or '').strip() if isinstance(agg, dict) else ''
+            threshold_values = level_values + ([agg_value] if agg_value else [])
+
+            unit = criterion.get('unit')
+            has_unit = isinstance(unit, str) and bool(unit.strip())
+
+            # 阈值值里已自带单位（如 "3°C"、"< 85%"）时视为自描述；只有出现裸数字才算缺单位
+            bare_values = [v for v in threshold_values if self._BARE_NUMBER_RE.match(v)]
+            if bare_values and not has_unit:
+                self.errors.append(ValidationError(
+                    node_id,
+                    f'{path}.unit',
+                    'threshold_missing_unit',
+                    f'评估标准「{label}」的阈值 {", ".join(bare_values)} 缺少单位',
+                    suggestion='补充 unit（如 %、mm、℃、ppm、defects/mm²），无量纲指标也请写明（如 "ratio"）',
+                    severity=ValidationSeverity.WARNING,
+                ))
+
+            if (criterion.get('type') in self.NUMERIC_CRITERION_TYPES
+                    and not level_values and not isinstance(agg, dict)):
+                self.errors.append(ValidationError(
+                    node_id,
+                    f'{path}.thresholds',
+                    'metric_missing_threshold',
+                    f'数值型评估标准「{label}」没有定义阈值或预期值',
+                    suggestion='补充 thresholds（normal / warning / critical）或 aggregation 条件',
+                    severity=ValidationSeverity.WARNING,
+                ))
+
+    def _validate_escalation_receivers(self, node_id: str, node: Dict[str, Any]) -> None:
+        """
+        验证 escalation 的接收角色（escalate_to_roles）：
+        - sla_config.violation_action == 'escalate' 但没有接收角色 → ERROR（超期后无人接手）
+        - retry_semantics.escalation_on_repeat 启用但没有 action → ERROR
+        - escalation_on_repeat.action 为 escalate_to_* 但没有接收角色 → WARNING（action 只给了级别）
+        - escalate_to_roles 中出现未知角色 → ERROR（与 approval_matrix 的 invalid_role 一致）
+        """
+        # SLA 超期升级
+        sla = node.get('sla_config')
+        if isinstance(sla, dict) and sla.get('violation_action') == 'escalate':
+            roles = sla.get('escalate_to_roles')
+            if not roles:
+                self.errors.append(ValidationError(
+                    node_id,
+                    'sla_config.escalate_to_roles',
+                    'escalation_missing_receiver',
+                    'SLA 超期处理为 escalate，但没有指定升级接收角色',
+                    suggestion=f'在 escalate_to_roles 中指定接收角色：{", ".join(sorted(self.VALID_ROLES))}',
+                    severity=ValidationSeverity.ERROR,
+                ))
+            else:
+                self._check_roles(node_id, 'sla_config.escalate_to_roles', roles)
+
+        # 重复出现时升级
+        retry = node.get('retry_semantics')
+        repeat = retry.get('escalation_on_repeat') if isinstance(retry, dict) else None
+        if isinstance(repeat, dict) and repeat.get('enabled'):
+            field = 'retry_semantics.escalation_on_repeat'
+            action = repeat.get('action')
+            roles = repeat.get('escalate_to_roles')
+            if not action:
+                self.errors.append(ValidationError(
+                    node_id,
+                    f'{field}.action',
+                    'required_field',
+                    '已启用重复升级，但没有指定升级动作 action',
+                    severity=ValidationSeverity.ERROR,
+                ))
+            elif action in self.ESCALATE_ACTIONS and not roles:
+                self.errors.append(ValidationError(
+                    node_id,
+                    f'{field}.escalate_to_roles',
+                    'escalation_missing_receiver',
+                    f'升级动作为 {action}，但没有指定具体接收角色',
+                    suggestion=f'在 escalate_to_roles 中指定接收角色：{", ".join(sorted(self.VALID_ROLES))}',
+                    severity=ValidationSeverity.WARNING,
+                ))
+            if roles:
+                self._check_roles(node_id, f'{field}.escalate_to_roles', roles)
+
+    def _check_roles(self, node_id: str, field: str, roles: Any) -> None:
+        """校验角色列表：必须是数组且每个角色都在 VALID_ROLES 中"""
+        if not isinstance(roles, list):
+            self.errors.append(ValidationError(
+                node_id, field, 'type_error', f'{field} 必须是数组',
+                severity=ValidationSeverity.ERROR,
+            ))
+            return
+        for role in roles:
+            if role not in self.VALID_ROLES:
+                self.errors.append(ValidationError(
+                    node_id, field, 'invalid_role', f'不认可的角色：{role}',
+                    suggestion=f'使用以下角色之一：{", ".join(sorted(self.VALID_ROLES))}',
+                    severity=ValidationSeverity.ERROR,
+                ))
 
     def _validate_approval_matrix(self, node_id: str, approval_matrix: Any) -> None:
         """验证权限矩阵的完整性"""
@@ -545,10 +750,14 @@ class SchemaValidator:
         """
         all_errors = []
 
-        # 验证所有节点
-        if 'nodes' in workflow_graph:
-            for node in workflow_graph['nodes']:
-                all_errors.extend(self.phase3a_validator.validate_node(node))
+        # 验证所有节点（Phase 3-A 字段 + 证据维度）
+        for node in workflow_graph.get('nodes') or []:
+            all_errors.extend(self.phase3a_validator.validate_node(node))
+            all_errors.extend(self.phase3a_validator.validate_evidence(node, 'node'))
+
+        # 验证所有边（证据维度）
+        for edge in workflow_graph.get('edges') or []:
+            all_errors.extend(self.phase3a_validator.validate_evidence(edge, 'edge'))
 
         # 统计错误
         error_count = sum(1 for e in all_errors if e.severity == ValidationSeverity.ERROR)

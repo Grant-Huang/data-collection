@@ -140,6 +140,7 @@ class TestAggregationValidation(unittest.TestCase):
                 {
                     'id': 'temp_trend',
                     'name': '温度趋势',
+                    'unit': '°C',
                     'aggregation': {
                         'method': 'trend',
                         'window_size': 7,
@@ -491,6 +492,255 @@ class TestSchemaValidator(unittest.TestCase):
         result = self.validator.validate_graph(graph)
         self.assertIsNotNone(result['summary'], '应该生成摘要')
         self.assertIn('错误', result['summary'], '摘要应该包含错误信息')
+
+
+def _codes(errors):
+    """辅助函数：提取 (code, severity) 对，便于断言"""
+    return [(e.code, e.severity) for e in errors]
+
+
+class TestThresholdUnitValidation(unittest.TestCase):
+    """本体维度：阈值 / 预期值 / 单位"""
+
+    def setUp(self):
+        self.validator = Phase3AValidator()
+
+    def _node(self, criterion):
+        return {'node_id': 'n1', 'evaluation_criteria': [criterion]}
+
+    def test_bare_threshold_without_unit_warns(self):
+        """分级阈值是裸数字且没有 unit → WARNING threshold_missing_unit"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'temp', 'name': '温度', 'type': 'metric',
+            'thresholds': {'normal': '< 40', 'warning': '40-50', 'critical': '> 50'},
+        }))
+        self.assertIn(('threshold_missing_unit', ValidationSeverity.WARNING), _codes(errors))
+        err = next(e for e in errors if e.code == 'threshold_missing_unit')
+        self.assertEqual(err.field, 'evaluation_criteria[0].unit')
+        self.assertEqual(err.object_id, 'n1', '应使用主应用的 node_id')
+
+    def test_bare_aggregation_threshold_without_unit_warns(self):
+        """聚合阈值是裸数字且没有 unit → WARNING"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'trend', 'name': '趋势',
+            'aggregation': {'method': 'trend', 'window_size': 7, 'threshold': '3',
+                            'description': '连续上升'},
+        }))
+        self.assertIn(('threshold_missing_unit', ValidationSeverity.WARNING), _codes(errors))
+
+    def test_threshold_with_unit_field_passes(self):
+        """有 unit 字段 → 不报"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'temp', 'name': '温度', 'type': 'metric', 'unit': '°C',
+            'thresholds': {'normal': '< 40', 'critical': '> 50'},
+        }))
+        self.assertEqual(errors, [])
+
+    def test_threshold_with_inline_unit_passes(self):
+        """阈值值里已自带单位（如 '< 85%'、'3°C'）→ 视为自描述，不报"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'conf', 'name': '尺寸合格度', 'type': 'metric',
+            'thresholds': {'normal': '>= 95%', 'critical': '< 85%'},
+            'aggregation': {'method': 'trend', 'threshold': '3°C', 'description': 'x'},
+        }))
+        self.assertNotIn('threshold_missing_unit', [e.code for e in errors])
+
+    def test_blank_unit_counts_as_missing(self):
+        """unit 为空白字符串等同于缺失"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'temp', 'name': '温度', 'unit': '  ', 'thresholds': {'critical': '50'},
+        }))
+        self.assertIn('threshold_missing_unit', [e.code for e in errors])
+
+    def test_metric_without_threshold_warns(self):
+        """数值型标准既无阈值也无聚合 → WARNING metric_missing_threshold"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'temp', 'name': '温度', 'type': 'numeric_range', 'unit': '°C',
+            'thresholds': {'normal': '', 'critical': None},
+        }))
+        self.assertIn(('metric_missing_threshold', ValidationSeverity.WARNING), _codes(errors))
+
+    def test_non_numeric_criterion_without_threshold_passes(self):
+        """boolean / categorical 标准不要求阈值"""
+        errors = self.validator.validate_node(self._node({
+            'id': 'fa', 'name': '首件合格', 'type': 'boolean',
+        }))
+        self.assertEqual(errors, [])
+
+
+class TestEscalationReceiverValidation(unittest.TestCase):
+    """本体维度：escalation 的接收角色"""
+
+    def setUp(self):
+        self.validator = Phase3AValidator()
+
+    def test_sla_escalate_without_receiver_is_error(self):
+        """SLA 超期升级但没有接收角色 → ERROR escalation_missing_receiver"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'type': 'deadline', 'duration': 'PT2H', 'violation_action': 'escalate'},
+        })
+        self.assertIn(('escalation_missing_receiver', ValidationSeverity.ERROR), _codes(errors))
+        err = next(e for e in errors if e.code == 'escalation_missing_receiver')
+        self.assertEqual(err.field, 'sla_config.escalate_to_roles')
+
+    def test_sla_escalate_with_receiver_passes(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'violation_action': 'escalate',
+                           'escalate_to_roles': ['production_manager']},
+        })
+        self.assertEqual(errors, [])
+
+    def test_sla_escalate_with_unknown_role_is_error(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'violation_action': 'escalate', 'escalate_to_roles': ['boss']},
+        })
+        self.assertIn(('invalid_role', ValidationSeverity.ERROR), _codes(errors))
+
+    def test_sla_escalate_roles_not_list_is_error(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'violation_action': 'escalate', 'escalate_to_roles': 'production_manager'},
+        })
+        self.assertIn(('type_error', ValidationSeverity.ERROR), _codes(errors))
+
+    def test_sla_notify_does_not_need_receiver(self):
+        """非 escalate 的 violation_action 不要求接收角色"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1', 'sla_config': {'violation_action': 'notify'},
+        })
+        self.assertEqual(errors, [])
+
+    def test_repeat_escalation_without_receiver_warns(self):
+        """escalate_to_* 只给了级别、没给具体角色 → WARNING"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {
+                'enabled': True, 'trigger': 'same_condition', 'action': 'escalate_to_manager'}},
+        })
+        self.assertIn(('escalation_missing_receiver', ValidationSeverity.WARNING), _codes(errors))
+
+    def test_repeat_escalation_without_action_is_error(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': True}},
+        })
+        self.assertIn(('required_field', ValidationSeverity.ERROR), _codes(errors))
+
+    def test_repeat_escalation_with_receiver_passes(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {
+                'enabled': True, 'action': 'escalate_to_executive',
+                'escalate_to_roles': ['production_director']}},
+        })
+        self.assertEqual(errors, [])
+
+    def test_repeat_create_capa_does_not_need_receiver(self):
+        """create_capa / stop_production 是动作，不是移交，不要求接收角色"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': True, 'action': 'create_capa'}},
+        })
+        self.assertEqual(errors, [])
+
+    def test_disabled_repeat_escalation_is_skipped(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': False}},
+        })
+        self.assertEqual(errors, [])
+
+
+class TestEvidenceValidation(unittest.TestCase):
+    """本体维度：证据来源与 confidence"""
+
+    def setUp(self):
+        self.validator = Phase3AValidator()
+
+    def test_node_without_source_warns(self):
+        """既无 source_turn_ids 又未经专家确认 → WARNING evidence_missing_source"""
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': []}, 'node')
+        self.assertEqual(_codes(errors), [('evidence_missing_source', ValidationSeverity.WARNING)])
+        self.assertEqual(errors[0].object_kind, 'node')
+
+    def test_edge_without_source_warns(self):
+        errors = self.validator.validate_evidence({'edge_id': 'e1', 'from': 'a', 'to': 'b'}, 'edge')
+        self.assertEqual(_codes(errors), [('evidence_missing_source', ValidationSeverity.WARNING)])
+        self.assertEqual(errors[0].object_id, 'e1')
+        self.assertEqual(errors[0].object_kind, 'edge')
+
+    def test_node_with_source_passes(self):
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': ['t1'], 'confidence': 0.8},
+            'node')
+        self.assertEqual(errors, [])
+
+    def test_expert_confirmed_node_passes(self):
+        """专家亲自确认/手工添加的节点，专家本身即证据来源"""
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True}, 'node')
+        self.assertEqual(errors, [])
+
+    def test_start_end_nodes_skipped(self):
+        for node_type in ('start', 'end'):
+            errors = self.validator.validate_evidence({'node_id': 's', 'node_type': node_type}, 'node')
+            self.assertEqual(errors, [], node_type)
+
+    def test_source_turn_ids_not_list_is_error(self):
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': 't1'}, 'node')
+        self.assertIn(('type_error', ValidationSeverity.ERROR), _codes(errors))
+
+    def test_confidence_out_of_range_is_error(self):
+        for bad in (1.5, -0.1, '0.9', True):
+            errors = self.validator.validate_evidence(
+                {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True,
+                 'confidence': bad}, 'node')
+            self.assertEqual(_codes(errors), [('invalid_confidence', ValidationSeverity.ERROR)],
+                             f'confidence={bad!r}')
+
+    def test_confidence_boundaries_pass(self):
+        for ok in (0, 1, 0.5):
+            errors = self.validator.validate_evidence(
+                {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True,
+                 'confidence': ok}, 'node')
+            self.assertEqual(errors, [], f'confidence={ok!r}')
+
+
+class TestOntologyDimensionsInGraph(unittest.TestCase):
+    """SchemaValidator 在图级把本体维度规则应用到节点和边"""
+
+    def test_graph_level_counts(self):
+        graph = {
+            'nodes': [
+                {'node_id': 'start', 'node_type': 'start', 'label': '开始'},
+                {'node_id': 'n1', 'node_type': 'activity', 'label': '初评',
+                 'source_turn_ids': ['t1'],
+                 'sla_config': {'violation_action': 'escalate'}},          # ERROR
+                {'node_id': 'n2', 'node_type': 'decision', 'label': '判断',
+                 'expert_confirmed': True,
+                 'evaluation_criteria': [{'id': 'c', 'name': '温度', 'type': 'metric',
+                                          'thresholds': {'critical': '50'}}]},  # WARNING
+            ],
+            'edges': [
+                {'edge_id': 'e1', 'from': 'start', 'to': 'n1', 'edge_type': 'normal'},  # WARNING
+                {'edge_id': 'e2', 'from': 'n1', 'to': 'n2', 'edge_type': 'normal',
+                 'source_turn_ids': ['t2']},
+            ],
+        }
+        result = SchemaValidator().validate_graph(graph)
+        self.assertFalse(result['valid'])
+        self.assertEqual(result['error_count'], 1)
+        self.assertEqual(result['warning_count'], 2)
+        by_code = {e['code']: e for e in result['errors']}
+        self.assertEqual(by_code['escalation_missing_receiver']['object_id'], 'n1')
+        self.assertEqual(by_code['threshold_missing_unit']['object_id'], 'n2')
+        self.assertEqual(by_code['evidence_missing_source']['object_id'], 'e1')
+        self.assertEqual(by_code['evidence_missing_source']['object_kind'], 'edge')
 
 
 if __name__ == '__main__':

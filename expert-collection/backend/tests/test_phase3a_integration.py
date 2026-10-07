@@ -359,5 +359,66 @@ class TestPhase3AErrorHandling(unittest.TestCase):
             self.fail(f"验证不应该抛出异常：{e}")
 
 
+class TestOntologyDimensionIntegration(unittest.TestCase):
+    """本体维度规则（阈值单位 / escalation 接收角色 / 证据来源）在主应用中的集成"""
+
+    # 主应用真实形态的图：节点用 node_id，边用 edge_id + from/to
+    GRAPH = {
+        'nodes': [
+            {'node_id': 'start', 'node_type': 'start', 'label': '开始', 'source_turn_ids': []},
+            {'node_id': 'n1', 'node_type': 'activity', 'label': '初评', 'source_turn_ids': ['t1'],
+             'sla_config': {'type': 'deadline', 'duration': 'PT2H', 'violation_action': 'escalate'}},
+            {'node_id': 'n2', 'node_type': 'activity', 'label': '测温', 'source_turn_ids': ['t2'],
+             'evaluation_criteria': [{'id': 'temp', 'name': '温度', 'type': 'metric',
+                                      'thresholds': {'critical': '50'}}]},
+            {'node_id': 'end', 'node_type': 'end', 'label': '结束', 'source_turn_ids': []},
+        ],
+        'edges': [
+            {'edge_id': 'e1', 'from': 'start', 'to': 'n1', 'edge_type': 'normal', 'source_turn_ids': []},
+            {'edge_id': 'e2', 'from': 'n1', 'to': 'n2', 'edge_type': 'normal', 'source_turn_ids': ['t2']},
+            {'edge_id': 'e3', 'from': 'n2', 'to': 'end', 'edge_type': 'normal', 'source_turn_ids': ['t2']},
+        ],
+    }
+
+    def _issues(self):
+        return phase3a_integration.validate_and_enrich_graph(self.GRAPH)['validation']['issues']
+
+    def test_legacy_issues_carry_node_and_edge_ids(self):
+        """转换后的 issue 和 graph_validator 一样带 node_id / edge_id，前端可定位"""
+        by_code = {i['code']: i for i in self._issues()}
+
+        esc = by_code['phase3a_escalation_missing_receiver']
+        self.assertEqual(esc['level'], 'error')
+        self.assertEqual(esc['node_id'], 'n1')
+
+        unit = by_code['phase3a_threshold_missing_unit']
+        self.assertEqual(unit['level'], 'warning')
+        self.assertEqual(unit['node_id'], 'n2')
+
+        evidence = by_code['phase3a_evidence_missing_source']
+        self.assertEqual(evidence['level'], 'warning')
+        self.assertEqual(evidence['edge_id'], 'e1')
+        self.assertNotIn('node_id', evidence)
+
+    def test_start_end_nodes_do_not_need_evidence(self):
+        """start/end 节点没有 source_turn_ids 也不报证据缺来源"""
+        evidence = [i for i in self._issues() if i['code'] == 'phase3a_evidence_missing_source']
+        self.assertEqual([i.get('edge_id') for i in evidence], ['e1'])
+
+    def test_router_merges_ontology_issues(self):
+        """路由层的组合校验会带上本体维度 issue，且不影响 Phase 1 结构校验结果"""
+        try:
+            from app.routers import expert_workflows
+        except ImportError as e:  # fastapi 未安装时跳过路由层测试
+            self.skipTest(f'无法导入路由：{e}')
+        issues = expert_workflows._validate_with_phase3a(self.GRAPH)
+        codes = {i['code'] for i in issues}
+        self.assertIn('phase3a_escalation_missing_receiver', codes)
+        self.assertIn('phase3a_threshold_missing_unit', codes)
+        self.assertIn('phase3a_evidence_missing_source', codes)
+        # 图结构本身合法：Phase 1 没有任何 issue
+        self.assertEqual([i for i in issues if not i['code'].startswith('phase3a_')], [])
+
+
 if __name__ == '__main__':
     unittest.main()
