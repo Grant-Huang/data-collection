@@ -1,0 +1,249 @@
+{
+  "dataset_meta": {
+    "dataset_id": "ds_mfg_ontology_v3_sample",
+    "name": "Manufacturing Operational Ontology v3 Sample",
+    "source_type": "expert_collected",
+    "schema_version": "3.0",
+    "dataset_version": "0.1.0",
+    "created_at": "2026-10-07T00:00:00Z",
+    "language": "zh-CN",
+    "description": "基于 PHASE3A_REAL_WORKFLOW_SAMPLES.md 样本 1（发布审批）改写的合成样例，不是专家口述原文；拿到专家原话后应替换并把 confidence_basis 改为 expert_stated。",
+    "recommended_usage": "needs_review"
+  },
+  "records": [
+    {
+      "record_id": "wf_release_approval_001",
+      "record_version": "3.0",
+      "status": "draft",
+      "manufacturing_context": {
+        "manufacturing_mode": "mass_repetitive",
+        "industry": "汽车零部件",
+        "process_area": "机加工",
+        "product_family": "变速箱壳体"
+      },
+      "scenario": {
+        "trigger": "新批次准备投产，需要设备、工艺、质量依次放行",
+        "goal": "确认设备、工艺、质量全部满足条件后放行生产"
+      },
+      "graph": {
+        "graph_type": "dag",
+        "start_node_ids": ["n_start"],
+        "end_node_ids": ["n_end", "n_hold"],
+        "nodes": [
+          { "node_id": "n_start", "node_type": "start", "label": "投产申请" },
+          {
+            "node_id": "n_equipment_release",
+            "node_type": "approval",
+            "label": "设备放行",
+            "actor_roles": ["设备工程师"],
+            "raci": { "responsible": ["role_equip_eng"] },
+            "check_ids": ["chk_ambient_temp", "chk_temp_stability"],
+            "permission_ids": ["perm_equipment_release"],
+            "exception_ids": ["exc_temp_out_of_range"],
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"], "expert_confirmed": false }
+          },
+          {
+            "node_id": "n_process_release",
+            "node_type": "approval",
+            "label": "工艺放行",
+            "actor_roles": ["工艺工程师"],
+            "raci": { "responsible": ["role_process_eng"] },
+            "check_ids": ["chk_tool_life"],
+            "permission_ids": ["perm_process_release"],
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"], "expert_confirmed": false }
+          },
+          {
+            "node_id": "n_quality_release",
+            "node_type": "approval",
+            "label": "质量放行",
+            "actor_roles": ["质量工程师"],
+            "raci": { "responsible": ["role_qe"], "accountable": ["role_prod_supervisor"] },
+            "check_ids": ["chk_cpk", "chk_first_article"],
+            "permission_ids": ["perm_quality_release"],
+            "time_constraint_ids": ["tc_quality_release_deadline"],
+            "exception_ids": ["exc_cpk_low"],
+            "required_evidence": [
+              { "artifact_type": "inspection_result", "description": "首件检验报告", "mandatory": true }
+            ],
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"], "expert_confirmed": false }
+          },
+          { "node_id": "n_end", "node_type": "end", "label": "放行生产" },
+          {
+            "node_id": "n_hold",
+            "node_type": "activity",
+            "label": "隔离产品并分析原因",
+            "actor_roles": ["质量工程师"],
+            "raci": { "responsible": ["role_qe"], "informed": ["role_prod_supervisor"] }
+          }
+        ],
+        "edges": [
+          { "edge_id": "e1", "from": "n_start", "to": "n_equipment_release", "edge_type": "normal" },
+          { "edge_id": "e2", "from": "n_equipment_release", "to": "n_process_release", "edge_type": "approval" },
+          { "edge_id": "e3", "from": "n_process_release", "to": "n_quality_release", "edge_type": "approval" },
+          { "edge_id": "e4", "from": "n_quality_release", "to": "n_end", "edge_type": "conditional", "condition": "CPK ≥ 1.33 且首件合格" },
+          { "edge_id": "e5", "from": "n_quality_release", "to": "n_hold", "edge_type": "exception_forward", "condition": "CPK < 1.0", "exception_id": "exc_cpk_low" }
+        ]
+      },
+      "ontology": {
+        "scopes": [
+          {
+            "scope_id": "scope_default",
+            "name": "默认范围（由 manufacturing_context 生成）",
+            "selectors": { "manufacturing_mode": ["mass_repetitive"], "industry": ["汽车零部件"], "process_area": ["机加工"], "product_family": ["变速箱壳体"] }
+          }
+        ],
+        "evidence": [
+          {
+            "evidence_id": "ev_sample1",
+            "kind": "document",
+            "content": "PHASE3A_REAL_WORKFLOW_SAMPLES.md 样本 1：设备状态正常，温度 15-35°C；工艺刀具寿命 > 50%；质量首件检验合格，CPK ≥ 1.33",
+            "source_ref": "docs/expert-workflow-collection/PHASE3A_REAL_WORKFLOW_SAMPLES.md#样本-1"
+          }
+        ],
+        "roles": [
+          { "role_id": "role_equip_eng", "name": "设备工程师", "level": 1, "reports_to": "role_prod_supervisor" },
+          { "role_id": "role_process_eng", "name": "工艺工程师", "level": 1, "reports_to": "role_prod_supervisor" },
+          { "role_id": "role_qe", "name": "质量工程师", "level": 1, "reports_to": "role_quality_mgr" },
+          { "role_id": "role_prod_supervisor", "name": "生产主管", "level": 2 },
+          { "role_id": "role_quality_mgr", "name": "质量经理", "level": 2 }
+        ],
+        "checks": [
+          {
+            "check_id": "chk_ambient_temp",
+            "name": "设备环境温度",
+            "metric": "ambient_temperature",
+            "kind": "numeric",
+            "unit": "°C",
+            "expected": { "target": 25, "tolerance_minus": 10, "tolerance_plus": 10 },
+            "limits": [
+              { "band": "normal", "lower": 15, "upper": 35 },
+              { "band": "reject", "upper": 15, "upper_inclusive": false },
+              { "band": "reject", "lower": 35, "lower_inclusive": false }
+            ],
+            "on_violation_exception_id": "exc_temp_out_of_range",
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"], "scope_id": "scope_default" }
+          },
+          {
+            "check_id": "chk_temp_stability",
+            "name": "温度稳定性",
+            "metric": "ambient_temperature_stddev",
+            "kind": "numeric",
+            "unit": "°C",
+            "limits": [{ "band": "normal", "upper": 2, "upper_inclusive": false }],
+            "aggregation": { "method": "statistical", "window_size": 10, "operator": "variance_above", "threshold": "2°C", "min_samples": 10, "description": "过去 10 个测量点标准差 < 2°C" },
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"] }
+          },
+          {
+            "check_id": "chk_tool_life",
+            "name": "刀具剩余寿命",
+            "metric": "tool_life_remaining",
+            "kind": "numeric",
+            "unit": "%",
+            "limits": [{ "band": "normal", "lower": 50, "lower_inclusive": false }],
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"] }
+          },
+          {
+            "check_id": "chk_cpk",
+            "name": "过程能力指数 CPK",
+            "metric": "cpk",
+            "kind": "numeric",
+            "unit": "index",
+            "expected": { "target": 1.67 },
+            "limits": [
+              { "band": "normal", "lower": 1.33 },
+              { "band": "warning", "lower": 1.0, "upper": 1.33, "upper_inclusive": false },
+              { "band": "reject", "upper": 1.0, "upper_inclusive": false }
+            ],
+            "on_violation_exception_id": "exc_cpk_low",
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"] }
+          },
+          {
+            "check_id": "chk_first_article",
+            "name": "首件检验结论",
+            "kind": "categorical",
+            "allowed_values": ["合格", "不合格"],
+            "expected": { "value": "合格" },
+            "assertion": { "confidence": 0.7, "confidence_basis": "llm_inferred", "evidence_ids": ["ev_sample1"] }
+          }
+        ],
+        "time_constraints": [
+          {
+            "time_constraint_id": "tc_quality_release_deadline",
+            "kind": "deadline",
+            "duration": "PT4H",
+            "anchor": "previous_node_completed",
+            "enforced": true,
+            "on_violation": { "action": "escalate", "escalation_policy_id": "esc_release_overdue" },
+            "description": "工艺放行后 4 小时内必须完成质量放行（示例值，待专家确认）",
+            "assertion": { "confidence": 0.5, "confidence_basis": "llm_inferred", "expert_confirmed": false }
+          }
+        ],
+        "permissions": [
+          { "permission_id": "perm_equipment_release", "action": "approve", "allowed_role_ids": ["role_equip_eng"], "sequence": "sequential", "submission_criteria": [{ "kind": "object_state", "description": "设备状态正常且无报警" }] },
+          { "permission_id": "perm_process_release", "action": "approve", "allowed_role_ids": ["role_process_eng"], "sequence": "sequential", "submission_criteria": [{ "kind": "object_state", "description": "工艺参数在范围内，主轴转速正常" }] },
+          {
+            "permission_id": "perm_quality_release",
+            "action": "release",
+            "allowed_role_ids": ["role_qe"],
+            "sequence": "sequential",
+            "separation_of_duties": true,
+            "submission_criteria": [
+              { "kind": "object_state", "description": "首件检验合格", "expression": "chk_first_article == '合格'" },
+              { "kind": "object_state", "description": "CPK ≥ 1.33", "expression": "chk_cpk >= 1.33" }
+            ],
+            "required_evidence": [{ "artifact_type": "inspection_result", "description": "首件检验报告", "mandatory": true }],
+            "failure_message": "首件未合格或 CPK 低于 1.33，不能放行"
+          },
+          { "permission_id": "perm_temp_bypass", "action": "bypass", "allowed_role_ids": ["role_prod_supervisor"], "separation_of_duties": true, "failure_message": "只有生产主管可以批准跳过温度检测" }
+        ],
+        "exception_cases": [
+          {
+            "exception_id": "exc_temp_out_of_range",
+            "name": "设备故障导致温度检测不可用",
+            "trigger": { "kind": "check_violation", "check_id": "chk_ambient_temp" },
+            "severity": "major",
+            "containment": { "dimension": "equipment_id", "rule": "all_products_on_same_equipment", "applicable_conditions": ["故障期间加工的产品 100% 检验"] },
+            "temporary_measure": {
+              "description": "设备故障期间允许跳过温度检测",
+              "expiration": { "duration": "PT72H", "lot_count": 3, "expiration_trigger": "duration_or_count" },
+              "revocation_trigger": { "type": "reoccurrence", "days": 30, "description": "30 天内同一故障再次出现即失效并升级" },
+              "permission_id": "perm_temp_bypass"
+            },
+            "escalation_policy_id": "esc_repeat_fault",
+            "resolution_criteria": "设备修复且温度回到 15-35°C"
+          },
+          {
+            "exception_id": "exc_cpk_low",
+            "name": "CPK 不足",
+            "trigger": { "kind": "check_violation", "check_id": "chk_cpk" },
+            "severity": "critical",
+            "handler_node_id": "n_hold",
+            "escalation_policy_id": "esc_release_overdue"
+          }
+        ],
+        "escalation_policies": [
+          {
+            "policy_id": "esc_release_overdue",
+            "name": "放行超时或质量不达标",
+            "trigger": { "kind": "timeout" },
+            "levels": [
+              { "level": 1, "to_role_id": "role_quality_mgr", "after": "PT0H", "action": "notify" },
+              { "level": 2, "to_role_id": "role_prod_supervisor", "after": "PT2H", "action": "approval_required" }
+            ],
+            "terminal_action": "停线等待质量经理决定"
+          },
+          {
+            "policy_id": "esc_repeat_fault",
+            "name": "同一故障重复出现",
+            "trigger": { "kind": "repeat", "repeat_count": 2, "within_duration": "P30D" },
+            "levels": [{ "level": 1, "to_role_id": "role_quality_mgr", "action": "create_capa" }]
+          }
+        ]
+      },
+      "provenance": {
+        "source_type": "expert_collected",
+        "collected_at": "2026-10-07T00:00:00Z"
+      }
+    }
+  ]
+}

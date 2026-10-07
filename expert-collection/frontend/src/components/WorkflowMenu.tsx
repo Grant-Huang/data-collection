@@ -8,9 +8,10 @@ interface Props {
   onRename: (name: string) => void;
   onTogglePin: () => void;
   onToggleArchive: () => void;
+  onExport?: (workflowId: string) => void;
 }
 
-export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive }: Props) {
+export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive, onExport }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -64,6 +65,7 @@ export function WorkflowMenu({ workflow, onRename, onTogglePin, onToggleArchive 
             const next = window.prompt("重命名会话", workflow.name);
             if (next !== null && next.trim()) onRename(next.trim());
           })}
+          {onExport && item("导出Schema", () => onExport(workflow.id))}
           {item(workflow.archived ? "取消归档" : "归档", onToggleArchive, !workflow.archived)}
         </div>
       )}
