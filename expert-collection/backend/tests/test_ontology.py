@@ -155,6 +155,15 @@ def test_lifted_v2_has_no_errors_only_gaps_to_fill():
     assert "ont_escalation_missing_role" in _codes(issues)
 
 
+def test_lift_turns_a_named_approver_into_a_permission():
+    graph = {"nodes": [{"node_id": "ap", "node_type": "approval", "label": "审批（质量主管）",
+                        "actor_roles": ["质量主管"]}], "edges": []}
+    view = ontology.lift_v2_record({"graph": graph})
+    assert view.node_links["ap"].permission_ids == ["perm_ap_approver"]
+    assert view.ontology.permissions[0].allowed_role_ids == ["role_质量主管"]
+    assert "ont_approval_without_permission" not in _codes(ontology_validator.validate(view, graph))
+
+
 # --- validator rules ------------------------------------------------------------------------
 
 def _issues_after(mutate):
@@ -206,7 +215,9 @@ def test_rule_escalation_levels_must_increase():
 def test_rule_permission_needs_roles_and_approval_needs_permission():
     def m(rec):
         _find(rec["ontology"]["permissions"], "permission_id", "perm_process_release")["allowed_role_ids"] = []
-        _find(rec["graph"]["nodes"], "node_id", "n_equipment_release")["permission_ids"] = []
+        node = _find(rec["graph"]["nodes"], "node_id", "n_equipment_release")
+        node["permission_ids"] = []
+        node["actor_roles"] = []  # a named approver alone would be lifted into a Permission
     codes = _issues_after(m)
     assert {"ont_permission_no_roles", "ont_approval_without_permission"} <= codes
 

@@ -75,6 +75,18 @@ def test_full_conversation_reaches_valid_confirmable_graph(client):
     assert r["next_question"]["target"] == "retry_target"
     r = _turn(client, wid, "工艺员调整刀补")
 
+    # Ontology follow-ups: thresholds + expected value at the decision step, then time limit +
+    # escalation at the approval step (design doc MANUFACTURING_OPERATIONAL_ONTOLOGY.md).
+    assert r["next_question"]["target"] == "criterion_discovery"
+    assert "「工艺员调整刀补」之后要分「偏差在刀补范围内」" in r["next_question"]["question"]
+    assert r["next_question"]["chips"] == [guide_service.NO_CRITERION_CHIP]
+    r = _turn(client, wid, "偏差在0.02到0.05mm之间就调刀补，正常是0.03mm")
+    assert r["next_question"]["target"] == "timing_discovery"
+    assert "质量主管" in r["next_question"]["question"]
+    r = _turn(client, wid, "最晚4小时")
+    assert r["next_question"]["target"] == "escalation_discovery"
+    r = _turn(client, wid, "车间主任")
+
     assert r["next_question"]["target"] == "experience_discovery"
     r = _turn(client, wid, "刀具磨损到什么程度该换，主要靠听声音判断")
 
@@ -100,6 +112,19 @@ def test_full_conversation_reaches_valid_confirmable_graph(client):
     assert types.count("decision") == 1 and types.count("approval") == 1
     approval = next(n for n in graph["nodes"] if n["node_type"] == "approval")
     assert approval["label"] == "审批（质量主管）"
+    assert approval["sla_config"] == {
+        "type": "deadline", "from_trigger": "previous_node_completed", "description": "最晚4小时",
+        "duration": "PT4H", "violation_action": "escalate", "escalate_to_role": "车间主任",
+    }
+    decision = next(n for n in graph["nodes"] if n["node_type"] == "decision")
+    crit = decision["evaluation_criteria"][0]
+    assert crit["unit"] == "mm" and crit["expected"] == {"target": 0.03}
+    assert crit["limits"] == [{"band": "normal", "lower": 0.02, "upper": 0.05}]
+    assert crit["description"] == "偏差在0.02到0.05mm之间就调刀补，正常是0.03mm"
+    # ...and the ontology view picks both up, with the escalation target filled in.
+    onto = client.get(f"/api/expert-workflows/{wid}/ontology").json()
+    assert "ont_escalation_missing_role" not in {i["code"] for i in onto["issues"]}
+    assert any(c["expected"] == {"target": 0.03} for c in onto["ontology"]["checks"])
     retry_node = next(n for n in graph["nodes"] if n.get("retry_semantics"))
     target = next(n for n in graph["nodes"] if n["node_id"] == retry_node["retry_semantics"]["rework_reference_node_id"])
     assert target["label"] == "工艺员调整刀补"

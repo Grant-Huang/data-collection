@@ -202,8 +202,9 @@ flowchart TB
 |---|---|
 | `manufacturing_context` | 默认 `Scope`（`scope_default`） |
 | `node.actor_roles[]` | `Role` + `node_links.raci.responsible` |
-| `node.evaluation_criteria[]` | `Check`（`source_criterion_id` 保留原 id，`limits_text` 保留原文） |
-| `node.sla_config` | `TimeConstraint`（kind 取 sla_config.type） |
+| `node.evaluation_criteria[]` | `Check`（`source_criterion_id` 保留原 id，`limits_text` 保留原文；采集追问写入的 `limits` / `expected` 直接沿用，原话 `description` 变成 Evidence） |
+| `node.sla_config` | `TimeConstraint`（kind 取 sla_config.type）；`escalate_to_role` 填入升级策略第 1 级 |
+| 审批节点的 `actor_roles`（无 `approval_matrix` 时） | `Permission`（action=approve） |
 | `node.expected_duration` | `TimeConstraint`（kind=expected_duration） |
 | `node.approval_matrix[]` | `Permission`（action=approve）；有 `escalation_level` 时生成 `EscalationPolicy` |
 | `node.retry_semantics`（is_temporary 等） | `ExceptionCase.temporary_measure`；`escalation_on_repeat` 生成 `EscalationPolicy` |
@@ -278,10 +279,32 @@ flowchart TB
 }
 ```
 
-## 9. 本版不做、后续可做
+## 9. 采集追问与界面展示（第 4 步）
 
-- **采集追问**：让会话根据缺失的维度主动追问（第 3 节每个维度都给了追问话术，可以直接进入 guide_service）。
-- **界面展示**：在 DAG 视图的浮动 tips 里展示 Check / Permission / 升级链。
+### 9.1 追问放在哪
+
+为了不加重专家负担，只在**最需要**的地方追问，各问一次：
+
+| 追问 | 触发条件 | 问法 | 写入 |
+|---|---|---|---|
+| 判断标准（阈值 + 预期值） | 图上有判断（decision）步骤 | 「X」之后要分「A」还是「B」，判断时有具体的标准吗？比如正常应该是多少、到多少就不行？ | 判断节点的 `evaluation_criteria[]`：`limits`、`expected`、`unit`、原话 `description` |
+| 时限 | 图上有审批（approval）步骤 | 等「谁」确认这一步，一般最晚多久要有结果？ | 审批节点的 `sla_config`：`duration`（ISO 8601）、原话 `description` |
+| 超时升级 | 上一问给了时限 | 如果过了这个时间还没确认，会找谁？ | `sla_config.violation_action` + `escalate_to_role` |
+
+顺序是：分情况 → 同时进行 → 等人确认 → 返工 → **判断标准 → 时限/升级** → 经验。没有判断步骤或审批步骤时，对应追问直接跳过。
+
+### 9.2 只记专家说过的数
+
+`app/ontology_capture.py` 用规则解析回答：只有回答里**字面出现**的数字才会变成结构化的区间、预期值或时长，例如「15 到 35 度，正常 25 度，超过 40 度就得停」解析成 normal 15–35、reject >40、预期 25。解析不出来的回答（「主要看铁屑颜色」「一个班之内」）只保留原话，不补数字；按班次说的时间不会换算成小时，因为各厂班次长度不同。「没超过 0.05mm 就行」虽然以「没」开头，但带了数字，算作回答而不是拒答。
+
+原话会在本体视图里变成 `kind=expert_quote` 的 Evidence，所以这些 Check / TimeConstraint 的 `confidence_basis` 是 `expert_stated`。审批节点在追问里记下的审批人，也会被提升为一条 `action=approve` 的 Permission。
+
+### 9.3 界面
+
+DAG 节点标签下方会显示一行小标签，例如判断节点显示「正常 0.02–0.05mm」，审批节点显示「时限 4小时」「超时找车间主任」。鼠标悬停时，提示框里显示专家的原话。
+
+## 10. 后续可做
+
 - **ISA-95 对齐**：Role、Equipment、Material 与 ISA-95 的人员/设备/物料模型做映射，便于对接 MES。
 - **多专家冲突**：同一断言多位专家给出不同阈值时，如何合并、如何提升 `multi_expert_agreement`。
 - **Functions**：把 `aggregation` 变成可执行的计算逻辑，对接实时数据。

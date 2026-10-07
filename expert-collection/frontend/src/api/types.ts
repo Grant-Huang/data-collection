@@ -35,6 +35,38 @@ export interface GraphNode {
   // Stable step number ("第3步") -- assigned once at creation, never renumbered; null only for
   // legacy data not yet backfilled (see graph_ops.assign_missing_seqs).
   seq: number | null;
+  // Ontology follow-up answers (docs/expert-workflow-collection/ontology/): thresholds +
+  // expected value on decision steps, time limit + escalation on approval steps.
+  evaluation_criteria?: EvaluationCriterion[];
+  sla_config?: SlaConfig | null;
+}
+
+export interface LimitBand {
+  band: "normal" | "warning" | "critical" | "reject";
+  lower?: number | null;
+  upper?: number | null;
+  lower_inclusive?: boolean;
+  upper_inclusive?: boolean;
+}
+
+export interface EvaluationCriterion {
+  id: string;
+  name: string;
+  type: string;
+  unit?: string | null;
+  limits?: LimitBand[];
+  expected?: { target?: number | null; value?: string | null } | null;
+  // The expert's own answer, verbatim.
+  description?: string | null;
+}
+
+export interface SlaConfig {
+  type?: string;
+  duration?: string | null; // ISO 8601, e.g. PT4H
+  from_trigger?: string;
+  violation_action?: "escalate" | "notify" | "auto_reassign" | "none";
+  escalate_to_role?: string | null;
+  description?: string | null;
 }
 
 export interface GraphEdge {

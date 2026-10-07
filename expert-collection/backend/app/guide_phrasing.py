@@ -47,6 +47,9 @@ WHY_BY_TARGET: dict[str, str] = {
     "retry_discovery": "返工情况是经验里最有价值的部分之一。",
     "retry_target": "确定返工回到哪一步，图上才能标清楚返工范围。",
     "experience_discovery": "规定之外的经验判断，是这份记录里最有价值的部分。",
+    "criterion_discovery": "把“正常是多少、到多少不行”说清楚，别人才能照着判断。",
+    "timing_discovery": "等人确认的地方最容易卡住，记下时限才知道什么时候该催。",
+    "escalation_discovery": "超时找谁，决定了卡住的时候事情能不能往前推。",
     "correction_turn_pick": "回退后，图上那一步之后的内容会一起撤掉，重新讲。",
     "parallel_merge_discovery": "同时进行的事情和先后做的事情，在图上的画法不一样。",
     # Task layer (IMPLEMENTATION_PLAN.md section 18).

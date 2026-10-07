@@ -16,6 +16,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { Graph, GraphNode, NodeType } from "../api/types";
+import { ontologyFacets, ontologyTooltip } from "../utils/ontologyFacets";
 
 const elk = new ELK();
 
@@ -59,6 +60,22 @@ interface WorkflowNodeData {
   // Stable step number (Node.seq) -- shown so a person can say "第3步" and mean exactly this
   // node, and the review-loop model is told the same number (review_agent._graph_for_prompt).
   seq?: number | null;
+  // Ontology dimensions captured on this step (threshold / time limit / escalation), as short
+  // tags under the label; `ontologyNotes` are the expert's verbatim answers for the tooltip.
+  facets?: string[];
+  ontologyNotes?: string[];
+}
+
+// Extra ELK height for a node that shows a row of ontology tags, so tags never overlap the
+// next layer.
+const FACET_ROW_HEIGHT = 20;
+
+function nodeTitle(data: WorkflowNodeData): string | undefined {
+  const lines: string[] = [];
+  if (data.evidence?.length) lines.push(`依据原话：「${data.evidence.join("」「")}」`);
+  else if (data.unverified) lines.push("没有在讲述中找到这一步的原话，待确认");
+  lines.push(...(data.ontologyNotes ?? []));
+  return lines.length ? lines.join("\n") : undefined;
 }
 
 const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeData }) {
@@ -67,7 +84,7 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
   const deco = data.decoration;
   return (
     <div
-      title={data.evidence?.length ? `依据原话：「${data.evidence.join("」「")}」` : data.unverified ? "没有在讲述中找到这一步的原话，待确认" : undefined}
+      title={nodeTitle(data)}
       style={{
         background: style.fill,
         border: `${deco?.border || deco?.selected ? 2.4 : 1.6}px ${data.unverified && !deco?.border ? "dashed" : "solid"} ${deco?.selected ? "#2a78d6" : deco?.border ?? (data.unverified ? "#f59e0b" : style.stroke)}`,
@@ -121,6 +138,22 @@ const WorkflowNode = memo(function WorkflowNode({ data }: { data: WorkflowNodeDa
       {data.subtitle && (
         <div style={{ fontSize: 11, fontWeight: 500, color: "#667085", marginTop: 3 }}>{data.subtitle}</div>
       )}
+      {!!data.facets?.length && (
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 4, marginTop: 5 }}>
+          {data.facets.map((f) => (
+            <span
+              key={f}
+              style={{
+                fontSize: 10.5, fontWeight: 600, color: "#475569", background: "#f1f5f9",
+                border: "1px solid #e2e8f0", borderRadius: 999, padding: "0 6px", lineHeight: "16px",
+                whiteSpace: "nowrap", textDecoration: "none",
+              }}
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
       {data.hasRetry && (
         <div style={{ position: "absolute", top: -8, right: -8, fontSize: 14 }} title="有返工语义（retry_semantics）">
           ↺
@@ -144,7 +177,9 @@ async function layout(graph: Graph): Promise<{ nodes: RFNode[]; edges: RFEdge[];
       "elk.spacing.nodeNode": "50",
       "elk.layered.spacing.nodeNodeBetweenLayers": "90",
     },
-    children: graph.nodes.map((n) => ({ id: n.node_id, width: 230, height: 70 })),
+    children: graph.nodes.map((n) => ({
+      id: n.node_id, width: 230, height: 70 + (ontologyFacets(n).length ? FACET_ROW_HEIGHT : 0),
+    })),
     edges: graph.edges.map((e) => ({ id: e.edge_id, sources: [e.from], targets: [e.to] })),
   };
   const result = await elk.layout(elkGraph);
@@ -235,7 +270,7 @@ export function DagView({
   const layoutKey = useMemo(
     () =>
       [
-        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}`),
+        ...graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.retry_semantics?.enabled ? 1 : 0}:${n.expert_confirmed ? 1 : 0}:${ontologyFacets(n).length ? 1 : 0}`),
         ...graph.edges.map((e) => `${e.edge_id}:${e.from}>${e.to}:${e.edge_type}:${e.condition ?? ""}`),
       ].join("|"),
     [graph],
@@ -316,6 +351,8 @@ export function DagView({
         clickable: !!onNodeTap,
         subtitle: subtitles?.[n.id],
         seq: src?.seq,
+        facets: src ? ontologyFacets(src) : [],
+        ontologyNotes: src ? ontologyTooltip(src) : [],
       },
       };
     });

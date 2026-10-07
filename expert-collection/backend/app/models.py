@@ -49,6 +49,13 @@ class Node(BaseModel):
     # natural-language handle for the review loop across a whole conversation. None only for
     # data collected before this field existed and not yet backfilled.
     seq: Optional[int] = None
+    # Phase 3-A (#34) / ontology follow-up fields (docs/expert-workflow-collection/ontology/).
+    # Kept as plain dicts mirroring workflow_graph_schema_v3.json so the API returns them
+    # untouched; app.ontology owns their typed reading.
+    evaluation_criteria: list[dict] = Field(default_factory=list)
+    sla_config: Optional[dict] = None
+    approval_matrix: list[dict] = Field(default_factory=list)
+    containment_scope: Optional[dict] = None
 
 
 class Edge(BaseModel):

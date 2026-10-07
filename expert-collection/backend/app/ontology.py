@@ -382,25 +382,35 @@ def lift_v2_record(record: dict[str, Any]) -> OntologyView:
 
         # evaluation_criteria -> Check (threshold + expected value).
         for crit in node.get("evaluation_criteria") or []:
-            limits: list[LimitBand] = []
             unit = crit.get("unit")
             thresholds = crit.get("thresholds") or {}
-            for band in _V2_BANDS:
-                parsed = parse_threshold_text(thresholds.get(band))
-                if parsed:
-                    kwargs, parsed_unit = parsed
-                    limits.append(LimitBand(band=band, **kwargs))
-                    unit = unit or parsed_unit
+            # Structured limits (written by the interview's criterion follow-up) win; otherwise
+            # best-effort parse of the v2 free-text thresholds.
+            limits = [LimitBand.model_validate(x) for x in crit.get("limits") or []]
+            if not limits:
+                for band in _V2_BANDS:
+                    parsed = parse_threshold_text(thresholds.get(band))
+                    if parsed:
+                        kwargs, parsed_unit = parsed
+                        limits.append(LimitBand(band=band, **kwargs))
+                        unit = unit or parsed_unit
+            crit_assertion = None
+            if crit.get("description"):
+                ev_id = b.add("evidence", Evidence(
+                    evidence_id=f"ev_{nid}_{crit['id']}", kind="expert_quote", content=crit["description"]))
+                crit_assertion = Assertion(confidence_basis="expert_stated", evidence_ids=[ev_id])
             chk_id = b.add("checks", Check(
                 check_id=f"chk_{nid}_{crit['id']}",
                 name=crit.get("name") or crit["id"],
                 kind=_CRITERION_KIND.get(crit.get("type"), "text"),
                 unit=unit,
+                expected=ExpectedValue.model_validate(crit["expected"]) if crit.get("expected") else None,
                 limits=limits,
                 limits_text=thresholds or None,
                 allowed_values=list(crit.get("allowed_values") or []),
                 aggregation=crit.get("aggregation"),
                 source_criterion_id=crit["id"],
+                assertion=crit_assertion,
             ))
             _merge_unique(links.check_ids, [chk_id])
 
@@ -412,13 +422,20 @@ def lift_v2_record(record: dict[str, Any]) -> OntologyView:
             if action:
                 on_violation = ViolationHandling(action=action)
                 if action == "escalate":
+                    to_role = sla.get("escalate_to_role")
                     on_violation.escalation_policy_id = b.add("escalation_policies", EscalationPolicy(
                         policy_id=f"esc_{nid}_sla", name=f"{node.get('label', nid)} 超时升级",
                         trigger=EscalationTrigger(kind="timeout"),
-                        # Who it escalates to is not in v2 -- left empty on purpose so the
+                        # Plain v2 data never says who -- then it's left empty on purpose so the
                         # validator asks for it instead of us inventing a manager.
-                        levels=[EscalationLevel(level=1)],
+                        levels=[EscalationLevel(level=1, to_role_id=b.role(to_role) if to_role else None,
+                                                action="notify")],
                     ))
+            sla_assertion = None
+            if sla.get("description"):
+                ev_id = b.add("evidence", Evidence(
+                    evidence_id=f"ev_{nid}_sla", kind="expert_quote", content=sla["description"]))
+                sla_assertion = Assertion(confidence_basis="expert_stated", evidence_ids=[ev_id])
             tc_id = b.add("time_constraints", TimeConstraint(
                 time_constraint_id=f"tc_{nid}_sla",
                 kind=_SLA_KIND.get(sla.get("type"), "deadline"),
@@ -427,6 +444,7 @@ def lift_v2_record(record: dict[str, Any]) -> OntologyView:
                 enforced=sla.get("enforced"),
                 on_violation=on_violation,
                 description=sla.get("description"),
+                assertion=sla_assertion,
             ))
             _merge_unique(links.time_constraint_ids, [tc_id])
         if node.get("expected_duration"):
@@ -455,6 +473,16 @@ def lift_v2_record(record: dict[str, Any]) -> OntologyView:
                     if row.get("criteria") else []
                 ),
                 escalation_policy_id=esc_id,
+            ))
+            _merge_unique(links.permission_ids, [perm_id])
+
+        # An approval step whose approver was named (the interview's "是谁来确认" answer) but has
+        # no approval_matrix / explicit v3 permission still declares who may approve.
+        if (node.get("node_type") == "approval" and node.get("actor_roles")
+                and not node.get("approval_matrix") and not links.permission_ids):
+            perm_id = b.add("permissions", Permission(
+                permission_id=f"perm_{nid}_approver", action="approve",
+                allowed_role_ids=[b.role(r) for r in node["actor_roles"] if r],
             ))
             _merge_unique(links.permission_ids, [perm_id])
 

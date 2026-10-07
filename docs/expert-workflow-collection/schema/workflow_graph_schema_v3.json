@@ -1060,6 +1060,10 @@
         "description": {
           "type": "string",
           "description": "人类可读的 SLA 说明，如'必须在前序节点完成后2小时内完成初评'"
+        },
+        "escalate_to_role": {
+          "type": "string",
+          "description": "超时升级给哪个角色（专家原话）"
         }
       }
     },
@@ -1180,6 +1184,15 @@
               "description": "聚合条件的自然语言说明（如'连续两点接近上限'）"
             }
           }
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/limit_band"
+          }
+        },
+        "expected": {
+          "$ref": "#/$defs/expected_value"
         }
       }
     },
