@@ -3,6 +3,7 @@
 // MobileApp (Phase 2) drive the conversation through this one hook.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
+import { sessionTab } from "../utils/sessionTabs";
 import type {
   ManufacturingContext, RegenerateGraphCheck, WorkflowMetaUpdate, WorkflowRecord, WorkflowSummary,
 } from "../api/types";
@@ -13,15 +14,29 @@ export function useWorkflowSession() {
   const [sending, setSending] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 左栏「显示已归档」切换 -- 默认关闭，归档就是要把会话从常规清单里挪走。
-  const [showArchived, setShowArchived] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
 
-  const refreshList = useCallback(async (includeArchived = showArchived) => {
-    const list = await api.listWorkflows(includeArchived);
+  const refreshList = useCallback(async () => {
+    const list = await api.listWorkflows();
     setWorkflows(list);
     return list;
-  }, [showArchived]);
+  }, []);
+
+  // Put a record we already hold into the session list (C3) instead of re-fetching the whole
+  // list after every turn / confirm / rename. Same order as the server: pinned first, then the
+  // most recently updated.
+  const upsertRow = useCallback((record: WorkflowRecord) => {
+    const row: WorkflowSummary = {
+      id: record.id, name: record.name, status: record.status, completion_score: record.completion.score,
+      updated_at: record.updated_at, pinned: record.pinned, archived: record.archived,
+      deleted: !!record.deleted, in_dataset: record.in_dataset,
+    };
+    setWorkflows((prev) =>
+      [row, ...prev.filter((w) => w.id !== record.id)].sort(
+        (a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at),
+      ),
+    );
+  }, []);
 
   const selectWorkflow = useCallback(async (id: string) => {
     setError(null);
@@ -29,24 +44,15 @@ export function useWorkflowSession() {
     setActive(record);
   }, []);
 
-  // Initial load only -- picks the first workflow once. Toggling "显示已归档" below re-runs
-  // refreshList on its own, but must NOT re-trigger this auto-select, or flipping the toggle
-  // while mid-conversation would yank the expert back to workflow #1.
+  // Initial load only -- opens the first in-progress session (not an archived/deleted one).
   useEffect(() => {
-    refreshList(false)
+    refreshList()
       .then((list) => {
-        if (list.length > 0) return selectWorkflow(list[0].id);
+        const first = list.find((w) => sessionTab(w) === "active") ?? list.find((w) => sessionTab(w) !== "deleted");
+        if (first) return selectWorkflow(first.id);
       })
       .catch((e) => setError(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const toggleShowArchived = useCallback(() => {
-    setShowArchived((prev) => {
-      const next = !prev;
-      api.listWorkflows(next).then(setWorkflows).catch((e) => setError(String(e)));
-      return next;
-    });
   }, []);
 
   const createWorkflow = useCallback(async () => {
@@ -55,37 +61,48 @@ export function useWorkflowSession() {
     try {
       const record = await api.createWorkflow();
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     } finally {
       setCreating(false);
     }
-  }, [refreshList]);
+  }, [upsertRow]);
 
+  // Resolves to whether the turn went through. On failure the optimistic bubble is taken back
+  // out and the caller puts the text back into the input box -- what the expert said is never
+  // lost to a timeout (B1).
   const sendTurn = useCallback(
-    async (text: string, rawTranscript?: string) => {
-      if (!active) return;
+    async (text: string, rawTranscript?: string): Promise<boolean> => {
+      if (!active) return false;
+      const workflowId = active.id;
+      const localId = `local-${Date.now()}`;
       setSending(true);
       setError(null);
       // Optimistic local append so the expert's own message shows immediately.
       setActive((prev) =>
         prev
-          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
+          ? { ...prev, turns: [...prev.turns, { turn_id: localId, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
           : prev,
       );
       try {
-        await api.postTurn(active.id, text, rawTranscript);
-        const refreshed = await api.getWorkflow(active.id);
+        // One request per turn (C3): the response carries the updated record.
+        const resp = await api.postTurn(workflowId, text, rawTranscript);
+        const refreshed = resp.record ?? (await api.getWorkflow(workflowId));
         setActive(refreshed);
-        await refreshList();
+        upsertRow(refreshed);
+        return true;
       } catch (e) {
-        setError(String(e));
+        setActive((prev) =>
+          prev && prev.id === workflowId ? { ...prev, turns: prev.turns.filter((t) => t.turn_id !== localId) } : prev,
+        );
+        setError(`这一句没有发送成功，已放回输入框，可以直接重发。（${String(e)}）`);
+        return false;
       } finally {
         setSending(false);
       }
     },
-    [active, refreshList],
+    [active, upsertRow],
   );
 
   const confirmWorkflow = useCallback(async () => {
@@ -94,11 +111,11 @@ export function useWorkflowSession() {
     try {
       const record = await api.confirmWorkflow(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   // 「继续修改」(section 17): a confirmed workflow that isn't in a dataset goes back into the
   // review conversation.
@@ -108,11 +125,11 @@ export function useWorkflowSession() {
     try {
       const record = await api.reopenWorkflow(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       setError(String(e));
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   const updateManufacturingContext = useCallback(
     async (patch: Partial<ManufacturingContext>) => {
@@ -174,12 +191,12 @@ export function useWorkflowSession() {
       try {
         const record = await api.updateWorkflowMeta(workflowId, patch);
         if (active?.id === workflowId) setActive(record);
-        await refreshList();
+        upsertRow(record);
       } catch (e) {
         setError(String(e));
       }
     },
-    [active, refreshList],
+    [active, upsertRow],
   );
 
   // 「用大模型根据会话内容重新生成流程图」-- always re-checks the server-side gate right
@@ -203,7 +220,7 @@ export function useWorkflowSession() {
     try {
       const record = await api.regenerateGraph(active.id);
       setActive(record);
-      await refreshList();
+      upsertRow(record);
     } catch (e) {
       const errorMsg = String(e);
       // Extract error type from API response for better UX
@@ -213,7 +230,7 @@ export function useWorkflowSession() {
     } finally {
       setRegenerating(false);
     }
-  }, [active, refreshList]);
+  }, [active, upsertRow]);
 
   return {
     workflows,
@@ -221,8 +238,6 @@ export function useWorkflowSession() {
     sending,
     creating,
     error,
-    showArchived,
-    toggleShowArchived,
     regenerating,
     selectWorkflow,
     createWorkflow,

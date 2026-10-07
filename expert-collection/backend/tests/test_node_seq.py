@@ -87,7 +87,8 @@ def model(monkeypatch):
 
 def test_narrative_extraction_numbers_nodes_in_narration_order(client, model):
     rec = client.post("/api/expert-workflows", json={}).json()
-    rec = client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": NARRATIVE}).json()["current_dag"]
+    client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": NARRATIVE})
+    rec = client.post(f"/api/expert-workflows/{rec['id']}/turns", json={"text": "讲完了"}).json()["current_dag"]
     seqs = {n["label"]: n["seq"] for n in rec["nodes"]}
     assert seqs == {"设备报警": 1, "按急停": 2, "质量工程师复测": 3, "恢复生产": 4}
 

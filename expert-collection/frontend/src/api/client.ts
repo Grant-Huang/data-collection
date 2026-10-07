@@ -46,8 +46,10 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 export const api = {
   voiceStatus: () => req<{ configured: boolean; model: string }>("GET", "/api/voice/status"),
-  listWorkflows: (includeArchived = false) =>
-    req<WorkflowSummary[]>("GET", `/api/expert-workflows?include_archived=${includeArchived}`),
+  // Always the full list (archived + deleted included): the session list's four tabs are cut
+  // locally, and every tab shows a count.
+  listWorkflows: () =>
+    req<WorkflowSummary[]>("GET", "/api/expert-workflows?include_archived=true&include_deleted=true"),
   createWorkflow: (name?: string) =>
     req<WorkflowRecord>("POST", "/api/expert-workflows", { name: name ?? null }),
   getWorkflow: (id: string) => req<WorkflowRecord>("GET", `/api/expert-workflows/${id}`),

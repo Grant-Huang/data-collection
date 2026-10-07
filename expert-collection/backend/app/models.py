@@ -108,10 +108,11 @@ class NextQuestion(BaseModel):
     question: str
     # None means no chips: this is a recall-type question (PRD section 18).
     chips: Optional[list[str]] = None
-    # "prefill" (default/omitted, existing behavior): clicking a chip fills the whole draft
-    # box, single choice. "multi_select": chips toggle on/off, expert confirms the combined
-    # selection before it goes into the draft box (IMPLEMENTATION_PLAN.md section 9.1,
-    # Case Context B-group). Never auto-sends either way -- PRD section 18 still applies.
+    # "prefill" (default/omitted): single choice -- the client sends the chip as the answer on
+    # click when the input box is empty, else appends it to the draft (PRD 18.4 revised, B8).
+    # "multi_select": chips toggle on/off into the draft, the expert sends by hand
+    # (IMPLEMENTATION_PLAN.md section 9.1, Case Context B-group). Either way every chip must be
+    # a complete answer on its own, never a template the expert is meant to type after.
     chip_mode: Optional[Literal["prefill", "multi_select"]] = None
     # Restatement of what was just recorded, and a one-line reason for asking (see
     # guide_phrasing.py). Both optional -- rendered as separate layers of the bubble.
@@ -146,6 +147,9 @@ class WorkflowSummary(BaseModel):
     # version.
     pinned: bool = False
     archived: bool = False
+    # Soft delete (the session list's 「已删除」 tab): hidden from every other tab and from the
+    # dataset draft pool, restorable. Never a hard delete -- see the note above.
+    deleted: bool = False
     # True once any dataset_version (archived versions included) references this workflow --
     # computed at read time from dataset_versions, never stored on the workflow itself.
     in_dataset: bool = False
@@ -233,6 +237,14 @@ class TaskWorkflow(BaseModel):
     tasks: list[TaskDefinition] = Field(default_factory=list)
 
 
+class ChecklistItem(BaseModel):
+    """One row of the 「还差什么」checklist (B6, review_gaps.checklist)."""
+    key: str
+    label: str
+    status: Literal["asking", "open", "skipped", "done"]
+    open: int = 0
+
+
 class WorkflowRecord(BaseModel):
     id: str
     name: str
@@ -254,7 +266,11 @@ class WorkflowRecord(BaseModel):
     updated_at: str
     pinned: bool = False
     archived: bool = False
+    deleted: bool = False
     in_dataset: bool = False
+    # Review-loop sessions after the first draft: what is settled / being asked / still open.
+    # None before the draft exists and for step-by-step guide sessions.
+    checklist: Optional[list[ChecklistItem]] = None
 
 
 class WorkflowMetaUpdateRequest(BaseModel):
@@ -264,6 +280,7 @@ class WorkflowMetaUpdateRequest(BaseModel):
     name: Optional[str] = None
     pinned: Optional[bool] = None
     archived: Optional[bool] = None
+    deleted: Optional[bool] = None
 
 
 class NodePositionUpdateRequest(BaseModel):
@@ -326,6 +343,9 @@ class TurnResponse(BaseModel):
     completion: Completion
     validation: list[ValidationIssue]
     next_question: Optional[NextQuestion] = None
+    # The full record after this turn (C3) -- lets the client update both the open session and its
+    # row in the session list without two more requests. Optional only for older clients/tests.
+    record: Optional["WorkflowRecord"] = None
 
 
 # --- Dataset / Dashboard (PRD 12/13, Phase 3 sub-scope -- see IMPLEMENTATION_PLAN.md section 6) ---

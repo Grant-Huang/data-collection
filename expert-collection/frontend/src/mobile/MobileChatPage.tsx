@@ -3,22 +3,37 @@
 import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
-import { mergeChipIntoDraft } from "../utils/chips";
+import { CompletenessChecklist } from "../components/CompletenessChecklist";
+import { thinkingLabel } from "../components/ThinkingIndicator";
+import { chipSendsImmediately, mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
 import { RealtimeVoiceIcon } from "../voice/icons";
 
+// The progress panel used to print the internal stage id ("review_review"); experts get words.
+const STAGE_LABELS: Record<string, string> = {
+  review_narrative: "讲述中", review_review: "核对细节", review_final_confirm: "最后确认", review_done: "已确认",
+};
+function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? (stage === "confirmed" ? "已确认" : "逐步采集中");
+}
+
 interface Props {
   active: WorkflowRecord | null;
   sending: boolean;
-  onSend: (text: string, rawTranscript?: string) => void;
+  // May resolve to false when the turn failed -- the text then goes back into the input box.
+  onSend: (text: string, rawTranscript?: string) => void | Promise<boolean | void>;
   onOpenDrawer: () => void;
   onToggleProgress: () => void;
   progressOpen: boolean;
   recordingChanged: (recording: boolean) => void;
+  // 「确认并提交」 and the error line sit in the column right above the input row (B7): as
+  // absolutely-positioned overlays they covered the newest message and the chips under it.
+  onConfirm?: () => void;
+  error?: string | null;
 }
 
-export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged }: Props) {
+export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggleProgress, progressOpen, recordingChanged, onConfirm, error }: Props) {
   const [draft, setDraft] = useState("");
   // Raw recognizer output dictated into the current draft (see ChatPanel).
   const [rawPieces, setRawPieces] = useState<string[]>([]);
@@ -28,11 +43,18 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
+  // The message currently being processed -- decides what the "AI is working" line says.
+  const [lastSent, setLastSent] = useState<string | null>(null);
   const nextQuestion = active?.unresolved[0] ?? null;
 
-  // Same rule as desktop: chips prefill an editable draft (appending to anything the expert
-  // already typed), never auto-send. Multi-select is handled inside the shared QuickReplies.
+  // Same rule as desktop (utils/chips.chipSendsImmediately): a single-choice chip sends at once
+  // when the box is empty; otherwise it goes into the editable draft. Multi-select is handled
+  // inside the shared QuickReplies.
   function handleChip(pick: string) {
+    if (chipSendsImmediately(nextQuestion?.chip_mode, draft)) {
+      handleSend(pick);
+      return;
+    }
     setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -43,7 +65,10 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
     setDraft("");
     const rawAll = [...rawPieces, ...(raw ? [raw] : [])].join("");
     setRawPieces([]);
-    onSend(value, rawAll || undefined);
+    setLastSent(value);
+    void Promise.resolve(onSend(value, rawAll || undefined)).then((ok) => {
+      if (ok === false) setDraft((current) => current || value);
+    });
   }
 
   return (
@@ -72,8 +97,9 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
 
       {progressOpen && active && (
         <div style={{ padding: "8px 14px", borderBottom: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 12, color: "#475569" }}>
-          完成度 {Math.round(active.completion.score * 100)}% · 当前阶段 {active.stage}
+          完成度 {Math.round(active.completion.score * 100)}% · {stageLabel(active.stage)}
           {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && " · 可以确认提交了"}
+          {active.checklist && !confirmed && <CompletenessChecklist key={active.id} items={active.checklist} defaultOpen />}
         </div>
       )}
       {!progressOpen && active && (
@@ -89,10 +115,36 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
           activeQuestion={confirmed ? null : nextQuestion}
           onChipPick={handleChip}
           sending={sending}
+          sendingLabel={thinkingLabel(active.stage, lastSent)}
         />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
           点击左上角「☰」新建一个流程开始讲述
+        </div>
+      )}
+
+      {active?.stage === "review_narrative" && !confirmed && active.turns.some((t) => t.role === "expert") && (
+        <div className="narrative-done-bar" style={{ padding: "8px 14px 0" }}>
+          <span>讲完了再点 →</span>
+          <button disabled={sending} onClick={() => handleSend("讲完了")}>✓ 讲完了，开始整理</button>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" style={{ margin: "8px 14px 0", background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {onConfirm && active?.completion.ready_for_confirmation && !confirmed && (
+        <div style={{ padding: "8px 14px 0" }}>
+          <button
+            onClick={onConfirm}
+            disabled={sending}
+            style={{ width: "100%", border: "none", borderRadius: 8, padding: "12px 0", background: "#0ca30c", color: "#fff", fontWeight: 600, minHeight: 44 }}
+          >
+            确认并提交
+          </button>
         </div>
       )}
 

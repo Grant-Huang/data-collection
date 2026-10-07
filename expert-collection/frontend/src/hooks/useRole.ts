@@ -6,12 +6,17 @@ import type { Role } from "../api/types";
 
 const STORAGE_KEY = "current-role";
 
+// A first-time visitor is most likely the expert who was sent the link (B9): they land on the
+// collection page without having to find the role switch first. Researchers/admins switch once
+// and the choice is remembered.
+const DEFAULT_ROLE: Role = "expert";
+
 function readStored(): Role {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw === "expert" || raw === "researcher" || raw === "admin" ? raw : "researcher";
+    return raw === "expert" || raw === "researcher" || raw === "admin" ? raw : DEFAULT_ROLE;
   } catch {
-    return "researcher";
+    return DEFAULT_ROLE;
   }
 }
 

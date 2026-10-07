@@ -117,11 +117,10 @@ export interface NextQuestion {
   priority: string;
   question: string;
   chips: string[] | null;
-  // "prefill" (or omitted): clicking a chip fills the whole draft box, single choice --
-  // this is also how the Scenario A-group's "简单说/详细说" mode chips work (the chip text
-  // IS the answer template, the expert types after it -- no separate mode round trip).
-  // "multi_select": chips toggle on/off, expert confirms the combined selection before it
-  // goes into the draft box (Case Context B-group). Never auto-sends either way.
+  // "prefill" (or omitted): single choice -- one click sends the chip as the answer when the
+  // input box is empty, otherwise appends it to the draft (PRD 18.4 revised, B8; see
+  // utils/chips.chipSendsImmediately). "multi_select": chips toggle on/off into the draft and
+  // the expert sends by hand (Case Context B-group).
   chip_mode?: "prefill" | "multi_select" | null;
   ack?: string | null;
   why?: string | null;
@@ -193,6 +192,8 @@ export interface WorkflowSummary {
   updated_at: string;
   pinned: boolean;
   archived: boolean;
+  // Soft delete -- the 「已删除」 tab; restorable.
+  deleted: boolean;
   // True once any dataset_version (including archived ones) references this workflow --
   // drives the "重新生成流程图" menu item's disabled state without a round trip.
   in_dataset: boolean;
@@ -232,13 +233,26 @@ export interface WorkflowRecord {
   updated_at: string;
   pinned: boolean;
   archived: boolean;
+  deleted?: boolean;
   in_dataset: boolean;
+  // 「还差什么」(B6): review-loop sessions after the first draft; null otherwise.
+  checklist?: ChecklistItem[] | null;
+}
+
+export interface ChecklistItem {
+  key: string;
+  label: string;
+  // asking = the question on screen; open = still to ask; skipped = the interview stopped
+  // before reaching it; done = answered or nothing to ask.
+  status: "asking" | "open" | "skipped" | "done";
+  open: number;
 }
 
 export interface WorkflowMetaUpdate {
   name?: string;
   pinned?: boolean;
   archived?: boolean;
+  deleted?: boolean;
 }
 
 export interface DatasetVersionRef {
@@ -263,6 +277,8 @@ export interface TurnResponse {
   completion: Completion;
   validation: ValidationIssue[];
   next_question: NextQuestion | null;
+  // The whole record after this turn (C3); absent only from an older backend.
+  record?: WorkflowRecord | null;
 }
 
 // --- Dataset / Dashboard (PRD 12/13) ---

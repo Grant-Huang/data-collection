@@ -69,7 +69,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Section 17 review loop: how many clarification questions the agent may raise on its
     # own before moving to the read-back. Deliberately high (the expert/annotator can always
     # keep correcting past it; this only stops the agent from asking forever).
-    "review": {"max_clarify_questions": 20},
+    "review": {"max_clarify_questions": 12},
     "quality_params": {
         "min_sample_size": 20,
         "near_dup_text_threshold": 0.85,

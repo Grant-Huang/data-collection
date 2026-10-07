@@ -33,7 +33,7 @@ TASK_OUTLINE_QUESTION = (
     "最后一个问题：如果把整件事按「谁负责哪一段」分成几个任务，你会怎么分？"
     "按先后顺序说，每项最好写成「负责方：做什么」，比如：客服：确认问题 → 质量部：复检 → 生产部：处理。"
 )
-# Prefill chip (PRD 18: fills the draft box, never auto-sends).
+# Single-choice chip (PRD 18.4 revised: sends on click when the input box is empty).
 SINGLE_TASK_CHIP = "整件事就一个任务"
 # Offered alongside the step candidates on every boundary question -- a task the expert
 # names at the top level but never described step by step (e.g. "客服回复客户") is real and

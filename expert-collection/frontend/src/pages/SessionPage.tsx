@@ -6,6 +6,7 @@ import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { DualDagPanel } from "../components/DualDagPanel";
+import { CompletenessChecklist } from "../components/CompletenessChecklist";
 import { HistoryDrawer } from "../components/HistoryDrawer";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types";
@@ -14,9 +15,9 @@ const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
 export function SessionPage() {
   const {
-    workflows, active, sending, creating, error, showArchived, regenerating,
+    workflows, active, sending, creating, error, regenerating,
     selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, reopenWorkflow, updateManufacturingContext,
-    toggleShowArchived, updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
+    updateWorkflowMeta, checkRegenerateGraph, regenerateGraph, moveNode,
   } = useWorkflowSession();
 
   // 「刷新工作流图」（用大模型根据会话内容重新生成）：先问后端能不能生成（是否已进入数据集 /
@@ -78,8 +79,6 @@ export function SessionPage() {
             onSelect={selectWorkflow}
             onCreate={createWorkflow}
             creating={creating}
-            showArchived={showArchived}
-            onToggleShowArchived={toggleShowArchived}
             onUpdateMeta={updateWorkflowMeta}
             onExport={handleExport}
           />
@@ -102,6 +101,9 @@ export function SessionPage() {
                 {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && "・可以确认提交了"}
                 {active.status === "expert_confirmed" && "・已确认"}
               </div>
+              {active.checklist && active.status !== "expert_confirmed" && (
+                <CompletenessChecklist key={active.id} items={active.checklist} />
+              )}
               {/* §14.4 Dataset Slice -- a static classification tag, editable any time, not
                   part of the FSM conversation (it's not scenario narrative). */}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -227,7 +229,11 @@ export function SessionPage() {
                     `}</style>
                   </div>
                 )}
-                <div style={{ opacity: regenerating ? 0.4 : 1, pointerEvents: regenerating ? "none" : "auto" }}>
+                {/* Must fill the panel: DualDagPanel sizes itself to 100% of this box, and with no
+                    height here the React Flow pane collapsed to 0px -- nodes still painted (overflow)
+                    but every mouse event fell through to the panel behind, so nodes couldn't be
+                    dragged or clicked. */}
+                <div style={{ height: "100%", opacity: regenerating ? 0.4 : 1, pointerEvents: regenerating ? "none" : "auto" }}>
                   <DualDagPanel active={active} sopHighlightNodeIds={highlightNodeIds} onNodeMove={moveNode} />
                 </div>
               </>

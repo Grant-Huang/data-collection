@@ -1,6 +1,9 @@
 // PRD 4.2/5.1: history drawer is an overlay, not a separate route -- tapping a workflow or
 // the backdrop closes it and returns to the session page.
+import { useEffect, useMemo, useState } from "react";
 import type { WorkflowSummary } from "../api/types";
+import { SessionTabBar } from "../components/SessionTabBar";
+import { EMPTY_TEXT, filterSessions, sessionTab, tabCounts, type SessionTab } from "../utils/sessionTabs";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "草稿", collecting: "采集中", needs_confirmation: "待确认", expert_confirmed: "已确认",
@@ -17,6 +20,17 @@ interface Props {
 }
 
 export function HistorySheet({ open, workflows, activeId, onSelect, onCreate, onClose, creating }: Props) {
+  // Same four tabs + search as the desktop rail (utils/sessionTabs).
+  const activeWorkflow = workflows.find((w) => w.id === activeId);
+  const activeTab = activeWorkflow ? sessionTab(activeWorkflow) : null;
+  const [tab, setTab] = useState<SessionTab>(activeTab ?? "active");
+  const [query, setQuery] = useState("");
+  const counts = useMemo(() => tabCounts(workflows), [workflows]);
+  const rows = useMemo(() => filterSessions(workflows, tab, query), [workflows, tab, query]);
+  useEffect(() => {
+    if (activeTab) setTab(activeTab);
+  }, [activeId, activeTab]);
+
   return (
     <>
       <div
@@ -52,10 +66,12 @@ export function HistorySheet({ open, workflows, activeId, onSelect, onCreate, on
             + 新建一个流程
           </button>
         </div>
-        <div style={{ flex: 1, overflowY: "auto" }}>
-          {workflows.map((w) => (
+        <SessionTabBar tab={tab} onTab={setTab} counts={counts} query={query} onQuery={setQuery} touch />
+        <div role="tabpanel" style={{ flex: 1, overflowY: "auto" }}>
+          {rows.map((w) => (
             <div
               key={w.id}
+              data-session-row
               onClick={() => {
                 onSelect(w.id);
                 onClose();
@@ -73,7 +89,11 @@ export function HistorySheet({ open, workflows, activeId, onSelect, onCreate, on
               </div>
             </div>
           ))}
-          {workflows.length === 0 && <div style={{ padding: 16, fontSize: 12.5, color: "#667085" }}>还没有流程，点击上方开始第一个。</div>}
+          {rows.length === 0 && (
+            <div style={{ padding: 16, fontSize: 12.5, color: "#667085" }}>
+              {query.trim() ? "没有名称匹配的流程。" : workflows.length === 0 ? "还没有流程，点击上方开始第一个。" : EMPTY_TEXT[tab]}
+            </div>
+          )}
         </div>
       </div>
     </>

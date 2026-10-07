@@ -12,7 +12,17 @@ export function isFallbackChip(chip: string): boolean {
   return chip === "无" || FALLBACK_PREFIXES.some((p) => chip.startsWith(p));
 }
 
-// Chips never auto-send (PRD 18.4) -- they go into the draft. If the draft is empty or is
+// PRD 18.4 (revised, B8): a single-choice chip is a structural yes/no-style answer, so when the
+// input box is empty one click sends it -- no second click on 「发送」. It still fills the draft
+// instead when the expert has already typed something (their own words are never sent or
+// dropped behind their back), and multi-select chips always build up a draft to send by hand.
+// A pick sent by mistake is fixed the same way as any other answer: saying 「我说错了，……」
+// (guide mode's correction path rolls the graph back to that turn).
+export function chipSendsImmediately(chipMode: string | null | undefined, draft: string): boolean {
+  return chipMode !== "multi_select" && !draft.trim();
+}
+
+// Otherwise chips go into the draft. If the draft is empty or is
 // itself just an earlier chip pick, the new pick replaces it; if the expert already typed
 // something of their own, the pick is appended instead of wiping what they wrote.
 //
