@@ -63,24 +63,34 @@ export function useWorkflowSession() {
     }
   }, [refreshList]);
 
+  // Resolves to whether the turn went through. On failure the optimistic bubble is taken back
+  // out and the caller puts the text back into the input box -- what the expert said is never
+  // lost to a timeout (B1).
   const sendTurn = useCallback(
-    async (text: string, rawTranscript?: string) => {
-      if (!active) return;
+    async (text: string, rawTranscript?: string): Promise<boolean> => {
+      if (!active) return false;
+      const workflowId = active.id;
+      const localId = `local-${Date.now()}`;
       setSending(true);
       setError(null);
       // Optimistic local append so the expert's own message shows immediately.
       setActive((prev) =>
         prev
-          ? { ...prev, turns: [...prev.turns, { turn_id: `local-${Date.now()}`, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
+          ? { ...prev, turns: [...prev.turns, { turn_id: localId, role: "expert", text, raw_transcript: rawTranscript ?? null }] }
           : prev,
       );
       try {
-        await api.postTurn(active.id, text, rawTranscript);
-        const refreshed = await api.getWorkflow(active.id);
+        await api.postTurn(workflowId, text, rawTranscript);
+        const refreshed = await api.getWorkflow(workflowId);
         setActive(refreshed);
         await refreshList();
+        return true;
       } catch (e) {
-        setError(String(e));
+        setActive((prev) =>
+          prev && prev.id === workflowId ? { ...prev, turns: prev.turns.filter((t) => t.turn_id !== localId) } : prev,
+        );
+        setError(`这一句没有发送成功，已放回输入框，可以直接重发。（${String(e)}）`);
+        return false;
       } finally {
         setSending(false);
       }

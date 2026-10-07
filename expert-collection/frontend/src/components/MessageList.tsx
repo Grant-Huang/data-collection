@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { isFallbackChip, pickedChips } from "../utils/chips";
 import { QuickReplies } from "./QuickReplies";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 
 // Node types worth counting in the "+N" tag -- the structural helpers (split/join/merge)
 // are drawing mechanics, not something the expert said.
@@ -27,11 +28,13 @@ interface Props {
   activeQuestion?: NextQuestion | null;
   onChipPick?: (text: string) => void;
   sending?: boolean;
+  // What the status line says while `sending` (see ThinkingIndicator.thinkingLabel).
+  sendingLabel?: string;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
   emptyState?: ReactNode;
 }
 
-export function MessageList({ turns, graph, activeQuestion, onChipPick, sending, onHighlightNodes, emptyState }: Props) {
+export function MessageList({ turns, graph, activeQuestion, onChipPick, sending, sendingLabel, onHighlightNodes, emptyState }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message (and the typing indicator) in view.
@@ -129,14 +132,7 @@ export function MessageList({ turns, graph, activeQuestion, onChipPick, sending,
           </div>
         );
       })}
-      {sending && (
-        <div className="chat-row bot" aria-label="正在整理">
-          <div className="chat-avatar" aria-hidden>AI</div>
-          <div className="chat-bubble">
-            <span className="chat-typing"><span /><span /><span /></span>
-          </div>
-        </div>
-      )}
+      {sending && <ThinkingIndicator label={sendingLabel ?? "正在理解你的回答，更新流程图…"} />}
     </div>
   );
 }

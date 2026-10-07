@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConversationTurn, Graph, NextQuestion } from "../api/types";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { MessageList } from "./MessageList";
+import { thinkingLabel } from "./ThinkingIndicator";
 import { VoiceDictationButton } from "./VoiceDictationButton";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
 import { RealtimeVoiceIcon } from "../voice/icons";
@@ -18,7 +19,8 @@ interface Props {
   nextQuestion: NextQuestion | null;
   // rawTranscript: what speech recognition heard, when the message was dictated -- stored
   // next to the (possibly edited) text so recognition errors can be checked later.
-  onSend: (text: string, rawTranscript?: string) => void;
+  // May resolve to false when the turn failed -- the text then goes back into the input box.
+  onSend: (text: string, rawTranscript?: string) => void | Promise<boolean | void>;
   sending: boolean;
   confirmed: boolean;
   onHighlightNodes?: (nodeIds: string[] | null) => void;
@@ -36,6 +38,16 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
   const [rawPieces, setRawPieces] = useState<string[]>([]);
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The message currently being processed -- decides what the "AI is working" line says.
+  const [lastSent, setLastSent] = useState<string | null>(null);
+
+  // Sends, and on failure restores the text into the box (unless the expert already started
+  // typing something new) so nothing they said is lost.
+  async function deliver(value: string, raw?: string) {
+    setLastSent(value);
+    const ok = await onSend(value, raw);
+    if (ok === false) setDraft((current) => current || value);
+  }
 
   function handleChipPick(pick: string) {
     setDraft((prev) => mergeChipIntoDraft(prev, pick, nextQuestion?.chips ?? []));
@@ -61,7 +73,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
     setDraft("");
     const raw = text ? undefined : rawPieces.join("") || undefined;
     setRawPieces([]);
-    onSend(value, raw);
+    void deliver(value, raw);
   }
 
   // Icon ① -- VoiceDictationButton already ran the transcript through the LLM polish call
@@ -75,7 +87,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
   // Icon ② -- skips the draft box entirely, sent as its own turn with the raw transcript
   // attached (never polished -- speed over cleanup is the point of this path).
   function handleDictatedSend(text: string) {
-    onSend(text, text);
+    void deliver(text, text);
   }
 
   const hasChips = !!nextQuestion?.chips?.length;
@@ -88,8 +100,18 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
         activeQuestion={confirmed ? null : nextQuestion}
         onChipPick={handleChipPick}
         sending={sending}
+        sendingLabel={thinkingLabel(stage, lastSent)}
         onHighlightNodes={onHighlightNodes}
       />
+
+      {/* Narrate-first: the story can be told in several pieces; the graph is built only when
+          the expert says they're done (the button just sends 「讲完了」). */}
+      {stage === "review_narrative" && !confirmed && turns.some((t) => t.role === "expert") && (
+        <div className="narrative-done-bar">
+          <span>还有要补充的就接着说；全部讲完了再点这里 →</span>
+          <button disabled={sending} onClick={() => void deliver("讲完了")}>✓ 讲完了，开始整理</button>
+        </div>
+      )}
 
       <div style={{ position: "relative", display: "flex", gap: 8, padding: 16, borderTop: "1px solid var(--chat-line)", background: "#fff" }}>
         <VoiceDictationButton disabled={confirmed || sending} onFill={handleDictatedFill} onSend={handleDictatedSend} />
@@ -157,7 +179,7 @@ export function ChatPanel({ turns, graph, nextQuestion, onSend, sending, confirm
           <RealtimeVoiceDialog
             turns={turns}
             sending={sending}
-            onSend={(text) => onSend(text, text)}
+            onSend={(text) => void deliver(text, text)}
             onClose={() => setVoiceDialogOpen(false)}
           />
         )}

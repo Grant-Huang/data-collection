@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
+import { thinkingLabel } from "../components/ThinkingIndicator";
 import { mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
@@ -11,7 +12,8 @@ import { RealtimeVoiceIcon } from "../voice/icons";
 interface Props {
   active: WorkflowRecord | null;
   sending: boolean;
-  onSend: (text: string, rawTranscript?: string) => void;
+  // May resolve to false when the turn failed -- the text then goes back into the input box.
+  onSend: (text: string, rawTranscript?: string) => void | Promise<boolean | void>;
   onOpenDrawer: () => void;
   onToggleProgress: () => void;
   progressOpen: boolean;
@@ -28,6 +30,8 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmed = active?.status === "expert_confirmed";
+  // The message currently being processed -- decides what the "AI is working" line says.
+  const [lastSent, setLastSent] = useState<string | null>(null);
   const nextQuestion = active?.unresolved[0] ?? null;
 
   // Same rule as desktop: chips prefill an editable draft (appending to anything the expert
@@ -43,7 +47,10 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
     setDraft("");
     const rawAll = [...rawPieces, ...(raw ? [raw] : [])].join("");
     setRawPieces([]);
-    onSend(value, rawAll || undefined);
+    setLastSent(value);
+    void Promise.resolve(onSend(value, rawAll || undefined)).then((ok) => {
+      if (ok === false) setDraft((current) => current || value);
+    });
   }
 
   return (
@@ -89,10 +96,18 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
           activeQuestion={confirmed ? null : nextQuestion}
           onChipPick={handleChip}
           sending={sending}
+          sendingLabel={thinkingLabel(active.stage, lastSent)}
         />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
           点击左上角「☰」新建一个流程开始讲述
+        </div>
+      )}
+
+      {active?.stage === "review_narrative" && !confirmed && active.turns.some((t) => t.role === "expert") && (
+        <div className="narrative-done-bar" style={{ padding: "8px 14px 0" }}>
+          <span>讲完了再点 →</span>
+          <button disabled={sending} onClick={() => handleSend("讲完了")}>✓ 讲完了，开始整理</button>
         </div>
       )}
 
