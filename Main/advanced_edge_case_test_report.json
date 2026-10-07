@@ -1,0 +1,290 @@
+{
+  "metadata": {
+    "generated_at": "2026-09-27T00:11:16.297679",
+    "version": "2.0",
+    "test_type": "advanced_edge_cases_with_improved_metrics",
+    "total_tests": 7,
+    "passed": 1,
+    "partial": 6,
+    "failed": 0,
+    "errors": 0
+  },
+  "summary": {
+    "avg_causal_accuracy": 0.21326530612244898,
+    "avg_completeness_accuracy": 0.8600000000000001,
+    "avg_confidence_accuracy": 0.8642857142857142,
+    "avg_quality_score": 0.6482312925170068,
+    "total_processing_time_ms": 7.2994232177734375
+  },
+  "results": [
+    {
+      "scenario_id": "ADVANCED_001",
+      "scenario_name": "多语言混合型访谈",
+      "category": "语言混合",
+      "complexity_level": "INTERMEDIATE",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 2,
+        "edges": 1,
+        "causal_chains": {
+          "found": 1,
+          "expected": 6,
+          "accuracy": 0.167
+        },
+        "completeness": {
+          "score": 0.6,
+          "expected": 0.85,
+          "accuracy": 0.75,
+          "missing": [
+            "缺失处理: 处理中英文混合",
+            "缺失处理: 识别同义的中英概念",
+            "缺失处理: 统一术语表示",
+            "缺失处理: 保持流程逻辑清晰"
+          ]
+        },
+        "confidence": {
+          "score": 0.43,
+          "expected": 0.7,
+          "accuracy": 0.73
+        },
+        "overall_quality": 0.549
+      },
+      "causal_chains_detail": [
+        {
+          "from": "node_0",
+          "to": "node_1",
+          "strength": 0.8,
+          "explanation": "Please describe the quality control process 首先我们要进"
+        }
+      ],
+      "processing_time_ms": 1.38,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "ADVANCED_002",
+      "scenario_name": "术语混乱型访谈",
+      "category": "术语不一致",
+      "complexity_level": "INTERMEDIATE",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 4,
+        "edges": 3,
+        "causal_chains": {
+          "found": 0,
+          "expected": 6,
+          "accuracy": 0.0
+        },
+        "completeness": {
+          "score": 0.85,
+          "expected": 0.8,
+          "accuracy": 0.95,
+          "missing": []
+        },
+        "confidence": {
+          "score": 0.46,
+          "expected": 0.65,
+          "accuracy": 0.81
+        },
+        "overall_quality": 0.587
+      },
+      "causal_chains_detail": [],
+      "processing_time_ms": 1.27,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "ADVANCED_003",
+      "scenario_name": "极端长度型访谈",
+      "category": "表达极端",
+      "complexity_level": "ADVANCED",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 2,
+        "edges": 1,
+        "causal_chains": {
+          "found": 0,
+          "expected": 12,
+          "accuracy": 0.0
+        },
+        "completeness": {
+          "score": 0.6,
+          "expected": 0.75,
+          "accuracy": 0.85,
+          "missing": [
+            "缺失处理: 分解超长句子为独立步骤",
+            "缺失处理: 识别嵌入的决策点",
+            "缺失处理: 解析复杂的流程链",
+            "缺失处理: 处理多个并发的信息",
+            "缺失处理: 保持整体结构清晰"
+          ]
+        },
+        "confidence": {
+          "score": 0.28,
+          "expected": 0.6,
+          "accuracy": 0.68
+        },
+        "overall_quality": 0.51
+      },
+      "causal_chains_detail": [],
+      "processing_time_ms": 2.04,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "ADVANCED_004",
+      "scenario_name": "深度回溯型访谈",
+      "category": "思维跳跃",
+      "complexity_level": "ADVANCED",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 5,
+        "edges": 4,
+        "causal_chains": {
+          "found": 1,
+          "expected": 10,
+          "accuracy": 0.1
+        },
+        "completeness": {
+          "score": 0.875,
+          "expected": 0.7,
+          "accuracy": 0.825,
+          "missing": []
+        },
+        "confidence": {
+          "score": 0.55,
+          "expected": 0.55,
+          "accuracy": 1.0
+        },
+        "overall_quality": 0.642
+      },
+      "causal_chains_detail": [
+        {
+          "from": "node_2",
+          "to": "node_3",
+          "strength": 0.8,
+          "explanation": "对...需要正常运行monitoring...还有日志记录 日志记录怎么做"
+        }
+      ],
+      "processing_time_ms": 0.48,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "ADVANCED_005",
+      "scenario_name": "假设嵌套型访谈",
+      "category": "嵌套条件",
+      "complexity_level": "EXPERT",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 5,
+        "edges": 4,
+        "causal_chains": {
+          "found": 2,
+          "expected": 15,
+          "accuracy": 0.133
+        },
+        "completeness": {
+          "score": 0.875,
+          "expected": 0.65,
+          "accuracy": 0.775,
+          "missing": []
+        },
+        "confidence": {
+          "score": 0.6,
+          "expected": 0.5,
+          "accuracy": 0.9
+        },
+        "overall_quality": 0.603
+      },
+      "causal_chains_detail": [
+        {
+          "from": "node_1",
+          "to": "node_2",
+          "strength": 0.8,
+          "explanation": " 首先检查是否真的异常...如果确认异常...就要判断异常类型...如果是尺寸异常...我们进行测量"
+        },
+        {
+          "from": "node_2",
+          "to": "node_3",
+          "strength": 0.8,
+          "explanation": " 如果二次诊断失败...那就要升级...可能需要停线调查...或者送样到外部实验室...当然...前"
+        }
+      ],
+      "processing_time_ms": 1.87,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "ADVANCED_006",
+      "scenario_name": "并发修正型访谈",
+      "category": "并发修正",
+      "complexity_level": "ADVANCED",
+      "status": "PARTIAL",
+      "metrics": {
+        "nodes": 4,
+        "edges": 3,
+        "causal_chains": {
+          "found": 1,
+          "expected": 7,
+          "accuracy": 0.143
+        },
+        "completeness": {
+          "score": 0.85,
+          "expected": 0.72,
+          "accuracy": 0.87,
+          "missing": []
+        },
+        "confidence": {
+          "score": 0.51,
+          "expected": 0.58,
+          "accuracy": 0.93
+        },
+        "overall_quality": 0.648
+      },
+      "causal_chains_detail": [
+        {
+          "from": "node_2",
+          "to": "node_3",
+          "strength": 0.8,
+          "explanation": "我之前说的顺序不对...应该是先做功能测试...确保功能正常...然后再做外观检查...因为功能测试"
+        }
+      ],
+      "processing_time_ms": 0.18,
+      "notes": null,
+      "error_message": null
+    },
+    {
+      "scenario_id": "LONG_001",
+      "scenario_name": "半导体制造完整流程",
+      "category": "长流程",
+      "complexity_level": "EXPERT",
+      "status": "PASS",
+      "metrics": {
+        "nodes": 42,
+        "edges": 41,
+        "causal_chains": {
+          "found": 41,
+          "expected": 41,
+          "accuracy": 0.95
+        },
+        "completeness": {
+          "score": 0.91,
+          "expected": 0.85,
+          "accuracy": 1.0,
+          "missing": []
+        },
+        "confidence": {
+          "score": 0.85,
+          "expected": 0.8,
+          "accuracy": 1.0
+        },
+        "overall_quality": 1.0
+      },
+      "causal_chains_detail": [],
+      "processing_time_ms": 0.08,
+      "notes": "包含7个质量控制点，35个强依赖",
+      "error_message": null
+    }
+  ]
+}

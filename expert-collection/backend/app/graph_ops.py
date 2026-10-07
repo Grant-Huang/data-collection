@@ -21,6 +21,27 @@ def _find_edge(graph: dict, edge_id: str) -> dict | None:
     return next((e for e in graph["edges"] if e["edge_id"] == edge_id), None)
 
 
+def assign_missing_seqs(graph: dict) -> dict:
+    """Gives every node lacking one a stable, human-facing step number (`seq`), counting up
+    from the current max. This is the one thing a node's opaque `node_id` doesn't give either
+    a person or the review-loop model: something short and ordinal to say out loud ("第3步").
+
+    Assigned once, in list order, and never touched again -- not by a later edit, an insert
+    before it, or a deletion elsewhere (see apply_ops: `update_node` only ever merges the given
+    patch, which never contains `seq`). So numbers can end up with gaps after a deletion, and a
+    node's number never matches its position in a topological read-back once the graph has been
+    edited a few times -- both are accepted trade-offs for the number actually staying attached
+    to the same node for the rest of a conversation, so "第3步" still means the same thing on
+    turn 10 as it did on turn 2.
+    """
+    next_seq = max((n["seq"] for n in graph["nodes"] if isinstance(n.get("seq"), int)), default=0) + 1
+    for n in graph["nodes"]:
+        if not isinstance(n.get("seq"), int):
+            n["seq"] = next_seq
+            next_seq += 1
+    return graph
+
+
 def apply_ops(graph: dict, ops: list[dict]) -> dict:
     """Applies a list of Graph Ops in order, mutating and returning the same graph dict.
 
@@ -66,4 +87,4 @@ def apply_ops(graph: dict, ops: list[dict]) -> dict:
             node = _find_node(graph, op["node_id"])
             if node:
                 node["retry_semantics"] = op["retry_semantics"]
-    return graph
+    return assign_missing_seqs(graph)

@@ -1,0 +1,375 @@
+{
+  "metadata": {
+    "created_at": "2026-09-27T00:11:16.298182",
+    "version": "2.0",
+    "description": "高级异常场景测试数据集 - 扩展版本",
+    "total_scenarios": 6,
+    "categories": [
+      "并发修正",
+      "术语不一致",
+      "嵌套条件",
+      "表达极端",
+      "语言混合",
+      "思维跳跃"
+    ]
+  },
+  "scenarios": [
+    {
+      "scenario_id": "ADVANCED_001",
+      "scenario_name": "多语言混合型访谈",
+      "category": "语言混合",
+      "description": "专家在中英文之间切换，有时混合使用",
+      "complexity_level": "INTERMEDIATE",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "Please describe the quality control process"
+        },
+        {
+          "turn": 2,
+          "speaker": "质量工程师_张明",
+          "text": "首先我们要进行incoming inspection检查...然后在线monitoring"
+        },
+        {
+          "turn": 3,
+          "speaker": "质量工程师_张明",
+          "text": "如果发现defect就需要进行root cause analysis...RCA"
+        },
+        {
+          "turn": 4,
+          "speaker": "质量工程师_张明",
+          "text": "之后我们会采取corrective action...纠正措施，防止再发生"
+        },
+        {
+          "turn": 5,
+          "speaker": "采集系统",
+          "text": "What about the verification step?"
+        },
+        {
+          "turn": 6,
+          "speaker": "质量工程师_张明",
+          "text": "verification是在CA执行后进行的...我们需要confirm问题已解决"
+        },
+        {
+          "turn": 7,
+          "speaker": "质量工程师_张明",
+          "text": "最后进行effectiveness check...effectiveness evaluation来确保方案有效"
+        }
+      ],
+      "expected_challenges": [
+        "处理中英文混合",
+        "识别同义的中英概念",
+        "统一术语表示",
+        "保持流程逻辑清晰"
+      ],
+      "recovery_hints": [
+        "建立中英术语映射表",
+        "检测语言切换点",
+        "规范术语表示",
+        "验证逻辑连贯性"
+      ],
+      "expected_causal_chains": 6,
+      "expected_completeness": 0.85,
+      "expected_confidence": 0.7
+    },
+    {
+      "scenario_id": "ADVANCED_002",
+      "scenario_name": "术语混乱型访谈",
+      "category": "术语不一致",
+      "description": "同一概念用多个不同的术语表示",
+      "complexity_level": "INTERMEDIATE",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "请描述设备维修流程"
+        },
+        {
+          "turn": 2,
+          "speaker": "设备工程师_李军",
+          "text": "首先我们要检查equipment log...或者叫device code log"
+        },
+        {
+          "turn": 3,
+          "speaker": "设备工程师_李军",
+          "text": "然后进行hardware diagnostic...或者称为hardware check/inspection"
+        },
+        {
+          "turn": 4,
+          "speaker": "设备工程师_李军",
+          "text": "如果找到部件故障...零件故障...component failure...就要replacement"
+        },
+        {
+          "turn": 5,
+          "speaker": "采集系统",
+          "text": "那repair之后呢？"
+        },
+        {
+          "turn": 6,
+          "speaker": "设备工程师_李军",
+          "text": "修复后我们要进行verification testing...性能验证...或者叫performance validation"
+        },
+        {
+          "turn": 7,
+          "speaker": "设备工程师_李军",
+          "text": "最后的load test...负载测试...stress test用来确保stability稳定性"
+        }
+      ],
+      "expected_challenges": [
+        "识别同义的多个术语",
+        "建立术语之间的映射",
+        "处理中英术语混用",
+        "规范术语表示"
+      ],
+      "recovery_hints": [
+        "自动建立术语同义集合",
+        "使用文本相似度匹配",
+        "创建术语标准化映射",
+        "验证流程语义一致性"
+      ],
+      "expected_causal_chains": 6,
+      "expected_completeness": 0.8,
+      "expected_confidence": 0.65
+    },
+    {
+      "scenario_id": "ADVANCED_003",
+      "scenario_name": "极端长度型访谈",
+      "category": "表达极端",
+      "description": "单个回合包含非常长的流程说明（多个步骤）",
+      "complexity_level": "ADVANCED",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "请描述完整的生产流程"
+        },
+        {
+          "turn": 2,
+          "speaker": "生产主管_王华",
+          "text": "完整流程是这样的：首先在仓库pick原料...然后运送到生产线...进行预热处理...然后装配...接着进行初级检验...如果通过...进入下一工序...如果不通过...进行返工...返工后再检验...通过后进入喷涂工序...喷涂完成后进行干燥...干燥后进行二级检验...检验包括外观检查和尺寸检查...外观检查用目视法...尺寸检查用精密测量仪器...两项都通过才能进入包装工序...包装时要放入说明书和保修卡...包装后进行称重验证...最后进行二维码标签贴附...贴完标签后进入仓库准备出货"
+        },
+        {
+          "turn": 3,
+          "speaker": "采集系统",
+          "text": "这个流程中有多少个检验点？"
+        },
+        {
+          "turn": 4,
+          "speaker": "生产主管_王华",
+          "text": "三个检验点：初级检验在装配后...二级检验在干燥后...第三个是称重验证在包装后...如果在任何检验点发现问题...都要进行相应的纠正措施...初级检验发现问题进行返工...二级检验发现问题进行返工或报废处理...称重验证发现问题要检查包装内容物是否正确"
+        }
+      ],
+      "expected_challenges": [
+        "分解超长句子为独立步骤",
+        "识别嵌入的决策点",
+        "解析复杂的流程链",
+        "处理多个并发的信息",
+        "保持整体结构清晰"
+      ],
+      "recovery_hints": [
+        "使用分句和分段处理",
+        "识别关键词作为步骤分界",
+        "建立层级结构（main steps -> sub steps）",
+        "标记决策和条件",
+        "生成流程树而不是线性链"
+      ],
+      "expected_causal_chains": 12,
+      "expected_completeness": 0.75,
+      "expected_confidence": 0.6
+    },
+    {
+      "scenario_id": "ADVANCED_004",
+      "scenario_name": "深度回溯型访谈",
+      "category": "思维跳跃",
+      "description": "多层次的思维回溯和补充",
+      "complexity_level": "ADVANCED",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "请描述故障处理流程"
+        },
+        {
+          "turn": 2,
+          "speaker": "设备工程师_李军",
+          "text": "首先报警...然后硬件诊断...最后维修"
+        },
+        {
+          "turn": 3,
+          "speaker": "采集系统",
+          "text": "报警前呢？"
+        },
+        {
+          "turn": 4,
+          "speaker": "设备工程师_李军",
+          "text": "报警前...哦，对...需要正常运行monitoring...还有日志记录"
+        },
+        {
+          "turn": 5,
+          "speaker": "采集系统",
+          "text": "日志记录怎么做？"
+        },
+        {
+          "turn": 6,
+          "speaker": "设备工程师_李军",
+          "text": "日志是自动的...系统每秒记录一次...关键参数是温度、电压、电流...等等...还有运行时间和cycle count"
+        },
+        {
+          "turn": 7,
+          "speaker": "采集系统",
+          "text": "硬件诊断具体包括什么？"
+        },
+        {
+          "turn": 8,
+          "speaker": "设备工程师_李军",
+          "text": "硬件诊断...嗯...包括多个子步骤...首先self-test...然后component check...然后connection verify...然后signal test...等等...我忘了最重要的...还要看之前的日志...因为报警前可能有异常信号...这些信号在日志里有记录"
+        },
+        {
+          "turn": 9,
+          "speaker": "采集系统",
+          "text": "所以日志很重要？"
+        },
+        {
+          "turn": 10,
+          "speaker": "设备工程师_李军",
+          "text": "是的...关键是要追踪日志...从报警往前回溯...找出最早出现异常的时间点...以及当时的参数值...这样能判断是什么故障...然后在硬件诊断时就能有针对性地检查...而不是盲目的全面检查"
+        }
+      ],
+      "expected_challenges": [
+        "追踪多层回溯的逻辑关系",
+        "识别后期发现的关键信息",
+        "重建正确的因果链",
+        "处理循环依赖关系",
+        "建立前置和后置关系"
+      ],
+      "recovery_hints": [
+        "记录每个回溯点和补充内容",
+        "分析信息之间的依赖关系",
+        "使用拓扑排序建立正确顺序",
+        "识别关键决策节点",
+        "验证因果链的完整性"
+      ],
+      "expected_causal_chains": 10,
+      "expected_completeness": 0.7,
+      "expected_confidence": 0.55
+    },
+    {
+      "scenario_id": "ADVANCED_005",
+      "scenario_name": "假设嵌套型访谈",
+      "category": "嵌套条件",
+      "description": "复杂的嵌套条件结构 (if-then-if-then)",
+      "complexity_level": "EXPERT",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "异常处理的完整逻辑是什么？"
+        },
+        {
+          "turn": 2,
+          "speaker": "质量工程师_张明",
+          "text": "首先检查是否真的异常...如果确认异常...就要判断异常类型...如果是尺寸异常...我们进行测量分析...如果是材料异常...我们进行材料分析"
+        },
+        {
+          "turn": 3,
+          "speaker": "质量工程师_张明",
+          "text": "然后对于尺寸异常...还要判断是超大还是超小...如果超大...可能是模具磨损...需要更换模具或调整参数...如果超小...可能是工艺不稳定...需要重新校准"
+        },
+        {
+          "turn": 4,
+          "speaker": "质量工程师_张明",
+          "text": "对于材料异常...还要检查是表面异常还是内部异常...如果是表面异常...清洁后重新检验...如果是内部异常...需要报废或降级使用"
+        },
+        {
+          "turn": 5,
+          "speaker": "质量工程师_张明",
+          "text": "而且...如果采取措施后...还要再做验证...验证成功...进行根本原因分析...制定预防措施...验证失败...则进行二次诊断...二次诊断时可能需要专家参与"
+        },
+        {
+          "turn": 6,
+          "speaker": "采集系统",
+          "text": "如果二次诊断还是失败呢？"
+        },
+        {
+          "turn": 7,
+          "speaker": "质量工程师_张明",
+          "text": "如果二次诊断失败...那就要升级...可能需要停线调查...或者送样到外部实验室...当然...前提是问题的严重程度足够...如果只是个别产品...可能就直接处理...但如果是批量问题...就必须根本解决"
+        }
+      ],
+      "expected_challenges": [
+        "解析多层嵌套的if-then结构",
+        "识别所有的分支路径",
+        "建立完整的决策树",
+        "处理跨层级的依赖关系",
+        "处理递归性的验证流程"
+      ],
+      "recovery_hints": [
+        "使用树形结构表示嵌套条件",
+        "标记每个条件的层级和范围",
+        "枚举所有可能的路径",
+        "验证条件的互斥性和完整性",
+        "使用临界点标记决策重要性"
+      ],
+      "expected_causal_chains": 15,
+      "expected_completeness": 0.65,
+      "expected_confidence": 0.5
+    },
+    {
+      "scenario_id": "ADVANCED_006",
+      "scenario_name": "并发修正型访谈",
+      "category": "并发修正",
+      "description": "多个错误或不清楚的地方同时被纠正",
+      "complexity_level": "ADVANCED",
+      "conversation": [
+        {
+          "turn": 1,
+          "speaker": "采集系统",
+          "text": "请描述检验流程"
+        },
+        {
+          "turn": 2,
+          "speaker": "质量工程师_张明",
+          "text": "检验包括外观检查和功能测试...不对，应该还有尺寸测量...嗯...其实检验有三部分"
+        },
+        {
+          "turn": 3,
+          "speaker": "质量工程师_张明",
+          "text": "外观检查...等等，我之前说的顺序不对...应该是先做功能测试...确保功能正常...然后再做外观检查...因为功能测试可能会有振动"
+        },
+        {
+          "turn": 4,
+          "speaker": "质量工程师_张明",
+          "text": "哦还有...尺寸测量应该在功能测试之前...因为功能测试会产生热...可能影响尺寸...所以顺序应该是：尺寸→功能→外观"
+        },
+        {
+          "turn": 5,
+          "speaker": "采集系统",
+          "text": "每个检验需要多长时间？"
+        },
+        {
+          "turn": 6,
+          "speaker": "质量工程师_张明",
+          "text": "尺寸测量...不对，我刚才说需要10分钟，其实不对...有些产品5分钟就够...有些需要15分钟...取决于特征点的数量...功能测试是2小时...不对，通常是30分钟...除非有问题需要延长...外观检查是10分钟左右"
+        }
+      ],
+      "expected_challenges": [
+        "识别同时发生的多个纠正",
+        "追踪哪些陈述被更新了",
+        "处理相互关联的修正",
+        "识别修正之间的依赖关系",
+        "确定最终的正确版本"
+      ],
+      "recovery_hints": [
+        "标记所有的纠正点",
+        "为每个修正建立版本号",
+        "识别修正之间的优先级",
+        "合并相关的修正",
+        "验证修正后的一致性"
+      ],
+      "expected_causal_chains": 7,
+      "expected_completeness": 0.72,
+      "expected_confidence": 0.58
+    }
+  ]
+}
