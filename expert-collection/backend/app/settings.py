@@ -31,7 +31,7 @@ LEVEL_LABELS = {
 LLM_SLOTS = [
     "guide_service", "mobile_speech_polish", "experiment_explain",
     "experiment_compare_explain", "error_clustering", "anonymize_name",
-    "role_normalize", "dashboard_explain",
+    "role_normalize", "dashboard_explain", "graph_regenerate",
 ]
 
 SLOT_LABELS = {
@@ -39,6 +39,7 @@ SLOT_LABELS = {
     "experiment_explain": "实验结果文字解读", "experiment_compare_explain": "多实验对比解读",
     "error_clustering": "Error Analysis 案例聚类归纳", "anonymize_name": "导出匿名化人名脱敏",
     "role_normalize": "角色归一化", "dashboard_explain": "Dashboard 评分项解释生成",
+    "graph_regenerate": "根据会话内容重新生成流程图",
 }
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -48,7 +49,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "C_flagship": {"endpoint": "", "model_name": "", "api_key": ""},
     },
     "llm_slots": {
-        "guide_service": {"level": "L", "enabled": True, "temperature": 0.1},
+        # Section 17: the review loop reasons over the whole graph + transcript every turn
+        # (corrections -> graph edits, gap questions), which needs more than the 7B "L"
+        # model. Default only -- deployments that already saved settings keep whatever level
+        # they stored and must switch it in 系统管理 (get_effective_settings prefers stored).
+        "guide_service": {"level": "C_standard", "enabled": True, "temperature": 0.1},
         "mobile_speech_polish": {"level": "L", "enabled": False, "temperature": 0.2},
         "experiment_explain": {"level": "C_flagship", "enabled": True, "temperature": 0.3},
         "experiment_compare_explain": {"level": "C_flagship", "enabled": True, "temperature": 0.3},
@@ -56,8 +61,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "anonymize_name": {"level": "L", "enabled": True, "temperature": 0.0},
         "role_normalize": {"level": "L", "enabled": True, "temperature": 0.0},
         "dashboard_explain": {"level": "C_standard", "enabled": True, "temperature": 0.2},
+        # Whole-transcript -> whole-DAG in one call is a much bigger structured-output task
+        # than guide_service's one-sentence parse, so it defaults to C_standard, not L.
+        "graph_regenerate": {"level": "C_standard", "enabled": True, "temperature": 0.1},
     },
-    "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime"},
+    "voice": {"workspace_id": "", "realtime_model": "qwen3-asr-flash-realtime", "api_key": ""},
+    # Section 17 review loop: how many clarification questions the agent may raise on its
+    # own before moving to the read-back. Deliberately high (the expert/annotator can always
+    # keep correcting past it; this only stops the agent from asking forever).
+    "review": {"max_clarify_questions": 20},
     "quality_params": {
         "min_sample_size": 20,
         "near_dup_text_threshold": 0.85,
@@ -141,13 +153,28 @@ def _mask_key(value: str) -> str:
 
 
 def mask_for_display(settings: dict) -> dict:
-    """Never echo API keys back in plaintext (PRD 17.2). Only llm_levels carry a key now --
-    llm_slots have nothing secret in them (level reference + enabled + temperature).
+    """Never echo secrets back in plaintext (PRD 17.2): API keys for every llm_level and the
+    voice service, plus the "L" level's endpoint -- for a local model that's a filesystem
+    path/internal address, not something that should show up in plaintext on screen either.
+    C_standard/C_flagship's endpoint is a public API URL, not a local path, so it's left as-is.
     """
     masked = {**settings, "llm_levels": {}}
     for level, cfg in settings.get("llm_levels", {}).items():
-        masked["llm_levels"][level] = {
+        level_out = {
             **cfg, "api_key": _mask_key(cfg.get("api_key", "")), "api_key_set": bool(cfg.get("api_key")),
         }
-        del masked["llm_levels"][level]["api_key"]
+        del level_out["api_key"]
+        if level == "L":
+            # Fully hidden, not partially revealed like _mask_key does for API keys: a local
+            # file path's tail characters (extension, folder name) are still identifying
+            # information, and the frontend only needs the boolean to decide what to show.
+            level_out["endpoint"] = ""
+            level_out["endpoint_set"] = bool(cfg.get("endpoint"))
+        masked["llm_levels"][level] = level_out
+
+    voice = dict(settings.get("voice", {}))
+    voice["api_key_set"] = bool(voice.get("api_key"))
+    voice.pop("api_key", None)
+    masked["voice"] = voice
+
     return masked
