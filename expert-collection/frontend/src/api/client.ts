@@ -42,6 +42,8 @@ export const api = {
     req<TurnResponse>("POST", `/api/expert-workflows/${id}/turns`, { text }),
   confirmWorkflow: (id: string) =>
     req<WorkflowRecord>("POST", `/api/expert-workflows/${id}/confirm`),
+  updateNodePosition: (id: string, nodeId: string, position: { x: number; y: number }) =>
+    req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/nodes/${nodeId}/position`, position),
   updateManufacturingContext: (id: string, patch: Partial<ManufacturingContext>) =>
     req<WorkflowRecord>("PUT", `/api/expert-workflows/${id}/manufacturing-context`, patch),
 

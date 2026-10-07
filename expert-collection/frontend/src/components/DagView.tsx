@@ -12,6 +12,8 @@ import ReactFlow, {
   type Node as RFNode,
   type ReactFlowInstance,
   MarkerType,
+  applyNodeChanges,
+  type NodeChange,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -142,9 +144,13 @@ interface DagViewProps {
   // rest of a tall graph instead of the graph panning inside a fixed viewport. Used by the
   // mobile DAG page, which reads top-to-bottom and scrolls like the rest of the page.
   scrollable?: boolean;
+  // Called once when the expert finishes dragging a node (not on every mouse move), so the
+  // caller can persist it as the node's manual_position (PRD 11.4: keep manual positions
+  // across re-layouts).
+  onNodeMoved?: (nodeId: string, position: { x: number; y: number }) => void;
 }
 
-export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: DagViewProps) {
+export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable, onNodeMoved }: DagViewProps) {
   const [nodes, setNodes] = useState<RFNode[]>([]);
   const [edges, setEdges] = useState<RFEdge[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -154,12 +160,18 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
   // Store original edge animations to preserve confirmation state during drag
   const originalEdgesRef = useRef<Map<string, boolean>>(new Map());
   const nodeCount = graph.nodes.length;
-  const edgeCount = graph.edges.length;
 
-  // Re-layout whenever the graph's shape changes; keying off node/edge counts (rather than
-  // deep-equality) is enough here since the mock guide service only ever appends structure.
-  // This prevents unnecessary re-layouts during node dragging (which only updates manual_position).
-  const layoutKey = useMemo(() => `${nodeCount}-${edgeCount}`, [nodeCount, edgeCount]);
+  // Re-layout whenever anything *visible* about the graph changes: structure (ids) and node
+  // text/type, plus edge conditions. Counts alone missed in-place edits such as an approval
+  // node being renamed to "审批（质量主管）". manual_position is deliberately NOT part of the
+  // key, so persisting a dragged position never triggers a re-layout that would fight the drag.
+  const layoutKey = useMemo(
+    () =>
+      graph.nodes.map((n) => `${n.node_id}:${n.node_type}:${n.label}:${n.expert_confirmed}`).join("|") +
+      "#" +
+      graph.edges.map((e) => `${e.edge_id}:${e.from}>${e.to}:${e.condition ?? ""}`).join("|"),
+    [graph.nodes, graph.edges],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -215,8 +227,14 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
   }, [scrollable, fitZoom, containerWidth, size.width, layoutKey]);
 
   // Stable callback reference for node clicks
+  // React Flow v11 controlled mode: without applying NodeChanges back into state, a dragged
+  // node snaps back to its old position on release (it was never actually movable before).
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    setNodes((prev) => applyNodeChanges(changes, prev));
+  }, []);
+
   const handleNodeClick = useCallback(
-    (_, node: RFNode) => {
+    (_: React.MouseEvent, node: RFNode) => {
       const original = graph.nodes.find((n) => n.node_id === node.id);
       if (original) onNodeTap?.(original);
     },
@@ -228,9 +246,13 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
     setIsDragging(true);
   }, []);
 
-  const handleNodeDragStop = useCallback(() => {
-    setIsDragging(false);
-  }, []);
+  const handleNodeDragStop = useCallback(
+    (_: React.MouseEvent, node: RFNode) => {
+      setIsDragging(false);
+      onNodeMoved?.(node.id, { x: Math.round(node.position.x), y: Math.round(node.position.y) });
+    },
+    [onNodeMoved],
+  );
 
   if (nodeCount === 0) {
     return (
@@ -245,6 +267,7 @@ export function DagView({ graph, onNodeTap, readOnly, emptyLabel, scrollable }: 
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      onNodesChange={handleNodesChange}
       fitView={!scrollable}
       defaultViewport={scrollable ? { x: 20, y: 20, zoom: 1 } : undefined}
       onInit={(instance) => {

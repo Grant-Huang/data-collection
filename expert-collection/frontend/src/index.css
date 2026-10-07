@@ -11,3 +11,8 @@ html, body, #root {
 body {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* B1: AI 处理中提示里的转圈图标 */
+@keyframes ewc-spin {
+  to { transform: rotate(360deg); }
+}

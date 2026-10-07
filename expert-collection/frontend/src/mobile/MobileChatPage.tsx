@@ -8,7 +8,7 @@ import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 interface Props {
   active: WorkflowRecord | null;
   sending: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
   onOpenDrawer: () => void;
   onToggleProgress: () => void;
   progressOpen: boolean;
@@ -24,11 +24,13 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
     setDraft(chip);
   }
 
-  function handleSend(text?: string) {
+  async function handleSend(text?: string) {
     const value = (text ?? draft).trim();
     if (!value || sending || confirmed) return;
     setDraft("");
-    onSend(value);
+    const ok = await onSend(value);
+    // Failed turn: put the answer back so the expert can just resend it (B1).
+    if (!ok) setDraft((current) => current || value);
   }
 
   return (
@@ -68,7 +70,7 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
       )}
 
       {active ? (
-        <MessageList turns={active.turns} />
+        <MessageList turns={active.turns} sessionKey={active.id} pending={sending} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
           点击左上角「☰」新建一个流程开始讲述

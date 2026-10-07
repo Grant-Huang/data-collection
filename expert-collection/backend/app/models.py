@@ -175,6 +175,11 @@ class CreateWorkflowRequest(BaseModel):
     name: Optional[str] = None
 
 
+class NodePositionUpdateRequest(BaseModel):
+    x: float
+    y: float
+
+
 class TurnRequest(BaseModel):
     text: str
 

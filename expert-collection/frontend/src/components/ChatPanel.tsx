@@ -11,14 +11,16 @@ import type { ConversationTurn, NextQuestion } from "../api/types";
 import { MessageList } from "./MessageList";
 
 interface Props {
+  // Identifies the open session, so the message list can jump to its newest message (B4).
+  sessionId: string;
   turns: ConversationTurn[];
   nextQuestion: NextQuestion | null;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
   sending: boolean;
   confirmed: boolean;
 }
 
-export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: Props) {
+export function ChatPanel({ sessionId, turns, nextQuestion, onSend, sending, confirmed }: Props) {
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const isMultiSelect = nextQuestion?.chip_mode === "multi_select";
@@ -42,17 +44,19 @@ export function ChatPanel({ turns, nextQuestion, onSend, sending, confirmed }: P
     setDraft(selected.join("、"));
   }
 
-  function handleSend() {
+  async function handleSend() {
     const text = draft.trim();
     if (!text || sending) return;
     setDraft("");
     setSelected([]);
-    onSend(text);
+    const ok = await onSend(text);
+    // Failed turn: put the answer back so the expert can just hit 发送 again (B1).
+    if (!ok) setDraft((current) => current || text);
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <MessageList turns={turns} />
+      <MessageList turns={turns} sessionKey={sessionId} pending={sending} />
 
       {nextQuestion?.chips && !confirmed && !isMultiSelect && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "0 16px 8px" }}>

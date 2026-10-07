@@ -12,7 +12,7 @@ import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types"
 export function SessionPage() {
   const {
     workflows, active, sending, creating, error,
-    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext,
+    selectWorkflow, createWorkflow, sendTurn, confirmWorkflow, updateManufacturingContext, moveNode,
   } = useWorkflowSession();
 
   // Defaults are 18%/30% of the viewport width (the rest goes to the conversation column);
@@ -80,6 +80,7 @@ export function SessionPage() {
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <ChatPanel
+                sessionId={active.id}
                 turns={active.turns}
                 nextQuestion={active.unresolved[0] ?? null}
                 onSend={sendTurn}
@@ -118,7 +119,7 @@ export function SessionPage() {
               背景信息收集中，还没开始画图……
             </div>
           ) : (
-            active && <DagView graph={active.graph} />
+            active && <DagView graph={active.graph} onNodeMoved={moveNode} />
           )}
         </div>
       </div>

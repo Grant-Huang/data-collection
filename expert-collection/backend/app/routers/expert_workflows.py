@@ -14,6 +14,7 @@ from ..models import (
     Completion,
     CreateWorkflowRequest,
     ManufacturingContextUpdateRequest,
+    NodePositionUpdateRequest,
     TurnRequest,
     TurnResponse,
     ValidationIssue,
@@ -130,6 +131,26 @@ def update_manufacturing_context(workflow_id: str, req: ManufacturingContextUpda
     if not record:
         raise HTTPException(status_code=404, detail="workflow not found")
     record["manufacturing_context"] = req.model_dump()
+    record["updated_at"] = _now()
+    db.save(record)
+    return WorkflowRecord.model_validate(_strip_internal(record))
+
+
+@router.put("/{workflow_id}/nodes/{node_id}/position", response_model=WorkflowRecord)
+def update_node_position(workflow_id: str, node_id: str, req: NodePositionUpdateRequest) -> WorkflowRecord:
+    """B5: persist where the expert dragged a node to (PRD 11.4: manual positions survive
+    re-layouts). Layout-only -- it changes nothing about the graph's meaning, so unlike turns it
+    is still allowed after the workflow is confirmed, and it goes through the same Graph Ops
+    protocol (`update_node`) as every other graph change.
+    """
+    record = db.get(workflow_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if not any(n["node_id"] == node_id for n in record["graph"]["nodes"]):
+        raise HTTPException(status_code=404, detail="node not found")
+    record["graph"] = graph_ops.apply_ops(record["graph"], [
+        {"op": "update_node", "node_id": node_id, "patch": {"manual_position": {"x": req.x, "y": req.y}}},
+    ])
     record["updated_at"] = _now()
     db.save(record)
     return WorkflowRecord.model_validate(_strip_internal(record))
