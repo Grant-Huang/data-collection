@@ -19,11 +19,12 @@ interface Props {
   showArchived: boolean;
   onToggleShowArchived: () => void;
   onUpdateMeta: (id: string, patch: WorkflowMetaUpdate) => void;
+  onExport?: (workflowId: string) => void;
 }
 
 export function HistoryDrawer({
   workflows, activeId, onSelect, onCreate, creating,
-  showArchived, onToggleShowArchived, onUpdateMeta,
+  showArchived, onToggleShowArchived, onUpdateMeta, onExport,
 }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -72,6 +73,7 @@ export function HistoryDrawer({
                 onRename={(name) => onUpdateMeta(w.id, { name })}
                 onTogglePin={() => onUpdateMeta(w.id, { pinned: !w.pinned })}
                 onToggleArchive={() => onUpdateMeta(w.id, { archived: !w.archived })}
+                onExport={onExport}
               />
             </div>
             <div style={{ fontSize: 11.5, color: "#667085", marginTop: 4, display: "flex", justifyContent: "space-between" }}>
