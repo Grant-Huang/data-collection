@@ -6,6 +6,7 @@ import { useWorkflowSession } from "../hooks/useWorkflowSession";
 import { useResizablePanel } from "../hooks/useResizablePanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { DualDagPanel } from "../components/DualDagPanel";
+import { CompletenessChecklist } from "../components/CompletenessChecklist";
 import { HistoryDrawer } from "../components/HistoryDrawer";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { MANUFACTURING_MODE_LABELS, type ManufacturingMode } from "../api/types";
@@ -100,6 +101,9 @@ export function SessionPage() {
                 {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && "・可以确认提交了"}
                 {active.status === "expert_confirmed" && "・已确认"}
               </div>
+              {active.checklist && active.status !== "expert_confirmed" && (
+                <CompletenessChecklist key={active.id} items={active.checklist} />
+              )}
               {/* §14.4 Dataset Slice -- a static classification tag, editable any time, not
                   part of the FSM conversation (it's not scenario narrative). */}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

@@ -235,6 +235,17 @@ export interface WorkflowRecord {
   archived: boolean;
   deleted?: boolean;
   in_dataset: boolean;
+  // 「还差什么」(B6): review-loop sessions after the first draft; null otherwise.
+  checklist?: ChecklistItem[] | null;
+}
+
+export interface ChecklistItem {
+  key: string;
+  label: string;
+  // asking = the question on screen; open = still to ask; skipped = the interview stopped
+  // before reaching it; done = answered or nothing to ask.
+  status: "asking" | "open" | "skipped" | "done";
+  open: number;
 }
 
 export interface WorkflowMetaUpdate {

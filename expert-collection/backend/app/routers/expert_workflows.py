@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import (
     dataset_records, db, graph_ops, graph_validator, guide_service, llm_client, ontology,
-    ontology_validator, phase3a_integration, review_agent, vocabulary,
+    ontology_validator, phase3a_integration, review_agent, review_gaps, vocabulary,
 )
 from ..models import (
     Completion,
@@ -161,6 +161,11 @@ def create_workflow(req: CreateWorkflowRequest) -> WorkflowRecord:
 def _strip_internal(record: dict, *, in_dataset: bool) -> dict:
     out = {k: v for k, v in record.items() if not k.startswith("_")}
     out["in_dataset"] = in_dataset
+    # 「还差什么」(B6): derived from the private clarification list on every read, never stored.
+    review = record.get("_review")
+    if review and review.get("phase") != "narrative":
+        out["checklist"] = review_gaps.checklist(review.get("gaps") or [], record["graph"], pending_gap_id=review.get("pending_gap_id"),
+                                                 phase=review.get("phase", ""))
     return out
 
 

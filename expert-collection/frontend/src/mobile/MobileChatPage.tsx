@@ -3,11 +3,20 @@
 import { useRef, useState } from "react";
 import type { WorkflowRecord } from "../api/types";
 import { MessageList } from "../components/MessageList";
+import { CompletenessChecklist } from "../components/CompletenessChecklist";
 import { thinkingLabel } from "../components/ThinkingIndicator";
 import { chipSendsImmediately, mergeChipIntoDraft } from "../utils/chips";
 import { VoiceCapsuleInput } from "./VoiceCapsuleInput";
 import { RealtimeVoiceDialog } from "../voice/RealtimeVoiceDialog";
 import { RealtimeVoiceIcon } from "../voice/icons";
+
+// The progress panel used to print the internal stage id ("review_review"); experts get words.
+const STAGE_LABELS: Record<string, string> = {
+  review_narrative: "讲述中", review_review: "核对细节", review_final_confirm: "最后确认", review_done: "已确认",
+};
+function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? (stage === "confirmed" ? "已确认" : "逐步采集中");
+}
 
 interface Props {
   active: WorkflowRecord | null;
@@ -88,8 +97,9 @@ export function MobileChatPage({ active, sending, onSend, onOpenDrawer, onToggle
 
       {progressOpen && active && (
         <div style={{ padding: "8px 14px", borderBottom: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 12, color: "#475569" }}>
-          完成度 {Math.round(active.completion.score * 100)}% · 当前阶段 {active.stage}
+          完成度 {Math.round(active.completion.score * 100)}% · {stageLabel(active.stage)}
           {active.completion.ready_for_confirmation && active.status !== "expert_confirmed" && " · 可以确认提交了"}
+          {active.checklist && !confirmed && <CompletenessChecklist key={active.id} items={active.checklist} defaultOpen />}
         </div>
       )}
       {!progressOpen && active && (

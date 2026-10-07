@@ -183,3 +183,41 @@ def test_answering_a_question_keeps_the_interview_on_completeness(client, model)
     state = db.get(wid)["_review"]
     nxt = next(g for g in state["gaps"] if g["id"] == state["pending_gap_id"])
     assert nxt["kind"] != "model"
+
+
+# --- 「还差什么」checklist (B6) ------------------------------------------------------------------
+
+def test_checklist_follows_the_interview(client, model):
+    wid = client.post("/api/expert-workflows", json={}).json()["id"]
+    rec = _turn(client, wid, PART_1 + PART_2)
+    assert rec["checklist"] is None  # nothing to check before the first draft
+
+    rec = _turn(client, wid, "讲完了")
+    assert rec["stage"] == "review_review"
+    rows = {r["key"]: r for r in rec["checklist"]}
+    # The draft has a start, an end and a decision with conditions -> settled; it has no
+    # approval step and one step without an actor -> still open; exactly one row is being asked.
+    assert rows["ends"]["status"] == "done" and rows["conditions"]["status"] == "done"
+    assert len([r for r in rec["checklist"] if r["status"] == "asking"]) == 1
+    assert rows["actors"]["status"] in ("open", "asking") and rows["approval"]["status"] in ("open", "asking")
+    # Severity order, same as the interview.
+    keys = [r["key"] for r in rec["checklist"]]
+    assert keys.index("approval") < keys.index("actors") < keys.index("experience")
+
+    asking = next(r["key"] for r in rec["checklist"] if r["status"] == "asking")
+    model.review_responses.append(_reply())
+    rec = _turn(client, wid, "没有，都是这么处理")
+    rows = {r["key"]: r for r in rec["checklist"]}
+    assert rows[asking]["status"] == "done"
+
+
+def test_checklist_marks_unasked_items_skipped_once_the_interview_stops():
+    gaps = review_gaps.refresh([], EXTRACTED, mode="create")
+    rows = review_gaps.checklist(gaps, EXTRACTED, pending_gap_id=None, phase="final_confirm")
+    assert {r["status"] for r in rows} <= {"done", "skipped"}
+    assert next(r for r in rows if r["key"] == "actors")["status"] == "skipped"
+    # Items that cannot arise for this graph and have nothing in them aren't listed.
+    no_decision = {**EXTRACTED, "nodes": [n for n in EXTRACTED["nodes"] if n["node_type"] != "decision"]}
+    keys = [r["key"] for r in review_gaps.checklist(review_gaps.refresh([], no_decision, mode="create"), no_decision,
+                                                    pending_gap_id=None, phase="review")]
+    assert "criteria" not in keys and "other" not in keys

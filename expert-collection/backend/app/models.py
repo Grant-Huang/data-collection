@@ -237,6 +237,14 @@ class TaskWorkflow(BaseModel):
     tasks: list[TaskDefinition] = Field(default_factory=list)
 
 
+class ChecklistItem(BaseModel):
+    """One row of the 「还差什么」checklist (B6, review_gaps.checklist)."""
+    key: str
+    label: str
+    status: Literal["asking", "open", "skipped", "done"]
+    open: int = 0
+
+
 class WorkflowRecord(BaseModel):
     id: str
     name: str
@@ -260,6 +268,9 @@ class WorkflowRecord(BaseModel):
     archived: bool = False
     deleted: bool = False
     in_dataset: bool = False
+    # Review-loop sessions after the first draft: what is settled / being asked / still open.
+    # None before the draft exists and for step-by-step guide sessions.
+    checklist: Optional[list[ChecklistItem]] = None
 
 
 class WorkflowMetaUpdateRequest(BaseModel):

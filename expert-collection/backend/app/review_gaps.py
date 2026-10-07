@@ -243,3 +243,49 @@ def open_gaps(gaps: list[dict]) -> list[dict]:
 def mark(gaps: list[dict], ids: Iterable[str], status: str) -> list[dict]:
     ids = set(ids)
     return [{**g, "status": status} if g["id"] in ids and g["status"] in ("open", "asked") else g for g in gaps]
+
+
+# --- 「还差什么」checklist (B6) -------------------------------------------------------------
+# The same list the interview works through, folded into a dozen plain-language items the
+# expert can read at a glance: what is already settled, what is being asked now, what is left.
+# Order = severity order of the interview, so the first open item is (roughly) the next question.
+# (key, label, matcher, shown_when). "always"; "decision" = only when the graph has a judgement
+# step (conditions / thresholds mean nothing otherwise); "gaps" = only when the item has
+# something in it (the model's own doubts).
+_CHECKLIST = (
+    ("ends", "从哪开始、到哪结束", lambda g: g["kind"] == "validator" and g["id"].split(":")[1] in ("missing_start", "missing_end"), "always"),
+    ("said", "每一步都是您讲过的", lambda g: g["kind"] == "unverified_node", "always"),
+    ("connected", "步骤之间前后连得上", lambda g: g["kind"] == "validator" and g["id"].split(":")[1] not in ("missing_start", "missing_end"), "always"),
+    ("conditions", "判断之后各走哪条路", lambda g: g["kind"] == "decision_condition", "decision"),
+    ("exceptions", "例外情况怎么处理", lambda g: g["id"] == "coverage:exceptions", "always"),
+    ("approval", "要等谁签字确认", lambda g: g["id"] == "coverage:approval" or g["kind"] == "timing", "always"),
+    ("retry", "返工从哪一步重做", lambda g: g["id"] == "coverage:retry", "always"),
+    ("parallel", "哪些事同时进行", lambda g: g["id"] == "coverage:parallel", "always"),
+    ("actors", "每一步由谁来做", lambda g: g["kind"] == "missing_actor", "always"),
+    ("criteria", "判断的具体标准", lambda g: g["kind"] == "criterion", "decision"),
+    ("experience", "最靠经验的地方", lambda g: g["id"] == "coverage:experience", "always"),
+    ("other", "其他要核对的细节", lambda g: g["kind"] == "model", "gaps"),
+)
+
+
+def checklist(gaps: list[dict], graph: dict, *, pending_gap_id: str | None, phase: str) -> list[dict]:
+    """One row per item: {"key", "label", "status", "open"}.
+    status: "asking" (the question on screen is about this), "open" (still to be asked),
+    "skipped" (left open when the interview stopped -- question budget used up -- the expert can
+    still add it before confirming), or "done" (answered, or nothing to ask)."""
+    finished = phase in ("final_confirm", "done")
+    has_decision = any(n.get("node_type") == "decision" for n in graph.get("nodes", []))
+    rows = []
+    for key, label, match, shown_when in _CHECKLIST:
+        mine = [g for g in gaps if match(g)]
+        if (shown_when == "decision" and not has_decision and not mine) or (shown_when == "gaps" and not mine):
+            continue
+        open_n = sum(1 for g in mine if g["status"] == "open")
+        if any(g["id"] == pending_gap_id and g["status"] == "asked" for g in mine) and not finished:
+            status = "asking"
+        elif open_n:
+            status = "skipped" if finished else "open"
+        else:
+            status = "done"
+        rows.append({"key": key, "label": label, "status": status, "open": open_n})
+    return rows
