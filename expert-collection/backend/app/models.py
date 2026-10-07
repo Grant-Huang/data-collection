@@ -4,7 +4,7 @@ and the DAG it produces. Dataset/Dashboard/Experiment-center records are out of 
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -686,3 +686,241 @@ class ComparisonResult(BaseModel):
     experiments: list[ExperimentSummary]
     metric_table: dict
     narrative: str
+
+
+# --- Phase 3-B: System Rules, Cross-workflow Relationships, Global Policies ---
+
+# SystemRule: 系统级约束和政策
+RuleType = Literal[
+    "validation_constraint",      # 工作流验证约束
+    "permission_requirement",     # 权限要求
+    "resource_allocation",        # 资源分配规则
+    "exception_handling",         # 异常处理规则
+    "data_retention",            # 数据保留规则
+    "compliance_requirement",    # 合规要求
+]
+
+RuleStatus = Literal["active", "deprecated", "draft", "archived"]
+
+
+class SystemRule(BaseModel):
+    """系统级规则：适用于工作流创建和修改的全局约束
+    """
+    rule_id: str
+    rule_name: str
+    rule_type: RuleType
+    description: str
+    status: RuleStatus = "active"
+
+    # 规则内容和适用范围
+    content: dict  # 规则具体内容，根据rule_type而异
+    applicable_workflow_types: list[str] = Field(default_factory=list)  # 空表示全部
+    applicable_stages: list[str] = Field(default_factory=list)  # workflow stages
+
+    # 版本控制
+    version: str  # semantic versioning
+    effective_date: str  # RFC 3339
+    expiry_date: Optional[str] = None  # RFC 3339，None表示永不过期
+
+    # 元数据
+    created_by: str
+    created_at: str
+    updated_by: str
+    updated_at: str
+
+    # 权限和审批
+    requires_approval: bool = False
+    approved_by: Optional[str] = None
+    approval_date: Optional[str] = None
+
+    # 影响分析
+    estimated_affected_workflows: int = 0
+    tags: list[str] = Field(default_factory=list)
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+
+
+class SystemRuleUpdate(BaseModel):
+    """更新系统规则的请求体"""
+    rule_name: Optional[str] = None
+    description: Optional[str] = None
+    content: Optional[dict] = None
+    status: Optional[RuleStatus] = None
+    applicable_workflow_types: Optional[list[str]] = None
+    applicable_stages: Optional[list[str]] = None
+    expiry_date: Optional[str] = None
+    priority: Optional[Literal["low", "medium", "high", "critical"]] = None
+
+
+# WorkflowRelationship: 工作流间的依赖和关系
+RelationshipType = Literal[
+    "dependency",           # A依赖B完成
+    "data_handoff",        # A向B传递数据
+    "parallel_split",      # A分裂为多个平行流程
+    "merge",               # 多个流程合并为A
+    "conditional",         # 条件依赖
+    "resource_sharing",    # 共享资源
+    "information_flow",    # 信息流动
+]
+
+ConstraintType = Literal[
+    "time_constraint",     # 时间约束
+    "resource_constraint", # 资源约束
+    "data_constraint",     # 数据约束
+    "sequence_constraint", # 顺序约束
+]
+
+
+class TimeConstraint(BaseModel):
+    """时间约束"""
+    constraint_type: Literal["time_constraint"] = "time_constraint"
+    min_delay: Optional[int] = None  # 秒
+    max_delay: Optional[int] = None  # 秒
+    deadline: Optional[str] = None   # RFC 3339
+    condition: Optional[str] = None  # 条件描述
+
+
+class DataConstraint(BaseModel):
+    """数据约束"""
+    constraint_type: Literal["data_constraint"] = "data_constraint"
+    required_fields: list[str] = Field(default_factory=list)
+    data_format: Optional[str] = None
+    validation_rule: Optional[str] = None
+
+
+class WorkflowRelationship(BaseModel):
+    """工作流间的依赖和关系"""
+    relationship_id: str
+    relationship_type: RelationshipType
+
+    # 源和目标工作流
+    source_workflow_id: str
+    target_workflow_id: str
+
+    # 关系描述
+    description: str
+    condition: Optional[str] = None  # 关系成立的条件
+
+    # 约束
+    constraints: list[Union[TimeConstraint, DataConstraint]] = Field(default_factory=list)
+
+    # 版本和状态
+    version: str
+    status: RuleStatus = "active"
+
+    # 元数据
+    created_by: str
+    created_at: str
+    updated_by: str
+    updated_at: str
+
+    # 冲突检测标志
+    has_circular_dependency: bool = False
+    has_deadlock_risk: bool = False
+
+    tags: list[str] = Field(default_factory=list)
+
+
+class WorkflowRelationshipUpdate(BaseModel):
+    """更新工作流关系的请求体"""
+    description: Optional[str] = None
+    condition: Optional[str] = None
+    constraints: Optional[list[Union[TimeConstraint, DataConstraint]]] = None
+    status: Optional[RuleStatus] = None
+
+
+# GlobalPolicy: 全局策略和决策规则
+PolicyScope = Literal[
+    "organization",        # 组织级
+    "department",         # 部门级
+    "workflow_type",      # 工作流类型级
+    "all",               # 全局
+]
+
+class DecisionRule(BaseModel):
+    """决策规则"""
+    rule_id: str
+    rule_description: str
+    condition: str  # 条件表达式
+    action: str    # 采取的行动
+
+
+class ExceptionHandler(BaseModel):
+    """异常处理规则"""
+    exception_type: str
+    handling_strategy: str
+    escalation_level: Literal["none", "manager", "director", "cto"]
+    auto_remediation: bool = False
+    remediation_action: Optional[str] = None
+
+
+class GlobalPolicy(BaseModel):
+    """全局策略：组织级、部门级或工作流类型级的决策规则"""
+    policy_id: str
+    policy_name: str
+    description: str
+
+    # 适用范围
+    scope: PolicyScope
+    scope_target: Optional[str] = None  # department_id / workflow_type
+
+    # 策略内容
+    decision_rules: list[dict] = Field(default_factory=list)
+    exception_handlers: list[ExceptionHandler] = Field(default_factory=list)
+
+    # 版本和状态
+    version: str
+    status: RuleStatus = "active"
+    effective_date: str  # RFC 3339
+    expiry_date: Optional[str] = None
+
+    # 元数据
+    created_by: str
+    created_at: str
+    updated_by: str
+    updated_at: str
+
+    # 审批流程
+    requires_approval: bool = False
+    approved_by: Optional[str] = None
+    approval_date: Optional[str] = None
+
+    # 关联的规则
+    related_system_rules: list[str] = Field(default_factory=list)
+    related_relationships: list[str] = Field(default_factory=list)
+
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    tags: list[str] = Field(default_factory=list)
+
+
+class GlobalPolicyUpdate(BaseModel):
+    """更新全局策略的请求体"""
+    policy_name: Optional[str] = None
+    description: Optional[str] = None
+    decision_rules: Optional[list[dict]] = None
+    exception_handlers: Optional[list[ExceptionHandler]] = None
+    status: Optional[RuleStatus] = None
+    expiry_date: Optional[str] = None
+    priority: Optional[Literal["low", "medium", "high", "critical"]] = None
+
+
+# 规则验证相关
+class RuleValidationIssue(BaseModel):
+    """规则验证问题"""
+    issue_id: str
+    issue_type: Literal["error", "warning"]
+    code: str
+    message: str
+    affected_rule_id: Optional[str] = None
+    suggestion: Optional[str] = None
+
+
+class ImpactAnalysis(BaseModel):
+    """规则变更影响分析"""
+    rule_id: str
+    rule_type: str
+    affected_workflow_ids: list[str] = Field(default_factory=list)
+    affected_workflow_count: int = 0
+    risk_level: Literal["low", "medium", "high", "critical"] = "medium"
+    estimated_impact_percentage: float = 0.0
+    recommendations: list[str] = Field(default_factory=list)
+    change_history: list[dict] = Field(default_factory=list)
