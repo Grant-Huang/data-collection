@@ -1,0 +1,2076 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/workflow-graph-v3.schema.json",
+  "title": "Graph-based Workflow Dataset Schema v3 (Manufacturing Operational Ontology)",
+  "type": "object",
+  "required": [
+    "dataset_meta",
+    "records"
+  ],
+  "properties": {
+    "dataset_meta": {
+      "type": "object",
+      "required": [
+        "dataset_id",
+        "name",
+        "source_type",
+        "schema_version",
+        "created_at"
+      ],
+      "properties": {
+        "dataset_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "public_extracted",
+            "expert_collected"
+          ]
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": [
+            "2.0",
+            "3.0"
+          ],
+          "description": "3.0 记录可以携带 ontology；2.0 记录仍然合法"
+        },
+        "dataset_version": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "license_or_consent": {
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        },
+        "recommended_usage": {
+          "type": "string",
+          "enum": [
+            "main_experiment",
+            "auxiliary_experiment",
+            "needs_review",
+            "excluded"
+          ]
+        }
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workflow_record"
+      }
+    }
+  },
+  "$defs": {
+    "workflow_record": {
+      "type": "object",
+      "required": [
+        "record_id",
+        "manufacturing_context",
+        "scenario",
+        "graph",
+        "provenance"
+      ],
+      "properties": {
+        "record_id": {
+          "type": "string"
+        },
+        "record_version": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "expert_confirmed",
+            "reviewed",
+            "gold",
+            "rejected"
+          ]
+        },
+        "manufacturing_context": {
+          "type": "object",
+          "properties": {
+            "manufacturing_mode": {
+              "type": "string",
+              "enum": [
+                "mass_repetitive",
+                "high_automation",
+                "high_mix_low_volume",
+                "eto_mto",
+                "large_project",
+                "regulated_traceable",
+                "other"
+              ]
+            },
+            "industry": {
+              "type": "string"
+            },
+            "site_type": {
+              "type": "string"
+            },
+            "process_area": {
+              "type": "string"
+            },
+            "product_family": {
+              "type": "string"
+            },
+            "shift_context": {
+              "type": "string"
+            }
+          }
+        },
+        "scenario": {
+          "type": "object",
+          "properties": {
+            "workflow_type": {
+              "type": "string",
+              "enum": [
+                "exception_response",
+                "standard_operation",
+                "continuous_improvement",
+                "change_introduction"
+              ]
+            },
+            "scenario_category": {
+              "type": "string"
+            },
+            "scenario_name": {
+              "type": "string"
+            },
+            "trigger": {
+              "type": "string"
+            },
+            "business_goal": {
+              "type": "string"
+            }
+          }
+        },
+        "graph": {
+          "type": "object",
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "properties": {
+            "graph_type": {
+              "type": "string",
+              "enum": [
+                "linear",
+                "dag",
+                "directed_graph"
+              ]
+            },
+            "start_node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "end_node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/node"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/edge"
+              }
+            },
+            "subgraphs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/subgraph"
+              }
+            }
+          }
+        },
+        "task_workflow": {
+          "description": "双层工作流的上层：任务协作 DAG（谁负责哪一段、任务间怎么交接）。同级的 graph 是下层 SOP / 步骤 DAG（每一段具体怎么做）。可选：旧数据和公开抽取数据没有这一层。",
+          "type": "object",
+          "required": [
+            "graph",
+            "tasks"
+          ],
+          "properties": {
+            "graph": {
+              "$ref": "#/$defs/workflow_record/properties/graph"
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "task_id",
+                  "sop_node_ids"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "description": "等于 task_workflow.graph 中该任务节点的 node_id；任务名在节点 label，负责方在节点 actor_roles"
+                  },
+                  "sop_node_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "该任务内部流程由 graph（SOP 层）中哪些节点组成；专家只提到任务、没描述步骤时为空"
+                  },
+                  "definition_source": {
+                    "type": "string",
+                    "enum": [
+                      "expert_defined",
+                      "llm_mined",
+                      "org_inferred"
+                    ]
+                  },
+                  "structured_by": {
+                    "type": "string",
+                    "enum": [
+                      "llm",
+                      "rule"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entity"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        },
+        "experience_judgements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/judgement"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "required": [
+            "source_type"
+          ],
+          "properties": {
+            "source_type": {
+              "type": "string",
+              "enum": [
+                "public_extracted",
+                "expert_collected"
+              ]
+            },
+            "source_reference": {
+              "type": "string"
+            },
+            "source_date": {
+              "type": "string"
+            },
+            "collector_or_extractor": {
+              "type": "string"
+            },
+            "expert_role": {
+              "type": "string"
+            },
+            "expert_years_experience": {
+              "description": "Years of experience: a number as collected, or one of the text buckets the anonymized export uses instead (backend/app/anonymize.py bucket_experience_years).",
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "5年以下",
+                    "5-10年",
+                    "10-20年",
+                    "20-30年",
+                    "30年以上"
+                  ]
+                }
+              ]
+            },
+            "expert_id_hash": {
+              "type": "string"
+            },
+            "consent_status": {
+              "type": "string"
+            },
+            "conversation_id": {
+              "type": "string"
+            },
+            "source_turn_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        "annotation": {
+          "type": "object",
+          "properties": {
+            "has_gold_nodes": {
+              "type": "boolean"
+            },
+            "has_gold_edges": {
+              "type": "boolean"
+            },
+            "has_gold_roles": {
+              "type": "boolean"
+            },
+            "has_gold_boundaries": {
+              "type": "boolean"
+            },
+            "annotator_count": {
+              "type": "integer"
+            },
+            "adjudicated": {
+              "type": "boolean"
+            },
+            "agreement_metrics": {
+              "type": "object"
+            },
+            "annotation_notes": {
+              "type": "string"
+            }
+          }
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "coverage_score": {
+              "type": "number"
+            },
+            "completeness_score": {
+              "type": "number"
+            },
+            "extractability_score": {
+              "type": "number"
+            },
+            "authenticity_score": {
+              "type": "number"
+            },
+            "annotation_readiness_score": {
+              "type": "number"
+            },
+            "diversity_score": {
+              "type": "number"
+            },
+            "leakage_risk_score": {
+              "type": "number"
+            },
+            "overall_readiness_score": {
+              "type": "number"
+            },
+            "quality_flags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "ontology": {
+          "$ref": "#/$defs/ontology"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "node_id",
+        "node_type",
+        "label"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string"
+        },
+        "node_type": {
+          "type": "string",
+          "enum": [
+            "start",
+            "activity",
+            "decision",
+            "parallel_split",
+            "parallel_join",
+            "merge",
+            "event",
+            "wait",
+            "approval",
+            "handoff",
+            "subprocess",
+            "end"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "actor_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "actor_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "system_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "equipment_entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input_artifact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output_artifact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decision_question": {
+          "type": "string"
+        },
+        "decision_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "（已弃用，保留向后兼容）简单文本形式的决策标准。建议迁移到 evaluation_criteria（结构化形式）。"
+        },
+        "evaluation_criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluation_criterion"
+          },
+          "description": "结构化的评估标准，取代 decision_criteria。包含指标定义、阈值、逻辑关系等。"
+        },
+        "rule_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "judgement_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_duration": {
+          "type": "string",
+          "description": "预期工作时长（自然语言，如'2h'）。建议迁移到 sla_config（结构化形式）。"
+        },
+        "sla_config": {
+          "$ref": "#/$defs/sla_config",
+          "description": "服务级别协议配置：时间约束、deadline、SLA 类型等。"
+        },
+        "is_optional": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        },
+        "source_turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retry_semantics": {
+          "type": "object",
+          "description": "返工/重试语义（PRD 7.1 节裁定）：不作为图上的 loop_back 边，作为触发返工的节点上的附加语义信息，保证主图始终是合法 DAG。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rework_reference_node_id": {
+              "type": "string",
+              "description": "重新执行时回到的节点 id，不构成 DAG 边。"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "is_temporary": {
+              "type": "boolean",
+              "description": "是否为临时措施（如临时 bypass、临时工艺变更）"
+            },
+            "max_retries_per_phase": {
+              "type": "integer",
+              "description": "单阶段最多允许重试次数"
+            },
+            "expiration": {
+              "type": "object",
+              "description": "临时措施的有效期限制",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "description": "有效期时长（ISO 8601，如 'PT72H' 表示 72 小时）"
+                },
+                "lot_count": {
+                  "type": "integer",
+                  "description": "有效期内的最多 lot 数（如 3 lot）"
+                },
+                "expiration_trigger": {
+                  "type": "string",
+                  "enum": [
+                    "duration_or_count",
+                    "duration_and_count"
+                  ],
+                  "description": "有效期触发方式：duration_or_count(先达到任一条件)或 duration_and_count(两个条件都达到)"
+                }
+              }
+            },
+            "revocation_trigger": {
+              "type": "object",
+              "description": "临时措施失效的条件",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "time_passed",
+                    "reoccurrence",
+                    "condition_met"
+                  ],
+                  "description": "失效类型：time_passed(时间过期)、reoccurrence(问题重现)、condition_met(条件成立)"
+                },
+                "days": {
+                  "type": "integer",
+                  "description": "失效天数（如 90 表示 90 天后自动失效）"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "失效条件的详细说明"
+                }
+              }
+            },
+            "escalation_on_repeat": {
+              "type": "object",
+              "description": "重复出现时的升级处理",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "trigger": {
+                  "type": "string",
+                  "enum": [
+                    "same_condition",
+                    "pattern_detected"
+                  ],
+                  "description": "升级触发条件：same_condition(相同问题)或 pattern_detected(模式识别)"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "escalate_to_manager",
+                    "escalate_to_executive",
+                    "create_capa",
+                    "stop_production"
+                  ],
+                  "description": "升级后的处理动作"
+                }
+              }
+            }
+          }
+        },
+        "approval_matrix": {
+          "type": "array",
+          "description": "权限分级和多层签字流程（用于 release、approval 等节点）",
+          "items": {
+            "type": "object",
+            "properties": {
+              "approval_type": {
+                "type": "string",
+                "description": "批准类型（如 equipment_release、process_release、quality_release）"
+              },
+              "required_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "需要批准的角色列表（如 equipment_engineer、process_engineer、quality_engineer）"
+              },
+              "sequence": {
+                "type": "string",
+                "enum": [
+                  "parallel",
+                  "sequential"
+                ],
+                "description": "多个角色的批准顺序：parallel(并行)或 sequential(顺序)"
+              },
+              "criteria": {
+                "type": "string",
+                "description": "批准的评估标准或条件（如'设备状态正常且无报警'）"
+              },
+              "escalation_level": {
+                "type": "integer",
+                "description": "如果某角色拒绝，升级到哪一级（如 1=manager, 2=director）"
+              }
+            }
+          }
+        },
+        "containment_scope": {
+          "type": "object",
+          "description": "追溯和隔离范围（Phase 3-A 简化版）：针对异常情况的追溯和产品隔离维度",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "enum": [
+                "equipment_id",
+                "lot_id",
+                "material_id",
+                "line_id",
+                "mold_id",
+                "shift_id"
+              ],
+              "description": "追溯和隔离的维度"
+            },
+            "rule": {
+              "type": "string",
+              "description": "具体的隔离规则（如'all_products_on_same_equipment'）"
+            },
+            "applicable_conditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "此隔离规则适用的条件列表"
+            }
+          }
+        },
+        "raci": {
+          "$ref": "#/$defs/raci"
+        },
+        "check_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "time_constraint_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "permission_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exception_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_requirement"
+          }
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "专家原话摘录（v3 提升为 Evidence）"
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "edge_id",
+        "from",
+        "to",
+        "edge_type"
+      ],
+      "properties": {
+        "edge_id": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "edge_type": {
+          "type": "string",
+          "description": "PRD 3.3/7.1 节裁定的口径：不允许 loop_back，主图必须始终是合法 DAG。",
+          "enum": [
+            "normal",
+            "conditional",
+            "parallel",
+            "merge",
+            "handoff",
+            "approval",
+            "timeout",
+            "exception_forward"
+          ]
+        },
+        "condition": {
+          "type": "string"
+        },
+        "condition_expression": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        },
+        "source_turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "containment_scope": {
+          "type": "object",
+          "description": "追溯和隔离范围（仅在边代表异常处理或隔离行动时使用）",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "enum": [
+                "equipment_id",
+                "lot_id",
+                "material_id",
+                "line_id",
+                "mold_id",
+                "shift_id"
+              ],
+              "description": "追溯和隔离的维度"
+            },
+            "rule": {
+              "type": "string",
+              "description": "具体的隔离规则"
+            }
+          }
+        },
+        "time_constraint_id": {
+          "type": "string"
+        },
+        "exception_id": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "subgraph": {
+      "type": "object",
+      "properties": {
+        "subgraph_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "entity_id",
+        "entity_type"
+      ],
+      "properties": {
+        "raw_name": {
+          "type": "string"
+        },
+        "entity_id": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "person",
+            "role",
+            "equipment",
+            "line_station",
+            "system",
+            "product",
+            "material",
+            "document",
+            "organization",
+            "other"
+          ]
+        },
+        "business_role": {
+          "type": "string"
+        },
+        "normalized_name": {
+          "type": "string"
+        },
+        "attributes": {
+          "type": "object"
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "rule_text"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "rule_text": {
+          "type": "string"
+        },
+        "rule_source": {
+          "type": "string",
+          "enum": [
+            "sop",
+            "standard",
+            "system_rule",
+            "management_rule",
+            "regulation",
+            "other"
+          ]
+        },
+        "trigger_condition": {
+          "type": "string"
+        },
+        "applicable_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_reference": {
+          "type": "string"
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "judgement": {
+      "type": "object",
+      "required": [
+        "judgement_id",
+        "judgement_text"
+      ],
+      "properties": {
+        "judgement_id": {
+          "type": "string"
+        },
+        "judgement_text": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "applicable_condition": {
+          "type": "string"
+        },
+        "actor_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "applicable_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_type"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "document",
+            "record",
+            "inspection_result",
+            "work_order",
+            "drawing",
+            "parameter_set",
+            "report",
+            "message",
+            "other"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "system_of_record": {
+          "type": "string"
+        },
+        "uri_or_reference": {
+          "type": "string"
+        }
+      }
+    },
+    "sla_config": {
+      "type": "object",
+      "description": "服务级别协议（SLA）配置：定义节点的时间约束、deadline 类型及其含义",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "deadline",
+            "target",
+            "warn_threshold"
+          ],
+          "description": "deadline=硬性截止时间；target=目标时长；warn_threshold=预警阈值"
+        },
+        "duration": {
+          "type": "string",
+          "description": "时长表示（ISO 8601 格式或自然语言，如'PT2H'或'2h'）"
+        },
+        "from_trigger": {
+          "type": "string",
+          "enum": [
+            "previous_node_completed",
+            "workflow_start",
+            "manual_start"
+          ],
+          "description": "时间计算的起点：从前序节点完成开始、从工作流开始、还是手动开始"
+        },
+        "enforced": {
+          "type": "boolean",
+          "description": "是否为硬性约束（违反会导致流程异常），还是仅作为参考"
+        },
+        "violation_action": {
+          "type": "string",
+          "enum": [
+            "escalate",
+            "notify",
+            "auto_reassign",
+            "none"
+          ],
+          "description": "超期时的处理方式：升级、通知、自动转派、不处理"
+        },
+        "description": {
+          "type": "string",
+          "description": "人类可读的 SLA 说明，如'必须在前序节点完成后2小时内完成初评'"
+        }
+      }
+    },
+    "evaluation_criterion": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "description": "单个评估标准或决策条件",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "标准的唯一标识符（如'defect_density'）"
+        },
+        "name": {
+          "type": "string",
+          "description": "人类可读的标准名称（如'缺陷密度'）"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "metric",
+            "categorical",
+            "boolean",
+            "text",
+            "numeric_range"
+          ],
+          "description": "标准的数据类型：metric(指标)、categorical(分类)、boolean(是否)、text(文本)、numeric_range(数值区间)"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "是否为必填项"
+        },
+        "unit": {
+          "type": "string",
+          "description": "单位（如'defects/mm²'、'%'）"
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "数值型标准的阈值定义（如normal/warning/critical等级）",
+          "properties": {
+            "normal": {
+              "type": "string"
+            },
+            "warning": {
+              "type": "string"
+            },
+            "critical": {
+              "type": "string"
+            }
+          }
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "分类型标准的允许值列表"
+        },
+        "logic": {
+          "type": "string",
+          "enum": [
+            "AND",
+            "OR"
+          ],
+          "description": "该标准与下一个标准的逻辑关系（默认 AND）"
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "依赖的前置标准 id（如果有条件依赖）"
+        },
+        "description": {
+          "type": "string",
+          "description": "标准的详细说明或评估方法"
+        },
+        "aggregation": {
+          "type": "object",
+          "description": "聚合和趋势条件（Phase 3-A）：支持时间序列判断而不仅仅是单点阈值",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "trend",
+                "pattern",
+                "continuous",
+                "statistical"
+              ],
+              "description": "聚合方法：trend(趋势)、pattern(模式)、continuous(连续)、statistical(统计)"
+            },
+            "window_size": {
+              "type": "integer",
+              "description": "时间窗口大小（如 7 表示过去 7 个数据点）"
+            },
+            "operator": {
+              "type": "string",
+              "enum": [
+                "all_increasing",
+                "all_decreasing",
+                "two_exceeding",
+                "variance_above",
+                "mean_shift",
+                "cycle_detected"
+              ],
+              "description": "聚合判断操作符：all_increasing(全部上升)、all_decreasing(全部下降)、two_exceeding(连续两个超过)、variance_above(方差超过)、mean_shift(均值偏移)、cycle_detected(周期检测)"
+            },
+            "threshold": {
+              "type": "string",
+              "description": "聚合条件的阈值（如 '5%'表示方差超过 5%）"
+            },
+            "min_samples": {
+              "type": "integer",
+              "description": "进行判断前需要的最少数据点数"
+            },
+            "description": {
+              "type": "string",
+              "description": "聚合条件的自然语言说明（如'连续两点接近上限'）"
+            }
+          }
+        }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "description": "所有本体对象共享的知识断言元数据（对应 Palantir Interface 的共享形状）",
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "confidence_basis": {
+          "type": "string",
+          "enum": [
+            "expert_stated",
+            "expert_confirmed",
+            "multi_expert_agreement",
+            "document_backed",
+            "data_verified",
+            "llm_inferred"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "expert_confirmed": {
+          "type": "boolean"
+        },
+        "source_turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "valid_from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valid_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "role": {
+      "type": "object",
+      "required": [
+        "role_id",
+        "name"
+      ],
+      "properties": {
+        "role_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "level": {
+          "type": "integer"
+        },
+        "reports_to": {
+          "type": "string",
+          "description": "上级 role_id，构成默认升级链"
+        },
+        "qualifications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "entity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "limit_band": {
+      "type": "object",
+      "required": [
+        "band"
+      ],
+      "properties": {
+        "band": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "warning",
+            "critical",
+            "reject"
+          ]
+        },
+        "lower": {
+          "type": "number"
+        },
+        "upper": {
+          "type": "number"
+        },
+        "lower_inclusive": {
+          "type": "boolean",
+          "default": true
+        },
+        "upper_inclusive": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "expected_value": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "number"
+        },
+        "tolerance_minus": {
+          "type": "number"
+        },
+        "tolerance_plus": {
+          "type": "number"
+        },
+        "value": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": [
+        "check_id",
+        "name",
+        "kind"
+      ],
+      "description": "可量化判据：阈值（limits）+ 预期值（expected）",
+      "properties": {
+        "check_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "numeric",
+            "categorical",
+            "boolean",
+            "text"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "expected": {
+          "$ref": "#/$defs/expected_value"
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/limit_band"
+          }
+        },
+        "limits_text": {
+          "type": "object",
+          "description": "v2 thresholds 原文"
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "aggregation": {
+          "type": "object",
+          "description": "聚合和趋势条件（Phase 3-A）：支持时间序列判断而不仅仅是单点阈值",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "trend",
+                "pattern",
+                "continuous",
+                "statistical"
+              ],
+              "description": "聚合方法：trend(趋势)、pattern(模式)、continuous(连续)、statistical(统计)"
+            },
+            "window_size": {
+              "type": "integer",
+              "description": "时间窗口大小（如 7 表示过去 7 个数据点）"
+            },
+            "operator": {
+              "type": "string",
+              "enum": [
+                "all_increasing",
+                "all_decreasing",
+                "two_exceeding",
+                "variance_above",
+                "mean_shift",
+                "cycle_detected"
+              ],
+              "description": "聚合判断操作符：all_increasing(全部上升)、all_decreasing(全部下降)、two_exceeding(连续两个超过)、variance_above(方差超过)、mean_shift(均值偏移)、cycle_detected(周期检测)"
+            },
+            "threshold": {
+              "type": "string",
+              "description": "聚合条件的阈值（如 '5%'表示方差超过 5%）"
+            },
+            "min_samples": {
+              "type": "integer",
+              "description": "进行判断前需要的最少数据点数"
+            },
+            "description": {
+              "type": "string",
+              "description": "聚合条件的自然语言说明（如'连续两点接近上限'）"
+            }
+          }
+        },
+        "measurement": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "sample_size": {
+              "type": "integer"
+            },
+            "frequency": {
+              "type": "string"
+            }
+          }
+        },
+        "on_violation_exception_id": {
+          "type": "string"
+        },
+        "source_criterion_id": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "time_constraint": {
+      "type": "object",
+      "required": [
+        "time_constraint_id",
+        "kind"
+      ],
+      "properties": {
+        "time_constraint_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "expected_duration",
+            "deadline",
+            "target",
+            "warn_threshold",
+            "validity_window",
+            "waiting_period",
+            "frequency"
+          ]
+        },
+        "duration": {
+          "type": "string",
+          "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$",
+          "description": "ISO 8601 时长，如 PT4H、P3D"
+        },
+        "anchor": {
+          "type": "string",
+          "enum": [
+            "previous_node_completed",
+            "node_started",
+            "workflow_start",
+            "event_occurred",
+            "manual_start"
+          ]
+        },
+        "anchor_ref": {
+          "type": "string"
+        },
+        "enforced": {
+          "type": "boolean"
+        },
+        "on_violation": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "escalate",
+                "notify",
+                "auto_reassign",
+                "none"
+              ]
+            },
+            "escalation_policy_id": {
+              "type": "string"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "evidence_requirement": {
+      "type": "object",
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "document",
+            "record",
+            "inspection_result",
+            "work_order",
+            "drawing",
+            "parameter_set",
+            "report",
+            "message",
+            "other"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "mandatory": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "submission_criterion": {
+      "type": "object",
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "actor",
+            "parameter",
+            "object_state"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "expression": {
+          "type": "string"
+        }
+      }
+    },
+    "permission": {
+      "type": "object",
+      "required": [
+        "permission_id",
+        "action",
+        "allowed_role_ids"
+      ],
+      "description": "受控动作（对应 Palantir Action Type + submission criteria）",
+      "properties": {
+        "permission_id": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "approve",
+            "reject",
+            "release",
+            "bypass",
+            "waive",
+            "stop_line",
+            "modify_parameter",
+            "sign_off"
+          ]
+        },
+        "allowed_role_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sequence": {
+          "type": "string",
+          "enum": [
+            "sequential",
+            "parallel",
+            "any_one"
+          ]
+        },
+        "submission_criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/submission_criterion"
+          }
+        },
+        "separation_of_duties": {
+          "type": "boolean"
+        },
+        "delegable": {
+          "type": "boolean"
+        },
+        "required_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_requirement"
+          }
+        },
+        "failure_message": {
+          "type": "string"
+        },
+        "escalation_policy_id": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "evidence_id",
+        "kind"
+      ],
+      "description": "溯源证据：凭什么相信这条知识",
+      "properties": {
+        "evidence_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "expert_quote",
+            "document",
+            "system_record",
+            "measurement",
+            "observation",
+            "standard"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "captured_by_role_id": {
+          "type": "string"
+        },
+        "captured_at": {
+          "type": "string"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "scope_id"
+      ],
+      "description": "适用范围：知识在哪里成立",
+      "properties": {
+        "scope_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selectors": {
+          "type": "object",
+          "properties": {
+            "manufacturing_mode": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "industry": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "site_type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "process_area": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "product_family": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "line_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "equipment_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "material_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "shift_context": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "exception_case": {
+      "type": "object",
+      "required": [
+        "exception_id",
+        "trigger"
+      ],
+      "properties": {
+        "exception_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "check_violation",
+                "timeout",
+                "event",
+                "rejection",
+                "repeat_occurrence"
+              ]
+            },
+            "check_id": {
+              "type": "string"
+            },
+            "time_constraint_id": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "minor",
+            "major",
+            "critical"
+          ]
+        },
+        "handler_node_id": {
+          "type": "string"
+        },
+        "containment": {
+          "type": "object",
+          "description": "追溯和隔离范围（Phase 3-A 简化版）：针对异常情况的追溯和产品隔离维度",
+          "properties": {
+            "dimension": {
+              "type": "string",
+              "enum": [
+                "equipment_id",
+                "lot_id",
+                "material_id",
+                "line_id",
+                "mold_id",
+                "shift_id"
+              ],
+              "description": "追溯和隔离的维度"
+            },
+            "rule": {
+              "type": "string",
+              "description": "具体的隔离规则（如'all_products_on_same_equipment'）"
+            },
+            "applicable_conditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "此隔离规则适用的条件列表"
+            }
+          }
+        },
+        "temporary_measure": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "expiration": {
+              "type": "object",
+              "description": "临时措施的有效期限制",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "description": "有效期时长（ISO 8601，如 'PT72H' 表示 72 小时）"
+                },
+                "lot_count": {
+                  "type": "integer",
+                  "description": "有效期内的最多 lot 数（如 3 lot）"
+                },
+                "expiration_trigger": {
+                  "type": "string",
+                  "enum": [
+                    "duration_or_count",
+                    "duration_and_count"
+                  ],
+                  "description": "有效期触发方式：duration_or_count(先达到任一条件)或 duration_and_count(两个条件都达到)"
+                }
+              }
+            },
+            "revocation_trigger": {
+              "type": "object",
+              "description": "临时措施失效的条件",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "time_passed",
+                    "reoccurrence",
+                    "condition_met"
+                  ],
+                  "description": "失效类型：time_passed(时间过期)、reoccurrence(问题重现)、condition_met(条件成立)"
+                },
+                "days": {
+                  "type": "integer",
+                  "description": "失效天数（如 90 表示 90 天后自动失效）"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "失效条件的详细说明"
+                }
+              }
+            },
+            "permission_id": {
+              "type": "string"
+            }
+          }
+        },
+        "escalation_policy_id": {
+          "type": "string"
+        },
+        "resolution_criteria": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "escalation_policy": {
+      "type": "object",
+      "required": [
+        "policy_id",
+        "levels"
+      ],
+      "properties": {
+        "policy_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "timeout",
+                "severity",
+                "repeat",
+                "rejection",
+                "manual"
+              ]
+            },
+            "repeat_count": {
+              "type": "integer"
+            },
+            "within_duration": {
+              "type": "string",
+              "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$",
+              "description": "ISO 8601 时长，如 PT4H、P3D"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        "levels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "level",
+              "to_role_id"
+            ],
+            "properties": {
+              "level": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "to_role_id": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string",
+                "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$",
+                "description": "ISO 8601 时长，如 PT4H、P3D"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "notify",
+                  "reassign",
+                  "approval_required",
+                  "stop_production",
+                  "create_capa"
+                ]
+              }
+            }
+          }
+        },
+        "terminal_action": {
+          "type": "string"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "ontology": {
+      "type": "object",
+      "description": "本体注册表：对象注册一次，节点/边用 id 引用",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/role"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "time_constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/time_constraint"
+          }
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permission"
+          }
+        },
+        "exception_cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exception_case"
+          }
+        },
+        "escalation_policies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/escalation_policy"
+          }
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scope"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "raci": {
+      "type": "object",
+      "properties": {
+        "responsible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "accountable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "consulted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "informed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "description": "v2 + 制造运营本体（docs/expert-workflow-collection/ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md）。v2 字段全部保留，新增 record.ontology 注册表、所有对象共享的 assertion 接口，以及节点/边对本体对象的 id 链接。"
+}
