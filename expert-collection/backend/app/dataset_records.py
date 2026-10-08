@@ -14,10 +14,7 @@ def published_workflow_ids() -> set[str]:
     an archived version is still a published snapshot someone may have exported or run an
     experiment on, so its records count as "已录入数据集" too.
     """
-    ids: set[str] = set()
-    for version in db.list_dataset_versions():
-        ids.update(version.get("workflow_ids", []))
-    return ids
+    return db.referenced_workflow_ids()
 
 
 def versions_containing(workflow_id: str) -> list[dict]:
@@ -26,16 +23,7 @@ def versions_containing(workflow_id: str) -> list[dict]:
     back live through `records_for_export` below, so rewriting a published workflow's graph
     would silently change an already-published (supposedly immutable) version.
     """
-    return [
-        {
-            "id": v["id"],
-            "source_type": v["source_type"],
-            "version_number": v["version_number"],
-            "archived": bool(v.get("archived", False)),
-        }
-        for v in db.list_dataset_versions()
-        if workflow_id in v.get("workflow_ids", [])
-    ]
+    return db.versions_referencing(workflow_id)
 
 
 _EXPORT_FIELDS = ("id", "name", "graph", "case_context", "manufacturing_context", "task_workflow")
