@@ -49,7 +49,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import graph_ops, guide_phrasing, llm_client, ontology_capture, task_layer
+from . import evidence, graph_ops, guide_phrasing, llm_client, ontology_capture, task_layer
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -1387,7 +1387,7 @@ _REGENERATE_SYSTEM_PROMPT = """你是一个制造业专家访谈助手的流程�
 - 必须有且只应有你能从对话里确认的 start 和 end 节点。
 
 只输出一个 JSON object，字段：
-- "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）, "retry_semantics": null 或 {"enabled":true,"rework_reference_node_id":"要重做的那个节点的 node_id","condition":"什么情况下需要重做","description":"字符串或 null"}——这是表达"返工/重试"的**唯一**方式，永远不要为此另外建一条指回之前节点的边}
+- "nodes"：数组，每个元素 {"node_id": 短字符串（如 "n1"）, "node_type": 以下之一：start/activity/decision/parallel_split/parallel_join/merge/approval/handoff/wait/end, "label": 字符串, "actor_roles": 字符串数组（提到了谁负责就填谁，没提到就空数组）, "decision_question": 字符串或 null（仅 decision 节点，问题是什么）, "evidence": 字符串（非 start/end 节点必填：从专家的话里**原样摘抄**一小段能证明这一步存在的原话，不能改写；start/end 填 null）, "retry_semantics": null 或 {"enabled":true,"rework_reference_node_id":"要重做的那个节点的 node_id","condition":"什么情况下需要重做","description":"字符串或 null"}——这是表达"返工/重试"的**唯一**方式，永远不要为此另外建一条指回之前节点的边}
 - "edges"：数组，每个元素 {"edge_id": 短字符串（如 "e1"）, "from": 起点 node_id, "to": 终点 node_id, "edge_type": 以下之一：normal/conditional/parallel/merge/handoff/approval/timeout/exception_forward, "condition": 字符串或 null（仅 conditional 边，条件是什么）}
 - "start_node_ids"：字符串数组，start 节点的 node_id
 - "end_node_ids"：字符串数组，end 节点的 node_id
@@ -1516,4 +1516,13 @@ def regenerate_graph_from_transcript(turns: list[dict[str, str]], timeout: float
     # reads it back the same way extract_from_narrative does for the narrative-based path.
     raw_nodes = {n.get("node_id"): n for n in parsed.get("nodes", []) if isinstance(n, dict)}
     _apply_retry_semantics(graph, raw_nodes)
+    # Bug fix: this graph used to carry no evidence quotes at all, so in a review session
+    # (review_gaps' "unverified_node" rule) every step of a refreshed graph read as "a step the
+    # expert never said" -- the most severe tier -- and the interview asked 「您的讲述里我没找到
+    # …的原话」 about each step in turn, even for steps quoted almost word for word. Quotes are
+    # checked against the expert's own messages only, same rule as extract_from_narrative.
+    expert_texts = [t["text"] for t in turns if t.get("role") == "expert"]
+    for n in graph["nodes"]:
+        if n["node_type"] not in ("start", "end"):
+            n["evidence"] = evidence.quote_list(raw_nodes.get(n["node_id"], {}).get("evidence"), expert_texts)
     return graph

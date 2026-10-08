@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import gold_annotation, graph_ops, graph_validator, guide_service, llm_client, ontology_capture, review_gaps
+from .evidence import quote_found, quote_list
 from . import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -120,11 +121,6 @@ _PUNCT = re.compile(r"[\s，。、；：！？,.;:!?\"“”'‘’（）()《�
 
 def _norm(text: str) -> str:
     return _PUNCT.sub("", text or "")
-
-
-def quote_found(quote: str, sources: list[str]) -> bool:
-    q = _norm(quote)
-    return len(q) >= 2 and any(q in _norm(s) for s in sources)
 
 
 def _is_short(text: str, limit: int) -> bool:
@@ -332,8 +328,7 @@ def extract_from_narrative(narrative_texts: list[str], turn_id: str) -> dict:
     by_id = {n["node_id"] for n in graph["nodes"]}
     for n in graph["nodes"]:
         raw = raw_nodes.get(n["node_id"], {})
-        quote = raw.get("evidence")
-        n["evidence"] = [quote.strip()] if isinstance(quote, str) and quote_found(quote, narrative_texts) else []
+        n["evidence"] = quote_list(raw.get("evidence"), narrative_texts)
         n["source_turn_ids"] = [turn_id]
         retry = raw.get("retry_semantics")
         if isinstance(retry, dict) and retry.get("enabled"):
