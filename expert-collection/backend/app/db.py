@@ -172,6 +172,15 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     cols = [row[1] for row in conn.execute("PRAGMA table_info(dataset_versions)").fetchall()]
     if "archived" not in cols:
         conn.execute("ALTER TABLE dataset_versions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    # Opening a session asks "is this workflow in any published dataset?" (it decides whether
+    # the graph may still be regenerated / edited). Answering that from `data` parsed every
+    # version in full -- an imported public dataset carries all of its records inline, so a few
+    # imports made each session switch take most of a second. `workflow_ids` keeps just the id
+    # list (JSON array) beside the blob; ids never change after a version is saved. Rows saved
+    # before the column existed are filled once here, by SQLite itself.
+    if "workflow_ids" not in cols:
+        conn.execute("ALTER TABLE dataset_versions ADD COLUMN workflow_ids TEXT")
+    conn.execute("UPDATE dataset_versions SET workflow_ids = coalesce(data -> '$.workflow_ids', '[]') WHERE workflow_ids IS NULL")
     # C4: the session list only needs a handful of fields, but each record also carries the
     # whole transcript and up to 30 graph snapshots (review_agent's undo history) -- a few
     # hundred KB per session. Parsing every full record just to list them took ~4.5s at 500
@@ -293,11 +302,40 @@ def save_dataset_version(version: dict) -> None:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO dataset_versions (id, source_type, version_number, data, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO dataset_versions (id, source_type, version_number, data, created_at, workflow_ids) VALUES (?, ?, ?, ?, ?, ?)",
             (version["id"], version["source_type"], version["version_number"],
-             json.dumps(version, ensure_ascii=False), version["created_at"]),
+             json.dumps(version, ensure_ascii=False), version["created_at"],
+             json.dumps(version.get("workflow_ids") or [], ensure_ascii=False)),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def versions_referencing(workflow_id: str) -> list[dict]:
+    """id / source_type / version_number / archived of every version that lists `workflow_id`,
+    newest first -- read from the `workflow_ids` column only, never the version blobs."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, source_type, version_number, archived FROM dataset_versions "
+            "WHERE EXISTS (SELECT 1 FROM json_each(dataset_versions.workflow_ids) WHERE value = ?) "
+            "ORDER BY created_at DESC",
+            (workflow_id,),
+        ).fetchall()
+        return [{"id": i, "source_type": t, "version_number": n, "archived": bool(a)} for i, t, n, a in rows]
+    finally:
+        conn.close()
+
+
+def referenced_workflow_ids() -> set[str]:
+    """Every workflow id any version lists (archived versions included), same column."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT j.value FROM dataset_versions, json_each(dataset_versions.workflow_ids) AS j"
+        ).fetchall()
+        return {r[0] for r in rows if isinstance(r[0], str)}
     finally:
         conn.close()
 

@@ -38,3 +38,41 @@ def test_schema_is_created_once_per_db_file(client, monkeypatch, tmp_path):
     db.list_summaries()
     db.list_summaries()
     assert calls == [1]
+
+
+def _version(vid, ids, created, **extra):
+    return {"id": vid, "source_type": "public_extracted", "version_number": 1, "workflow_ids": ids,
+            "created_at": created, "records": [{"record_id": i, "graph": {}} for i in ids], **extra}
+
+
+def test_dataset_references_come_from_the_id_column(monkeypatch):
+    """Opening a session checks "already in a dataset?" -- it must not parse every version blob
+    (an imported dataset carries all of its records inline)."""
+    db.save_dataset_version(_version("v1", ["a", "b"], "2026-10-01T00:00:00Z"))
+    db.save_dataset_version(_version("v2", ["b"], "2026-10-02T00:00:00Z"))
+    db.archive_dataset_version("v1")
+    monkeypatch.setattr(db, "list_dataset_versions", lambda *a, **k: (_ for _ in ()).throw(AssertionError("parsed blobs")))
+    assert dataset_records.versions_containing("b") == [
+        {"id": "v2", "source_type": "public_extracted", "version_number": 1, "archived": False},
+        {"id": "v1", "source_type": "public_extracted", "version_number": 1, "archived": True},
+    ]
+    assert dataset_records.versions_containing("zzz") == []
+    assert dataset_records.published_workflow_ids() == {"a", "b"}
+
+
+def test_rows_saved_before_the_id_column_existed_are_backfilled(tmp_path, monkeypatch):
+    import json, sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE dataset_versions (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, "
+                 "version_number INTEGER NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, "
+                 "archived INTEGER NOT NULL DEFAULT 0)")
+    old = _version("old", ["x", "y"], "2026-09-01T00:00:00Z")
+    conn.execute("INSERT INTO dataset_versions (id, source_type, version_number, data, created_at) VALUES (?, ?, ?, ?, ?)",
+                 ("old", "public_extracted", 1, json.dumps(old), old["created_at"]))
+    conn.execute("INSERT INTO dataset_versions (id, source_type, version_number, data, created_at) VALUES (?, ?, ?, ?, ?)",
+                 ("noids", "public_extracted", 2, json.dumps({"id": "noids"}), "2026-09-02T00:00:00Z"))
+    conn.commit(); conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    assert [v["id"] for v in dataset_records.versions_containing("y")] == ["old"]
+    assert dataset_records.published_workflow_ids() == {"x", "y"}
