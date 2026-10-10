@@ -493,5 +493,135 @@ class TestSchemaValidator(unittest.TestCase):
         self.assertIn('错误', result['summary'], '摘要应该包含错误信息')
 
 
+def _codes(errors):
+    """辅助函数：提取 (code, severity) 对，便于断言"""
+    return [(e.code, e.severity) for e in errors]
+
+
+class TestRepeatEscalationValidation(unittest.TestCase):
+    """escalation_on_repeat 必须有动作；接收角色由 ontology_validator 负责，这里不重复检查"""
+
+    def setUp(self):
+        self.validator = Phase3AValidator()
+
+    def test_repeat_escalation_without_action_is_error(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': True}},
+        })
+        self.assertEqual(_codes(errors), [('required_field', ValidationSeverity.ERROR)])
+        self.assertEqual(errors[0].field, 'retry_semantics.escalation_on_repeat.action')
+
+    def test_repeat_escalation_with_action_passes(self):
+        """有动作即可；没写接收角色不在这一层报（避免与 ont_escalation_missing_role 重复）"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': True, 'action': 'escalate_to_manager'}},
+        })
+        self.assertEqual(errors, [])
+
+    def test_disabled_repeat_escalation_is_skipped(self):
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'retry_semantics': {'escalation_on_repeat': {'enabled': False}},
+        })
+        self.assertEqual(errors, [])
+
+    def test_sla_and_threshold_gaps_left_to_ontology_validator(self):
+        """SLA 升级缺接收人、阈值缺单位不在 Phase 3-A 层报（ontology_validator 已覆盖）"""
+        errors = self.validator.validate_node({
+            'node_id': 'n1',
+            'sla_config': {'violation_action': 'escalate'},
+            'evaluation_criteria': [{'id': 'c', 'name': '温度', 'type': 'metric',
+                                     'thresholds': {'critical': '50'}}],
+        })
+        self.assertEqual(errors, [])
+
+
+class TestEvidenceValidation(unittest.TestCase):
+    """本体维度：证据来源与 confidence"""
+
+    def setUp(self):
+        self.validator = Phase3AValidator()
+
+    def test_node_without_source_warns(self):
+        """既无 source_turn_ids 又未经专家确认 → WARNING evidence_missing_source"""
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': []}, 'node')
+        self.assertEqual(_codes(errors), [('evidence_missing_source', ValidationSeverity.WARNING)])
+        self.assertEqual(errors[0].object_kind, 'node')
+
+    def test_edge_without_source_warns(self):
+        errors = self.validator.validate_evidence({'edge_id': 'e1', 'from': 'a', 'to': 'b'}, 'edge')
+        self.assertEqual(_codes(errors), [('evidence_missing_source', ValidationSeverity.WARNING)])
+        self.assertEqual(errors[0].object_id, 'e1')
+        self.assertEqual(errors[0].object_kind, 'edge')
+
+    def test_node_with_source_passes(self):
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': ['t1'], 'confidence': 0.8},
+            'node')
+        self.assertEqual(errors, [])
+
+    def test_expert_confirmed_node_passes(self):
+        """专家亲自确认/手工添加的节点，专家本身即证据来源"""
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True}, 'node')
+        self.assertEqual(errors, [])
+
+    def test_start_end_nodes_skipped(self):
+        for node_type in ('start', 'end'):
+            errors = self.validator.validate_evidence({'node_id': 's', 'node_type': node_type}, 'node')
+            self.assertEqual(errors, [], node_type)
+
+    def test_source_turn_ids_not_list_is_error(self):
+        errors = self.validator.validate_evidence(
+            {'node_id': 'n1', 'node_type': 'activity', 'source_turn_ids': 't1'}, 'node')
+        self.assertIn(('type_error', ValidationSeverity.ERROR), _codes(errors))
+
+    def test_confidence_out_of_range_is_error(self):
+        for bad in (1.5, -0.1, '0.9', True):
+            errors = self.validator.validate_evidence(
+                {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True,
+                 'confidence': bad}, 'node')
+            self.assertEqual(_codes(errors), [('invalid_confidence', ValidationSeverity.ERROR)],
+                             f'confidence={bad!r}')
+
+    def test_confidence_boundaries_pass(self):
+        for ok in (0, 1, 0.5):
+            errors = self.validator.validate_evidence(
+                {'node_id': 'n1', 'node_type': 'activity', 'expert_confirmed': True,
+                 'confidence': ok}, 'node')
+            self.assertEqual(errors, [], f'confidence={ok!r}')
+
+
+class TestOntologyDimensionsInGraph(unittest.TestCase):
+    """SchemaValidator 在图级把证据规则应用到节点和边"""
+
+    def test_graph_level_counts(self):
+        graph = {
+            'nodes': [
+                {'node_id': 'start', 'node_type': 'start', 'label': '开始'},
+                {'node_id': 'n1', 'node_type': 'activity', 'label': '初评',
+                 'source_turn_ids': ['t1'], 'confidence': 1.2},                   # ERROR
+                {'node_id': 'n2', 'node_type': 'decision', 'label': '判断'},       # WARNING
+            ],
+            'edges': [
+                {'edge_id': 'e1', 'from': 'start', 'to': 'n1', 'edge_type': 'normal'},  # WARNING
+                {'edge_id': 'e2', 'from': 'n1', 'to': 'n2', 'edge_type': 'normal',
+                 'source_turn_ids': ['t2']},
+            ],
+        }
+        result = SchemaValidator().validate_graph(graph)
+        self.assertFalse(result['valid'])
+        self.assertEqual(result['error_count'], 1)
+        self.assertEqual(result['warning_count'], 2)
+        confidence = [e for e in result['errors'] if e['code'] == 'invalid_confidence']
+        self.assertEqual([e['object_id'] for e in confidence], ['n1'])
+        evidence = [(e['object_id'], e['object_kind']) for e in result['errors']
+                    if e['code'] == 'evidence_missing_source']
+        self.assertEqual(sorted(evidence), [('e1', 'edge'), ('n2', 'node')])
+
+
 if __name__ == '__main__':
     unittest.main()

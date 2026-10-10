@@ -947,6 +947,10 @@
           "enum": ["escalate", "notify", "auto_reassign", "none"],
           "description": "超期时的处理方式：升级、通知、自动转派、不处理"
         },
+        "escalate_to_role": {
+          "type": "string",
+          "description": "violation_action 为 escalate 时升级给谁（如'车间主任'）。采集追问写入此字段，提升为 v3 EscalationPolicy 第 1 级；缺失时由 ontology_validator 给出 ont_escalation_missing_role"
+        },
         "description": {
           "type": "string",
           "description": "人类可读的 SLA 说明，如'必须在前序节点完成后2小时内完成初评'"

@@ -474,6 +474,23 @@ def validate_containment_scope(object_id, containment, context='node'):
 
 ---
 
+### 规则 5: 证据维度与重复升级动作
+
+实现位置：`src/validators/phase3a_validator.py`。严重级别沿用现有口径：声明了某个特性却缺少让它可执行的关键字段 → ERROR；能用但含义不完整 → WARNING。
+
+| 代码 | 级别 | 触发条件 | 字段 |
+|------|------|----------|------|
+| `evidence_missing_source` | WARNING | 节点或边既没有 `source_turn_ids`，也没有 `expert_confirmed`（PRD：抽取结果须可追溯）。`start` / `end` 结构节点跳过 | `source_turn_ids` |
+| `type_error` | ERROR | `source_turn_ids` 不是数组 | `source_turn_ids` |
+| `invalid_confidence` | ERROR | `confidence` 不是 0–1 之间的数（schema 的 minimum/maximum） | `confidence` |
+| `required_field` | ERROR | `escalation_on_repeat.enabled` 但没有 `action` | `retry_semantics.escalation_on_repeat.action` |
+
+**与本体校验器的分工**：阈值缺单位、判据缺阈值/预期值、升级缺接收角色这几类问题由 `expert-collection/backend/app/ontology_validator.py` 统一负责（`ont_check_missing_unit`、`ont_check_empty`、`ont_escalation_missing_role`，见 `ontology/MANUFACTURING_OPERATIONAL_ONTOLOGY.md` §7）。它在 v2 数据提升为 v3 本体之后检查，所以 Phase 3-A 层不再重复检查。SLA 升级的接收人字段是 `sla_config.escalate_to_role`。
+
+证据维度由 `Phase3AValidator.validate_evidence(obj, kind)` 实现，`SchemaValidator.validate_graph` 对每个节点和每条边调用。每条结果带 `object_kind`（`node` / `edge`），`phase3a_integration.convert_to_legacy_issues` 据此填入 `node_id` 或 `edge_id`，与 `graph_validator` 的 issue 格式一致。
+
+---
+
 ## Validator 执行流程
 
 ### 集成点

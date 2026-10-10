@@ -23,11 +23,13 @@ class ValidationError:
     message: str  # 用户可读的错误信息
     suggestion: Optional[str] = None  # 如何修复的建议
     severity: ValidationSeverity = ValidationSeverity.ERROR  # 严重级别
+    object_kind: str = 'node'  # object_id 指向的对象类型：'node' 或 'edge'
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典用于 JSON 序列化"""
         return {
             'object_id': self.object_id,
+            'object_kind': self.object_kind,
             'field': self.field,
             'code': self.code,
             'message': self.message,
@@ -58,6 +60,9 @@ class Phase3AValidator:
         'equipment_id', 'lot_id', 'material_id', 'line_id', 'mold_id', 'shift_id'
     }
 
+    # 结构性节点：不承载专家陈述的内容，不要求证据来源
+    STRUCTURAL_NODE_TYPES = {'start', 'end'}
+
     def __init__(self):
         """初始化验证器"""
         self.errors: List[ValidationError] = []
@@ -73,7 +78,8 @@ class Phase3AValidator:
             验证错误列表
         """
         self.errors = []
-        node_id = node.get('id', 'unknown')
+        # 主应用的图节点使用 node_id；早期 Phase 3-A 示例使用 id，两者都兼容
+        node_id = node.get('node_id') or node.get('id', 'unknown')
 
         # 验证权限矩阵
         if node.get('approval_matrix'):
@@ -91,7 +97,97 @@ class Phase3AValidator:
         if node.get('containment_scope'):
             self._validate_containment_scope(node_id, node['containment_scope'])
 
+        # 重复升级必须有动作（接收角色、阈值单位、阈值/预期值由 ontology_validator 负责）
+        self._validate_repeat_escalation(node_id, node.get('retry_semantics'))
+
         return self.errors
+
+    def validate_evidence(self, obj: Dict[str, Any], kind: str = 'node') -> List[ValidationError]:
+        """
+        验证节点或边的证据维度：证据来源（source_turn_ids）与 confidence。
+
+        PRD：每个节点/边必须保留 source_turn_ids（证据可追溯）、confidence、expert_confirmed，
+        模型抽取结果不等于已确认事实。该检查放在图级（SchemaValidator）调用，
+        因为它针对的是图中每个对象，而不是某个 Phase 3-A 字段。
+
+        Args:
+            obj: 节点或边对象
+            kind: 'node' 或 'edge'
+
+        Returns:
+            验证错误列表
+        """
+        errors: List[ValidationError] = []
+        if not isinstance(obj, dict):
+            return errors
+
+        if kind == 'edge':
+            object_id = obj.get('edge_id') or obj.get('id', 'unknown')
+        else:
+            object_id = obj.get('node_id') or obj.get('id', 'unknown')
+            # start/end 是结构性节点，不需要证据来源
+            if obj.get('node_type') in self.STRUCTURAL_NODE_TYPES:
+                return errors
+
+        # 证据缺来源：既没有对话证据，也没有专家确认 → 无法追溯这条事实从哪里来
+        source_turn_ids = obj.get('source_turn_ids')
+        if not source_turn_ids and not obj.get('expert_confirmed'):
+            errors.append(ValidationError(
+                object_id,
+                'source_turn_ids',
+                'evidence_missing_source',
+                f'{"边" if kind == "edge" else "节点"}缺少证据来源：既没有 source_turn_ids，也未经专家确认',
+                suggestion='关联提出该内容的对话轮次（source_turn_ids），或请专家确认（expert_confirmed）',
+                severity=ValidationSeverity.WARNING,
+                object_kind=kind,
+            ))
+        elif source_turn_ids is not None and not isinstance(source_turn_ids, list):
+            errors.append(ValidationError(
+                object_id,
+                'source_turn_ids',
+                'type_error',
+                'source_turn_ids 必须是数组',
+                severity=ValidationSeverity.ERROR,
+                object_kind=kind,
+            ))
+
+        # confidence 必须是 [0, 1] 区间内的数（schema: minimum 0, maximum 1）
+        confidence = obj.get('confidence')
+        if confidence is not None:
+            # bool 是 int 的子类，需要单独排除
+            is_number = isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+            if not is_number or not 0 <= confidence <= 1:
+                errors.append(ValidationError(
+                    object_id,
+                    'confidence',
+                    'invalid_confidence',
+                    f'confidence 必须是 0 到 1 之间的数，当前为：{confidence!r}',
+                    severity=ValidationSeverity.ERROR,
+                    object_kind=kind,
+                ))
+
+        return errors
+
+    def _validate_repeat_escalation(self, node_id: str, retry: Any) -> None:
+        """
+        escalation_on_repeat 启用但没有 action → ERROR：重复发生时该做什么没有定义。
+
+        升级给谁（接收角色）不在这里查：#41 的 ontology_validator 会把
+        escalation_on_repeat / sla_config 提升为 EscalationPolicy，
+        由 ont_escalation_missing_role 统一提示，避免两层重复报同一件事。
+        """
+        if not isinstance(retry, dict):
+            return
+        repeat = retry.get('escalation_on_repeat')
+        if isinstance(repeat, dict) and repeat.get('enabled') and not repeat.get('action'):
+            self.errors.append(ValidationError(
+                node_id,
+                'retry_semantics.escalation_on_repeat.action',
+                'required_field',
+                '已启用重复升级，但没有指定升级动作 action',
+                suggestion='选择 escalate_to_manager、escalate_to_executive、create_capa 或 stop_production',
+                severity=ValidationSeverity.ERROR,
+            ))
 
     def _validate_approval_matrix(self, node_id: str, approval_matrix: Any) -> None:
         """验证权限矩阵的完整性"""
@@ -545,10 +641,14 @@ class SchemaValidator:
         """
         all_errors = []
 
-        # 验证所有节点
-        if 'nodes' in workflow_graph:
-            for node in workflow_graph['nodes']:
-                all_errors.extend(self.phase3a_validator.validate_node(node))
+        # 验证所有节点（Phase 3-A 字段 + 证据维度）
+        for node in workflow_graph.get('nodes') or []:
+            all_errors.extend(self.phase3a_validator.validate_node(node))
+            all_errors.extend(self.phase3a_validator.validate_evidence(node, 'node'))
+
+        # 验证所有边（证据维度）
+        for edge in workflow_graph.get('edges') or []:
+            all_errors.extend(self.phase3a_validator.validate_evidence(edge, 'edge'))
 
         # 统计错误
         error_count = sum(1 for e in all_errors if e.severity == ValidationSeverity.ERROR)

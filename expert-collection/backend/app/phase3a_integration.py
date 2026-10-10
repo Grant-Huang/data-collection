@@ -81,6 +81,14 @@ class Phase3AValidator:
                 'field': error['field'],
             }
 
+            # 与 graph_validator 的 issue 对齐：带上 node_id / edge_id，前端据此定位到具体节点或边
+            object_id = error.get('object_id')
+            if object_id and object_id != 'unknown':
+                if error.get('object_kind') == 'edge':
+                    issue['edge_id'] = object_id
+                else:
+                    issue['node_id'] = object_id
+
             # 如果有修复建议，添加到消息中
             if error.get('suggestion'):
                 issue['message'] += f" [建议：{error['suggestion']}]"
